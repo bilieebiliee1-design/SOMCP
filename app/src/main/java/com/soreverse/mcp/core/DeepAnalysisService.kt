@@ -18,6 +18,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import org.json.JSONArray
+import org.json.JSONObject
 import org.json.JSONObject as OrgJSONObject
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -73,12 +74,12 @@ class DeepAnalysisService(private val appContext: Context) {
                 .header("Accept", "application/json")
                 .apply {
                     if (settings.aiProvider == "anthropic") {
-                        header("x-api-key", settings.aiApiKey)
+                        safeHeader("x-api-key", settings.aiApiKey)
                         header("anthropic-version", "2023-06-01")
                     } else {
-                        header("Authorization", "Bearer ${settings.aiApiKey}")
+                        safeHeader("Authorization", "Bearer ${settings.aiApiKey}")
                     }
-                    customHeaders.forEach { (name, value) -> header(name, value) }
+                    customHeaders.forEach { (name, value) -> safeHeader(name, value) }
                 }
                 .build()
             val page = client.newCall(request).execute().use { response ->
@@ -295,7 +296,12 @@ Only after gathering the necessary evidence, return the final Markdown report. D
             ) { args ->
                 emit(DeepAnalysisEvent.Kind.TOOL, if (zh) "调用工具 $name" else "Calling tool $name", name)
                 AppLog.i("AI tool call $name args=${args.toString().take(600)}")
-                runCatching { handler.handle(ctx, args) }
+                val effectiveArgs = JSONObject(args.toString()).apply {
+                    if (name != "so_open" && optString("workspaceId").isBlank()) {
+                        _workspaceId.value.takeIf(String::isNotBlank)?.let { put("workspaceId", it) }
+                    }
+                }
+                runCatching { handler.handle(ctx, effectiveArgs) }
                     .onSuccess { payload ->
                         if (name == "so_open") {
                             payload.optString("workspaceId").takeIf(String::isNotBlank)?.let {

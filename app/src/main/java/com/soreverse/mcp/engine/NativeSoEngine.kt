@@ -1619,14 +1619,20 @@ class NativeSoEngine(private val context: Context) {
         AppLog.e("Tool failed", t)
         val message = t.message ?: "Tool failed"
         when {
-            message.startsWith("Workspace not found") -> err("WORKSPACE_NOT_FOUND", message, "workspaceId", message.substringAfterLast(": ", ""))
+            message.startsWith("Workspace not found") && message.substringAfterLast(": ", "").isBlank() -> err("WORKSPACE_REQUIRED", "No workspaceId was provided. Call so_open first and use its returned workspaceId.", "workspaceId", "")
+            message.startsWith("Workspace not found") -> err("WORKSPACE_NOT_FOUND", "$message. Call so_open again and use its returned workspaceId.", "workspaceId", message.substringAfterLast(": ", ""))
             message.startsWith("No work directory selected") -> err("WORK_DIRECTORY_NOT_SELECTED", message)
+            message.startsWith("NOT_ELF_INPUT") -> err("NOT_ELF_INPUT", message.substringAfter(": ").ifBlank { "The selected entry is not an ELF SO file." })
             message.startsWith("SO path not found") -> err("SO_NOT_FOUND", message, "path", message.substringAfter(": ", ""))
             message.contains("Invalid URI", ignoreCase = true) -> err("INVALID_WORK_DIRECTORY", message)
             else -> err("ELF_CORRUPTED", message)
         }
     }
     private fun openWorkspace(path: String, temporary: Boolean): Workspace {
+        val archiveEntry = path.substringAfterLast('!', "")
+        if (archiveEntry.isNotBlank() && !archiveEntry.endsWith(".so", ignoreCase = true)) {
+            error("NOT_ELF_INPUT: $path is an APK/JAR entry, not an ELF SO file. Use apk_analyze or an APK MCP tool.")
+        }
         val keyFallback = "local:$path"
         val src = findSource(path) ?: resolveLocalSoSource(path) ?: error("SO path not found: $path")
         val key = sourceKey(src).ifBlank { keyFallback }
@@ -1636,6 +1642,9 @@ class NativeSoEngine(private val context: Context) {
         val original = when (src.source) {
             "build_output", "local_file" -> runCatching { java.io.File(src.path).readBytes() }.getOrElse { error("SO path not found: $path") }
             else -> (workDir ?: error("No work directory selected")).readSource(src)
+        }
+        require(original.size >= 4 && original[0] == 0x7f.toByte() && original[1] == 'E'.code.toByte() && original[2] == 'L'.code.toByte() && original[3] == 'F'.code.toByte()) {
+            "NOT_ELF_INPUT: ${src.path} is not an ELF SO file. Use apk_analyze or an APK MCP tool for APK/JAR entries."
         }
         val prepared = prepareAnalysisInput(original)
         val bytes = prepared.first
@@ -1725,6 +1734,19 @@ class NativeSoEngine(private val context: Context) {
         if (rawPath.isBlank()) return null
         val path = rawPath.trim().removePrefix("/")
         workDir?.let { ensureSources(it) }
+        val apkUri = rawPath.trim().removePrefix("content://apk/")
+        if (apkUri != rawPath.trim() && apkUri.isNotBlank()) {
+            val separator = apkUri.indexOf('/')
+            if (separator > 0) {
+                val apkName = apkUri.substring(0, separator)
+                val entry = apkUri.substring(separator + 1)
+                sources.firstOrNull {
+                    it.source == "apk" &&
+                        it.apkPath?.substringAfterLast('/') == apkName &&
+                        it.apkEntry == entry
+                }?.let { return it }
+            }
+        }
         return sources.firstOrNull { it.path == rawPath || it.path == path }
             ?: sources.firstOrNull { it.name == rawPath || it.name == path }
             ?: sources.firstOrNull { it.apkEntry == rawPath || it.apkEntry == path }

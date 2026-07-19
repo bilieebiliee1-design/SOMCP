@@ -67,8 +67,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             "http://localhost:$port/mcp",
         )
         for (url in candidates) {
-            val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
             try {
+                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
                 val resp = post(req)
                 val parsed = parseTools(resp)
                 if (parsed.any { it.name.startsWith("mt_apk_") }) {
@@ -93,8 +93,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             _state.set(s)
             return s
         }
-        val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
         try {
+            val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
             val start = System.nanoTime()
             val resp = post(req)
             val latencyMs = (System.nanoTime() - start) / 1_000_000
@@ -137,8 +137,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         if (url.isBlank()) {
             return _state.get()
         }
-        val req = buildJsonRpc(url, "initialize", JSONObject().put("client", "somcp-ping"), id = nextId())
         return try {
+            val req = buildJsonRpc(url, "initialize", JSONObject().put("client", "somcp-ping"), id = nextId())
             val start = System.nanoTime()
             post(req)
             val latencyMs = (System.nanoTime() - start) / 1_000_000
@@ -172,8 +172,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             return errorResult(name, "APK MCP is offline or not configured")
         }
         val params = JSONObject().put("name", name).put("arguments", arguments)
-        val req = buildJsonRpc(st.url, "tools/call", params, id = nextId())
         return try {
+            val req = buildJsonRpc(st.url, "tools/call", params, id = nextId())
             val resp = post(req)
             // remote returns a JSON-RPC envelope; unwrap returnContent into our shape
             parseToolResult(resp)
@@ -198,8 +198,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 if (healthStop) break
                 val url = settings.apkMcpUrl
                 if (url.isBlank()) continue
-                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
                 try {
+                    val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
                     val resp = post(req)
                     val parsed = parseTools(resp)
                     if (parsed.any { it.name.startsWith("mt_apk_") }) {
@@ -251,7 +251,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             .put("params", params)
             .toString()
         val builder = Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType()))
-        settings.apkMcpToken.ifNotBlank { builder.header("Authorization", "Bearer $it") }
+        settings.apkMcpToken.ifNotBlank { builder.safeHeader("Authorization", "Bearer $it") }
         return builder.build()
     }
 
