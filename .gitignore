@@ -1,0 +1,53 @@
+# Gradle and IDE
+.gradle/
+.kotlin/
+.idea/
+**/build/
+**/.cxx/
+*.iml
+
+# Local Android configuration
+local.properties
+
+# Signing secrets
+release/
+*.jks
+*.keystore
+keystore.properties
+
+# Generated binaries and native build outputs
+*.apk
+*.aab
+*.so
+*.o
+*.obj
+*.aar
+*.a
+*.class
+third_party/*-build/
+third_party/**/*-build/
+third_party/**/*-install*/
+third_party/**/CMakeFiles/
+third_party/rz-ghidra-build-*/
+third_party/rz-ghidra-host-build/
+third_party/*-jar-extract/
+third_party/*-patched-classes/
+rizin-sdk/
+
+# Logs, temporary files and local analysis output
+*.log
+*.tmp
+*.bak
+*.swp
+*.hprof
+.assemble-*.sh
+.build-*.sh
+.check-*.sh
+decomp_*.json
+disasm_*.json
+funcs_*.json
+*-output.txt
+
+# Operating systems
+.DS_Store
+Thumbs.db
