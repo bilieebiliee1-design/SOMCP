@@ -1575,6 +1575,7 @@ private fun ServiceTab(
         settings.port = nextPort
         settings.useDefaultWorkDir = treeUri == null
         McpForegroundService.start(context)
+        running = true
         endpoints = filteredEndpoints(context, settings, settings.port)
     }
 
