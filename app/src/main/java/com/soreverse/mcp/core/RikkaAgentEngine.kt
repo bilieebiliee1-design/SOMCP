@@ -145,7 +145,7 @@ internal class RikkaAgentEngine(
     private fun streamOpenAi(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> = callbackFlow {
         val body = buildOpenAiBody(messages, tools)
         val request = requestBuilder(openAiUrl())
-            .header("Authorization", "Bearer $apiKey")
+            .safeHeader("Authorization", "Bearer $apiKey")
             .applyCustomHeaders()
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
@@ -205,7 +205,7 @@ internal class RikkaAgentEngine(
 
     private fun streamAnthropic(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> = callbackFlow {
         val request = requestBuilder(anthropicUrl())
-            .header("x-api-key", apiKey)
+            .safeHeader("x-api-key", apiKey)
             .header("anthropic-version", "2023-06-01")
             .applyCustomHeaders()
             .post(buildAnthropicBody(messages, tools).toString().toRequestBody("application/json".toMediaType()))
@@ -379,7 +379,7 @@ internal class RikkaAgentEngine(
     private fun requestBuilder(url: String) = Request.Builder().url(url).header("Accept", "text/event-stream")
 
     private fun Request.Builder.applyCustomHeaders() = apply {
-        customHeaders.forEach { (name, value) -> header(name, value) }
+        customHeaders.forEach { (name, value) -> safeHeader(name, value) }
     }
 
     private fun openAiUrl(): String = endpoint.trimEnd('/').let { if (it.endsWith("/chat/completions")) it else "$it/chat/completions" }
