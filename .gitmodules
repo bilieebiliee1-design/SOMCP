@@ -1,0 +1,30 @@
+[submodule "third_party/capstone-4.0.2-src"]
+	path = third_party/capstone-4.0.2-src
+	url = https://github.com/aquynh/capstone.git
+[submodule "third_party/demumble-src"]
+	path = third_party/demumble-src
+	url = https://github.com/zhkl0228/demumble.git
+[submodule "third_party/keystone-engine-src"]
+	path = third_party/keystone-engine-src
+	url = https://github.com/keystone-engine/keystone.git
+[submodule "third_party/lief-src"]
+	path = third_party/lief-src
+	url = https://github.com/lief-project/LIEF.git
+[submodule "third_party/rz-ghidra"]
+	path = third_party/rz-ghidra
+	url = https://github.com/rizinorg/rz-ghidra.git
+[submodule "third_party/unicorn-engine-unicorn2"]
+	path = third_party/unicorn-engine-unicorn2
+	url = https://github.com/unicorn-engine/unicorn.git
+[submodule "third_party/unicorn-zhkl0228"]
+	path = third_party/unicorn-zhkl0228
+	url = https://github.com/zhkl0228/unicorn.git
+[submodule "third_party/unidbg-zhkl0228"]
+	path = third_party/unidbg-zhkl0228
+	url = https://github.com/zhkl0228/unidbg.git
+[submodule "third_party/xAnSo-src"]
+	path = third_party/xAnSo-src
+	url = https://github.com/freakishfox/xAnSo.git
+[submodule "third_party/zhkl-capstone-src"]
+	path = third_party/zhkl-capstone-src
+	url = https://github.com/zhkl0228/capstone.git

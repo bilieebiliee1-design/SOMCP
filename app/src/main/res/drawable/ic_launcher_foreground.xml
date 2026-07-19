@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer "Q-bounce" glow circle, translucent white ring (rx=150 @ 512 -> r=31.5 @ 108) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.0"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeAlpha="0.9"
+        android:pathData="M 22.5,54 a 31.5,31.5 0 1,0 63,0 a 31.5,31.5 0 1,0 -63,0" />
+
+    <!-- Inner main circle, solid-white ring (rx=95 @ 512 -> r=20 @ 108) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.0"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 34,54 a 20,20 0 1,0 40,0 a 20,20 0 1,0 -40,0" />
+
+    <!-- Small bouncy highlight dot (cx=215,cy=215 @ 512 -> cx=45.3,cy=45.3 @ 108) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.9"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="0"
+        android:pathData="M 43.1,45.3 a 2.2,2.2 0 1,0 4.4,0 a 2.2,2.2 0 1,0 -4.4,0" />
+</vector>
