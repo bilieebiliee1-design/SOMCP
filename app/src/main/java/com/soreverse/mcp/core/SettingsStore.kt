@@ -53,11 +53,11 @@ class SettingsStore(context: Context) {
 
     var accessToken: String
         get() {
-            val existing = prefs.getString("accessToken", "").orEmpty()
+            val existing = sanitizeCredential(prefs.getString("accessToken", "").orEmpty())
             if (existing.isNotBlank()) return existing
             return resetAccessToken()
         }
-        set(value) = prefs.edit().putString("accessToken", value.trim()).apply()
+        set(value) = prefs.edit().putString("accessToken", sanitizeCredential(value)).apply()
 
     var floatingEnabled: Boolean
         get() = prefs.getBoolean("floatingEnabled", false)
@@ -436,8 +436,8 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putString("apkMcpUrl", value.trim()).apply()
 
     var apkMcpToken: String
-        get() = prefs.getString("apkMcpToken", "") ?: ""
-        set(value) = prefs.edit().putString("apkMcpToken", value.trim()).apply()
+        get() = sanitizeCredential(prefs.getString("apkMcpToken", "").orEmpty())
+        set(value) = prefs.edit().putString("apkMcpToken", sanitizeCredential(value)).apply()
 
     var apkMcpAutoProbe: Boolean
         get() = prefs.getBoolean("apkMcpAutoProbe", false)
@@ -452,10 +452,6 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putInt("apkMcpProbeTimeoutMs", value.coerceIn(2000, 30000)).apply()
 
     // ---- UX / combo ----
-    var comboBannerEnabled: Boolean
-        get() = prefs.getBoolean("comboBannerEnabled", true)
-        set(value) = prefs.edit().putBoolean("comboBannerEnabled", value).apply()
-
     // ---- AI deep analysis ----
     var aiProvider: String
         get() = prefs.getString("aiProvider", "openai") ?: "openai"
@@ -466,8 +462,8 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putString("aiEndpoint", value.trim().trimEnd('/')).apply()
 
     var aiApiKey: String
-        get() = prefs.getString("aiApiKey", "") ?: ""
-        set(value) = prefs.edit().putString("aiApiKey", value.trim()).apply()
+        get() = sanitizeCredential(prefs.getString("aiApiKey", "").orEmpty())
+        set(value) = prefs.edit().putString("aiApiKey", sanitizeCredential(value)).apply()
 
     var aiModel: String
         get() = prefs.getString("aiModel", "gpt-4.1-mini") ?: "gpt-4.1-mini"
@@ -526,8 +522,7 @@ class SettingsStore(context: Context) {
                 .put("showAdvancedHome", showAdvancedHome)
                 .put("highContrast", highContrast)
                 .put("textScale", textScale)
-                .put("predictiveBackEnabled", predictiveBackEnabled)
-                .put("comboBannerEnabled", comboBannerEnabled))
+                .put("predictiveBackEnabled", predictiveBackEnabled))
             .put("service", org.json.JSONObject()
                 .put("port", port)
                 .put("bindHost", bindHost)
@@ -649,7 +644,6 @@ class SettingsStore(context: Context) {
         applyBool(appearance, "highContrast") { highContrast = it }
         applyStr(appearance, "textScale") { textScale = it }
         applyBool(appearance, "predictiveBackEnabled") { predictiveBackEnabled = it }
-        applyBool(appearance, "comboBannerEnabled") { comboBannerEnabled = it }
 
         val service = obj("service") ?: patch
         applyInt(service, "port") { port = it }
@@ -732,7 +726,7 @@ class SettingsStore(context: Context) {
         val flatKeys = listOf(
             "language", "themeMode", "accentColor", "pureBlackDark", "uiDensity", "cornerStyle",
             "motionMode", "showAdvancedHome", "highContrast", "textScale", "predictiveBackEnabled",
-            "comboBannerEnabled", "port", "bindHost", "authEnabled", "accessToken", "floatingEnabled",
+            "port", "bindHost", "authEnabled", "accessToken", "floatingEnabled",
             "wakeLockEnabled", "bootAutoStart", "defaultLimit", "stringLimit", "disasmLimit",
             "disasmMaxBytes", "emulationEnabled", "leanTools", "adaptiveLeanTools", "logLevel",
             "tunnelMode", "tunnelAutoStart", "tunnelTargetPort", "tunnelNamedToken", "tunnelProtocol",
@@ -754,7 +748,6 @@ class SettingsStore(context: Context) {
                 "highContrast" -> { highContrast = patch.optBoolean(key); touch(key) }
                 "textScale" -> { textScale = patch.optString(key); touch(key) }
                 "predictiveBackEnabled" -> { predictiveBackEnabled = patch.optBoolean(key); touch(key) }
-                "comboBannerEnabled" -> { comboBannerEnabled = patch.optBoolean(key); touch(key) }
                 "port" -> { port = patch.optInt(key); touch(key) }
                 "bindHost" -> { bindHost = patch.optString(key); touch(key) }
                 "authEnabled" -> { authEnabled = patch.optBoolean(key); touch(key) }
