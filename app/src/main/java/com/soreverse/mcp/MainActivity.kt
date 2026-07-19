@@ -166,6 +166,7 @@ import com.soreverse.mcp.core.ApkMcpBridge
 import com.soreverse.mcp.core.CloudflareTunnelManager
 import com.soreverse.mcp.core.DeepAnalysisEvent
 import com.soreverse.mcp.core.DeepAnalysisService
+import com.soreverse.mcp.core.DeepReportStore
 import com.soreverse.mcp.core.RikkaPart
 import com.soreverse.mcp.core.EngineProvider
 import com.soreverse.mcp.core.IntegrityGuard
@@ -440,6 +441,7 @@ private data class WorkspaceUi(
     val architecture: String,
     val bits: Int,
     val temporary: Boolean,
+    val hasLocalAiReport: Boolean,
 )
 
 private data class SoSourceUi(
@@ -2274,7 +2276,7 @@ $history
         state.deepReport = ""
         state.deepEvidencePreview = ""
         state.deepError = ""
-        deepService.resetReportDraft()
+        deepService.resetReportDraft(resetWorkspace = request.isBlank())
         state.deepJob = scope.launch {
             val collector = launch {
                 deepService.events.collect { event ->
@@ -2302,6 +2304,13 @@ $history
                     state.deepReport = report
                     state.deepMessages = state.deepMessages.map { message ->
                         if (message.id == assistantId) message.copy(text = report, streaming = false) else message
+                    }
+                    deepService.workspaceId.value.takeIf(String::isNotBlank)?.let { workspaceId ->
+                        DeepReportStore.save(
+                            context.applicationContext,
+                            workspaceId,
+                            deepReportSnapshot(path, settings.aiModel, state.deepMessages),
+                        )
                     }
                 }.onFailure { err ->
                     val error = err.message ?: (if (t.zh) "AI 深度分析失败" else "AI deep analysis failed")
@@ -2390,12 +2399,9 @@ $history
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = LocalUiMetrics.current.pagePad)
                 .padding(bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(LocalUiMetrics.current.sectionGap),
         ) {
-        GlassGroup(title = if (t.zh) "SO 文件" else "SO files") {
-            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (state.scanning) (if (t.zh) "扫描中…" else "Scanning…") else if (state.soSources.isNotEmpty()) (if (t.zh) "共计 ${state.soSources.size} 个 SO 文件" else "${state.soSources.size} SO files") else (if (t.zh) "选择目录后自动扫描" else "Choose a directory to scan"),
                     Modifier.weight(1f),
@@ -2407,14 +2413,14 @@ $history
                 }
             }
             if (state.scanning) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 14.dp))
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = LocalUiMetrics.current.pagePad))
                 Spacer(Modifier.height(8.dp))
             }
             if (state.analyzingSoPath != null) {
                 LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 14.dp))
                 Text(
                     state.message.ifBlank { if (t.zh) "正在进行程序基础分析…" else "Running program analysis…" },
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 6.dp),
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelMedium,
                 )
@@ -2422,7 +2428,7 @@ $history
             if (state.soSources.isEmpty()) {
                 Text(
                     state.message.ifBlank { if (t.zh) "选择目录后会自动扫描 SO 文件。" else "SO files will be scanned automatically after choosing a directory." },
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 8.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -2431,7 +2437,7 @@ $history
                     if (idx > 0) GroupDivider()
                     Column {
                         Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
@@ -2489,9 +2495,6 @@ $history
                     }
                 }
             }
-        }
-
-        Spacer(Modifier.height(12.dp))
         }
     }
     state.expandedSoPath?.let(state.perSoDetail::get)?.let { selectedDetail ->
@@ -2617,8 +2620,17 @@ $history
                                     Text(ws.name, fontWeight = FontWeight.SemiBold)
                                     Text("${ws.architecture}/${ws.bits} ${ws.abi}", style = MaterialTheme.typography.labelSmall)
                                 }
+                                if (ws.hasLocalAiReport) {
+                                    TextButton(onClick = {
+                                        DeepReportStore.load(context.applicationContext, ws.id)?.let { snapshot ->
+                                            restoreDeepReport(state, snapshot)
+                                            showWorkspaces = false
+                                        }
+                                    }) { Text(if (t.zh) "查看" else "View") }
+                                }
                                 TextButton(onClick = {
                                     EngineProvider.get(context).close(ws.id)
+                                    DeepReportStore.remove(context.applicationContext, ws.id)
                                     state.workspaces = loadWorkspaces(context)
                                 }) { Text(if (t.zh) "关闭" else "Close") }
                             }
@@ -5274,18 +5286,95 @@ private fun tunnelStatusOf(context: Context): CloudflareTunnelManager.TunnelStat
 private fun loadWorkspaces(context: Context): List<WorkspaceUi> {
     val payload = EngineProvider.get(context).listWorkspaces()
     val items = payload.optJSONArray("items") ?: return emptyList()
+    val localReports = DeepReportStore.ids(context)
     return (0 until items.length()).mapNotNull { index ->
         val item = items.optJSONObject(index) ?: return@mapNotNull null
+        val workspaceId = item.optString("workspaceId")
         WorkspaceUi(
-            id = item.optString("workspaceId"),
+            id = workspaceId,
             name = item.optString("soFileName", "lib.so"),
             path = item.optString("path"),
             abi = item.optString("abi", ""),
             architecture = item.optString("architecture", "unknown"),
             bits = item.optInt("bits", 0),
             temporary = item.optBoolean("temporary", true),
+            hasLocalAiReport = workspaceId in localReports,
         )
     }
+}
+
+private fun deepReportSnapshot(path: String, model: String, messages: List<DeepChatMessage>): JSONObject =
+    JSONObject()
+        .put("path", path)
+        .put("model", model)
+        .put(
+            "messages",
+            JSONArray().apply {
+                messages.forEach { message ->
+                    put(
+                        JSONObject()
+                            .put("id", message.id)
+                            .put("role", message.role.name)
+                            .put("text", message.text)
+                            .put("error", message.error)
+                            .put(
+                                "parts",
+                                JSONArray().apply {
+                                    message.parts.forEach { part ->
+                                        put(
+                                            when (part) {
+                                                is RikkaPart.Text -> JSONObject().put("type", "text").put("text", part.text)
+                                                is RikkaPart.Reasoning -> JSONObject().put("type", "reasoning").put("text", part.text)
+                                                is RikkaPart.Tool -> JSONObject()
+                                                    .put("type", "tool")
+                                                    .put("id", part.id)
+                                                    .put("name", part.name)
+                                                    .put("arguments", part.arguments)
+                                                    .put("result", part.result)
+                                                    .put("index", part.index)
+                                            },
+                                        )
+                                    }
+                                },
+                            ),
+                    )
+                }
+            },
+        )
+
+private fun restoreDeepReport(state: AnalyzeUiState, snapshot: JSONObject) {
+    val messages = snapshot.optJSONArray("messages") ?: JSONArray()
+    state.deepTargetPath = snapshot.optString("path")
+    state.deepMessages = (0 until messages.length()).mapNotNull { index ->
+        val message = messages.optJSONObject(index) ?: return@mapNotNull null
+        val parts = message.optJSONArray("parts") ?: JSONArray()
+        DeepChatMessage(
+            id = message.optLong("id", System.currentTimeMillis() + index),
+            role = runCatching { DeepChatRole.valueOf(message.optString("role")) }.getOrDefault(DeepChatRole.ASSISTANT),
+            text = message.optString("text"),
+            parts = (0 until parts.length()).mapNotNull { partIndex ->
+                val part = parts.optJSONObject(partIndex) ?: return@mapNotNull null
+                when (part.optString("type")) {
+                    "text" -> RikkaPart.Text(part.optString("text"))
+                    "reasoning" -> RikkaPart.Reasoning(part.optString("text"))
+                    "tool" -> RikkaPart.Tool(
+                        id = part.optString("id"),
+                        name = part.optString("name"),
+                        arguments = part.optString("arguments"),
+                        result = part.optString("result").takeUnless { part.isNull("result") },
+                        index = part.optInt("index"),
+                    )
+                    else -> null
+                }
+            },
+            error = message.optString("error"),
+        )
+    }
+    state.deepReport = state.deepMessages.lastOrNull { it.role == DeepChatRole.ASSISTANT }?.text.orEmpty()
+    state.deepAnalyzingPath = null
+    state.deepJob = null
+    state.restoreDeepReportOnAnalyzeEntry = false
+    state.showDeepReport = true
 }
 
 private fun clientConfig(url: String, settings: SettingsStore): String {
