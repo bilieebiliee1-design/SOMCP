@@ -2,7 +2,7 @@
 
 SOMCP 是一个运行在 Android 手机上的本地 SO 逆向 MCP 服务器。它通过 Streamable HTTP 暴露 MCP 工具，让客户端可以在手机上完成 ELF 结构分析、Rizin 反汇编/分析、LIEF ELF 修复/重写、补丁会话、构建导出、Cloudflare Tunnel 暴露和可选 APK MCP 桥接。
 
-当前版本：`1.0.3`
+当前版本：`1.0.4`
 
 包名：`com.soreverse.mcp`
 
@@ -37,11 +37,11 @@ app/build/outputs/apk/release/app-universal-release.apk
 推荐 Release tag 使用 `v<versionName>`，并上传按 ABI 命名的 APK：
 
 ```text
-SOMCP-1.0.3-arm64-v8a.apk
-SOMCP-1.0.3-armeabi-v7a.apk
-SOMCP-1.0.3-x86.apk
-SOMCP-1.0.3-x86_64.apk
-SOMCP-1.0.3-universal.apk
+SOMCP-1.0.4-arm64-v8a.apk
+SOMCP-1.0.4-armeabi-v7a.apk
+SOMCP-1.0.4-x86.apk
+SOMCP-1.0.4-x86_64.apk
+SOMCP-1.0.4-universal.apk
 ```
 
 可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI，存在校验资产时会在安装前强制验证 SHA-256。
