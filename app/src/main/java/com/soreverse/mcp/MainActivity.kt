@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -2562,22 +2563,31 @@ $history
                     }
                 }
                 Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 3.dp,
-                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.96f),
+                    tonalElevation = 1.dp,
+                    shadowElevation = 3.dp,
                 ) {
                     Row(
-                        Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         OutlinedTextField(
                             value = state.deepInput,
                             onValueChange = { state.deepInput = it },
-                            modifier = Modifier.weight(1f).heightIn(min = 52.dp, max = 132.dp),
-                            placeholder = { Text(if (t.zh) "继续提问…" else "Ask a follow-up…") },
-                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier.weight(1f).heightIn(min = 50.dp, max = 132.dp),
+                            placeholder = { Text(if (t.zh) "继续提问" else "Ask a follow-up", maxLines = 1) },
+                            shape = RoundedCornerShape(18.dp),
                             maxLines = 5,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                            ),
                         )
                         FilledIconButton(
                             onClick = {
@@ -2592,10 +2602,18 @@ $history
                                 }
                             },
                             enabled = state.deepAnalyzingPath != null || state.deepInput.isNotBlank(),
-                            modifier = Modifier.size(48.dp),
+                            modifier = Modifier.size(50.dp),
+                            shape = CircleShape,
+                            colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                                containerColor = if (state.deepAnalyzingPath != null) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                },
+                            ),
                         ) {
                             Icon(
-                                if (state.deepAnalyzingPath != null) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                if (state.deepAnalyzingPath != null) Icons.Default.Stop else Icons.Default.ArrowUpward,
                                 if (state.deepAnalyzingPath != null) (if (t.zh) "停止" else "Stop") else (if (t.zh) "发送" else "Send"),
                             )
                         }
