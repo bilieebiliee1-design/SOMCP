@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#000000</color>
+    <color name="apple_blue">#007AFF</color>
+    <color name="apple_background">#F2F2F7</color>
+    <color name="apple_card">#FFFFFF</color>
+    <color name="apple_label">#1D1D1F</color>
+    <color name="apple_secondary_label">#8E8E93</color>
+    <color name="apple_separator">#C6C6C8</color>
+    <color name="apple_green">#34C759</color>
+    <color name="apple_red">#FF3B30</color>
+    <color name="apple_orange">#FF9500</color>
+</resources>
