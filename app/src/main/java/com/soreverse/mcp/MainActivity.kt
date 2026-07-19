@@ -3838,7 +3838,6 @@ private fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
     var apkToken by remember { mutableStateOf(settings.apkMcpToken) }
     var apkAutoProbe by remember { mutableStateOf(settings.apkMcpAutoProbe) }
     var apkMerge by remember { mutableStateOf(settings.apkMcpMergeTools) }
-    var comboBanner by remember { mutableStateOf(settings.comboBannerEnabled) }
     var probeState by remember { mutableStateOf<ApkMcpBridge.State?>(null) }
     PageScroll {
         GlassGroup {
@@ -3882,8 +3881,6 @@ private fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
             ToggleRow(if (t.zh) "持续自动探测" else "Continuous auto-probe", apkAutoProbe) { apkAutoProbe = it; settings.apkMcpAutoProbe = it }
             GroupDivider()
             ToggleRow(if (t.zh) "合并工具到 tools/list" else "Merge tools into tools/list", apkMerge) { apkMerge = it; settings.apkMcpMergeTools = it }
-            GroupDivider()
-            ToggleRow(if (t.zh) "主页显示桥接状态横幅" else "Show bridge banner on main page", comboBanner) { comboBanner = it; settings.comboBannerEnabled = it }
         }
         GlassGroup {
             Row(Modifier.padding(14.dp)) {

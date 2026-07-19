@@ -40,6 +40,12 @@ class GitHubUpdateManager(private val context: Context) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
+    private val probeClient = client.newBuilder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .callTimeout(5, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
 
     suspend fun check(): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         runCatching {
@@ -134,31 +140,43 @@ class GitHubUpdateManager(private val context: Context) {
         }
 
     private suspend fun rankedDownloadUrls(original: String): List<String> = coroutineScope {
-        val candidates = listOf(
-            original,
-            "https://ghproxy.net/$original",
-            "https://mirror.ghproxy.com/$original",
-            "https://github.moeyy.xyz/$original",
-            "https://gh-proxy.com/$original",
-        ).distinct()
-        candidates.map { url ->
-            async(Dispatchers.IO) {
+        val candidates = downloadUrls(original)
+        val ranked = candidates.map { url -> async(Dispatchers.IO) {
                 val started = System.nanoTime()
                 val reachable = runCatching {
-                    client.newCall(
+                    probeClient.newCall(
                         Request.Builder()
                             .head()
                             .url(url)
                             .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
                             .build(),
-                    ).execute().use { it.isSuccessful || it.code in 300..399 }
+                    ).execute().use { it.isSuccessful || it.code in 300..399 || it.code == 405 }
                 }.getOrDefault(false)
-                val elapsed = System.nanoTime() - started
-                Triple(url, reachable, elapsed)
+                Triple(url, reachable, System.nanoTime() - started)
             }
         }.awaitAll()
-            .sortedWith(compareByDescending<Triple<String, Boolean, Long>> { it.second }.thenBy { it.third })
-            .map { it.first }
+        ranked.sortedWith(
+            compareByDescending<Triple<String, Boolean, Long>> { it.second }.thenBy { it.third },
+        ).map { it.first }
+    }
+
+    private fun downloadUrls(original: String): List<String> {
+        val prefixes = listOf(
+            "https://ghproxy.net/",
+            "https://gh-proxy.com/",
+            "https://ghp.ci/",
+            "https://mirror.ghproxy.com/",
+            "https://v6.gh-proxy.org/",
+            "https://gh.llkk.cc/",
+            "https://github-proxy.memory-echoes.cn/",
+            "https://hub.gitmirror.com/",
+            "https://moeyy.cn/gh-proxy/",
+            "https://gh.zwy.one/",
+        )
+        val replacements = listOf("https://kkgithub.com", "https://bgithub.xyz").mapNotNull { host ->
+            original.takeIf { it.startsWith("https://github.com/") }?.replaceFirst("https://github.com", host)
+        }
+        return (prefixes.map { it + original } + replacements + original).distinct()
     }
 
     fun install(file: File): Boolean {
@@ -198,16 +216,26 @@ class GitHubUpdateManager(private val context: Context) {
         return false
     }
 
-    private fun verifyChecksum(file: File, url: String) {
-        val request = Request.Builder().url(url).header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}").build()
-        val expected = client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Checksum HTTP ${response.code}")
-            val text = response.body.string()
-            Regex("(?i)([a-f0-9]{64})\\s+\\*?${Regex.escape(file.name)}(?:\\s|$)")
-                .find(text)?.groupValues?.get(1)
-                ?: Regex("(?i)^[a-f0-9]{64}$").find(text.trim())?.value
-                ?: error("Checksum file does not contain ${file.name}")
+    private suspend fun verifyChecksum(file: File, url: String) {
+        var expected: String? = null
+        var lastFailure: Throwable? = null
+        for (candidate in rankedDownloadUrls(url)) {
+            try {
+                val request = Request.Builder().url(candidate).header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}").build()
+                expected = client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("Checksum HTTP ${response.code}")
+                    val text = response.body.string()
+                    Regex("(?i)([a-f0-9]{64})\\s+\\*?${Regex.escape(file.name)}(?:\\s|$)")
+                        .find(text)?.groupValues?.get(1)
+                        ?: Regex("(?i)^[a-f0-9]{64}$").find(text.trim())?.value
+                        ?: error("Checksum file does not contain ${file.name}")
+                }
+                break
+            } catch (error: Throwable) {
+                lastFailure = error
+            }
         }
+        requireNotNull(expected) { lastFailure?.message ?: "All checksum mirrors failed" }
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
