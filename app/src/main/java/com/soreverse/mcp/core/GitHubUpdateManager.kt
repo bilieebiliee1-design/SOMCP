@@ -8,6 +8,9 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.soreverse.mcp.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -83,37 +86,80 @@ class GitHubUpdateManager(private val context: Context) {
                 val directory = File(context.cacheDir, "updates").apply { mkdirs() }
                 directory.listFiles()?.forEach { it.delete() }
                 val target = File(directory, release.apkName.substringAfterLast('/'))
-                val request = Request.Builder()
-                    .url(release.apkUrl)
-                    .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) error("Download HTTP ${response.code} ${response.message}")
-                    val body = response.body
-                    val total = body.contentLength().takeIf { it > 0 } ?: release.apkSize
-                    body.byteStream().use { input ->
-                        target.outputStream().use { output ->
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            var copied = 0L
-                            while (true) {
-                                val count = input.read(buffer)
-                                if (count < 0) break
-                                output.write(buffer, 0, count)
-                                copied += count
-                                if (total > 0) onProgress(((copied * 100) / total).toInt().coerceIn(0, 100))
+                val candidates = rankedDownloadUrls(release.apkUrl)
+                var lastFailure: Throwable? = null
+                var downloaded = false
+                for (url in candidates) {
+                    target.delete()
+                    try {
+                        val request = Request.Builder()
+                            .url(url)
+                            .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
+                            .build()
+                        client.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) error("Download HTTP ${response.code} ${response.message}")
+                            val body = response.body
+                            val total = body.contentLength().takeIf { it > 0 } ?: release.apkSize
+                            body.byteStream().use { input ->
+                                target.outputStream().use { output ->
+                                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                    var copied = 0L
+                                    while (true) {
+                                        val count = input.read(buffer)
+                                        if (count < 0) break
+                                        output.write(buffer, 0, count)
+                                        copied += count
+                                        if (total > 0) onProgress(((copied * 100) / total).toInt().coerceIn(0, 100))
+                                    }
+                                }
                             }
                         }
+                        if (target.length() > 4 && target.inputStream().use {
+                                val header = ByteArray(4)
+                                it.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+                            }) {
+                            downloaded = true
+                            break
+                        }
+                        error("Downloaded asset is not a valid APK archive")
+                    } catch (error: Throwable) {
+                        lastFailure = error
                     }
                 }
-                require(target.length() > 4 && target.inputStream().use {
-                    val header = ByteArray(4)
-                    it.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
-                }) { "Downloaded asset is not a valid APK archive" }
+                require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
                 release.checksumUrl?.let { verifyChecksum(target, it) }
                 onProgress(100)
                 target
             }
         }
+
+    private suspend fun rankedDownloadUrls(original: String): List<String> = coroutineScope {
+        val candidates = listOf(
+            original,
+            "https://ghproxy.net/$original",
+            "https://mirror.ghproxy.com/$original",
+            "https://github.moeyy.xyz/$original",
+            "https://gh-proxy.com/$original",
+        ).distinct()
+        candidates.map { url ->
+            async(Dispatchers.IO) {
+                val started = System.nanoTime()
+                val reachable = runCatching {
+                    client.newCall(
+                        Request.Builder()
+                            .head()
+                            .url(url)
+                            .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
+                            .build(),
+                    ).execute().use { it.isSuccessful || it.code in 300..399 }
+                }.getOrDefault(false)
+                val elapsed = System.nanoTime() - started
+                Triple(url, reachable, elapsed)
+            }
+        }.awaitAll()
+            .sortedWith(compareByDescending<Triple<String, Boolean, Long>> { it.second }.thenBy { it.third })
+            .map { it.first }
+    }
 
     fun install(file: File): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
