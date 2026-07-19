@@ -291,15 +291,22 @@ class McpForegroundService : Service() {
         if (floating != null) return
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val zh = settings.language == "zh" || (settings.language == "system" && Locale.getDefault().language == "zh")
+        val density = resources.displayMetrics.density
         val tv = TextView(this).apply {
-            text = if (zh) "SOMCP 运行中" else "SOMCP running"
+            text = if (zh) "● SOMCP 运行中" else "● SOMCP running"
             setTextColor(Color.WHITE)
-            textSize = 12f
-            setPadding(24, 14, 24, 14)
-            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Color.rgb(37, 99, 235), Color.rgb(15, 118, 110))).apply {
+            textSize = 11f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            letterSpacing = 0.03f
+            gravity = Gravity.CENTER
+            setPadding((14 * density).toInt(), (9 * density).toInt(), (14 * density).toInt(), (9 * density).toInt())
+            background = GradientDrawable().apply {
+                setColor(Color.argb(238, 24, 30, 42))
+                setStroke((1 * density).toInt(), Color.argb(110, 255, 255, 255))
                 cornerRadius = 999f
             }
-            elevation = 12f
+            elevation = 8 * density
+            alpha = 0.96f
         }
         bubbleText = tv
         val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
