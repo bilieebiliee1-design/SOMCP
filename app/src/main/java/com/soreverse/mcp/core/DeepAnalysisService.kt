@@ -39,10 +39,13 @@ class DeepAnalysisService(private val appContext: Context) {
     val reportDraft: StateFlow<String> = _reportDraft
     private val _partsDraft = MutableStateFlow<List<RikkaPart>>(emptyList())
     val partsDraft: StateFlow<List<RikkaPart>> = _partsDraft
+    private val _workspaceId = MutableStateFlow("")
+    val workspaceId: StateFlow<String> = _workspaceId
 
-    fun resetReportDraft() {
+    fun resetReportDraft(resetWorkspace: Boolean = true) {
         _reportDraft.value = ""
         _partsDraft.value = emptyList()
+        if (resetWorkspace) _workspaceId.value = ""
     }
 
     suspend fun listModels(settings: SettingsStore): Result<List<String>> = withContext(Dispatchers.IO) {
@@ -294,6 +297,11 @@ Only after gathering the necessary evidence, return the final Markdown report. D
                 AppLog.i("AI tool call $name args=${args.toString().take(600)}")
                 runCatching { handler.handle(ctx, args) }
                     .onSuccess { payload ->
+                        if (name == "so_open") {
+                            payload.optString("workspaceId").takeIf(String::isNotBlank)?.let {
+                                _workspaceId.value = it
+                            }
+                        }
                         AppLog.i("AI tool completed $name result=${payload.toString().take(600)}")
                     }
                     .onFailure { error ->
