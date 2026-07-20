@@ -598,7 +598,9 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put("preview", payloadText.substring(0, cap))
                 .toString()
         } else payloadText
-        return JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", rendered)))
+        return JSONObject()
+            .put("isError", payload.optBoolean("ok", true).not())
+            .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", rendered)))
     }
 
     private fun io.ktor.server.application.ApplicationCall.authorized(): Boolean {
