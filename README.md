@@ -37,11 +37,11 @@ app/build/outputs/apk/release/app-universal-release.apk
 推荐 Release tag 使用 `v<versionName>`，并上传按 ABI 命名的 APK：
 
 ```text
-SOMCP-1.0.5-arm64-v8a.apk
-SOMCP-1.0.5-armeabi-v7a.apk
-SOMCP-1.0.5-x86.apk
-SOMCP-1.0.5-x86_64.apk
-SOMCP-1.0.5-universal.apk
+SOMCP-1.0.6-arm64-v8a.apk
+SOMCP-1.0.6-armeabi-v7a.apk
+SOMCP-1.0.6-x86.apk
+SOMCP-1.0.6-x86_64.apk
+SOMCP-1.0.6-universal.apk
 ```
 
 可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI，存在校验资产时会在安装前强制验证 SHA-256。
