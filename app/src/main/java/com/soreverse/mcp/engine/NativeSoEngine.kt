@@ -6,6 +6,7 @@ import android.provider.DocumentsContract
 import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.err
+import com.soreverse.mcp.core.HexCodec
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.core.toJsonArray
 import com.soreverse.mcp.nativecore.NativeEngine
@@ -20,79 +21,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
 import kotlin.math.min
-
-data class Workspace(
-    val id: String,
-    val source: SoSource,
-    val data: ByteArray,
-    val elf: ElfFile,
-    val temporary: Boolean,
-    val originalSha256: String,
-    val analysisInputSource: String,
-    val structureRecovery: JSONObject,
-    val edits: MutableMap<String, EditSession> = ConcurrentHashMap(),
-)
-
-private data class SourceSummary(
-    val architecture: String,
-    val bits: Int,
-    val endian: String,
-    val hasDebugInfo: Boolean,
-    val stripped: Boolean,
-)
-
-private data class PageState(
-    val field: String,
-    val items: List<JSONObject>,
-    val offset: Int,
-    val limit: Int,
-)
-
-private data class DisasmCursorState(
-    val workspaceId: String,
-    val editSessionId: String,
-    val locator: String,
-    val byteOffset: Int,
-    val limit: Int,
-    val maxBytes: Int,
-)
-
-data class EditSession(
-    val id: String,
-    val data: ByteArray,
-    var revision: Int = 0,
-    val patches: MutableList<PatchRecord> = mutableListOf(),
-    val snapshots: MutableList<Snapshot> = mutableListOf(),
-    val undone: MutableList<PatchRecord> = mutableListOf(),
-)
-
-private data class EmulatorSession(
-    val id: String,
-    val workspaceId: String,
-    val editSessionId: String,
-    val architecture: String,
-    val data: ByteArray,
-    val live: UnidbgEmulator.LiveSession? = null,
-    val createdAt: Long = System.currentTimeMillis(),
-)
-
-data class Snapshot(
-    val revision: Int,
-    val sha256: String,
-    val timeMillis: Long,
-    val patchCount: Int,
-    val dataCopy: ByteArray,
-)
-
-data class PatchRecord(
-    val timeMillis: Long,
-    val kind: String,
-    val locator: String,
-    val fileOffset: Int,
-    val oldHex: String,
-    val newHex: String,
-    val asm: String = "",
-)
 
 class NativeSoEngine(private val context: Context) {
     internal val lief = LiefEngine()
@@ -1783,12 +1711,7 @@ class NativeSoEngine(private val context: Context) {
         return null
     }
 
-    private fun parseHexLong(value: String): Long? {
-        val trimmed = value.trim()
-        if (trimmed.isBlank()) return null
-        val normalized = trimmed.removePrefix("0x").removePrefix("0X")
-        return normalized.toLongOrNull(16)
-    }
+    private fun parseHexLong(value: String): Long? = HexCodec.long(value)
 
     private fun normalizeSymbolName(raw: String): String {
         val base = raw.substringBefore('@').trim()
@@ -1844,18 +1767,7 @@ class NativeSoEngine(private val context: Context) {
         return null
     }
 
-    private fun hexToBytes(value: String): ByteArray? {
-        val clean = value.replace(" ", "").replace("\n", "").replace("\t", "")
-        if (clean.isBlank() || clean.length % 2 != 0) return null
-        val out = ByteArray(clean.length / 2)
-        for (i in out.indices) {
-            val hi = Character.digit(clean[i * 2], 16)
-            val lo = Character.digit(clean[i * 2 + 1], 16)
-            if (hi < 0 || lo < 0) return null
-            out[i] = ((hi shl 4) + lo).toByte()
-        }
-        return out
-    }
+    private fun hexToBytes(value: String): ByteArray? = HexCodec.bytes(value)
 
     fun snapshotBytes(workspaceId: String, editSessionId: String): Pair<ByteArray, String> {
         val bytes = dataFor(workspaceId, editSessionId)
