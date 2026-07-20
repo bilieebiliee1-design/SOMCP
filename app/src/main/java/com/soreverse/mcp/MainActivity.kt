@@ -128,9 +128,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -154,7 +151,6 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -190,7 +186,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.net.ServerSocket
 import java.util.Locale
 
@@ -204,308 +199,6 @@ class MainActivity : ComponentActivity() {
         }
         setContent { IntegrityGate { SoReverseApp() } }
     }
-}
-
-private enum class MainTab { Service, Analyze, Logs, Settings }
-private enum class SetupTarget { Directory, ApkMcp, KeepAlive }
-private enum class SettingsDest {
-    Root, ServiceConfig, Appearance, KeepAlive, Access, Limits, Export, Audit, Tunnel, ApkBridge, AiDeep, Updates, Probe, ToolStats, TunnelStats, Instructions, Credits, Disclaimer, About
-}
-
-/** Clean control-console design tokens for SOMCP. */
-private object AppPalette {
-    val blue = Color(0xFF0A84FF)
-    val teal = Color(0xFF64D2FF)
-    val indigo = Color(0xFF5E5CE6)
-    val purple = Color(0xFFBF5AF2)
-    val green = Color(0xFF30D158)
-    val orange = Color(0xFFFF9F0A)
-    val red = Color(0xFFFF453A)
-    val mono = Color(0xFF8E8E93)
-
-    fun accent(name: String, dark: Boolean): Color = when (name) {
-        "teal" -> if (dark) Color(0xFF64D2FF) else Color(0xFF0891B2)
-        "indigo" -> if (dark) Color(0xFF5E5CE6) else Color(0xFF4F46E5)
-        "purple" -> if (dark) Color(0xFFBF5AF2) else Color(0xFF9333EA)
-        "green" -> if (dark) Color(0xFF30D158) else Color(0xFF16A34A)
-        "orange" -> if (dark) Color(0xFFFF9F0A) else Color(0xFFEA580C)
-        "red" -> if (dark) Color(0xFFFF453A) else Color(0xFFDC2626)
-        "mono" -> if (dark) Color(0xFFD1D1D6) else Color(0xFF3A3A3C)
-        else -> if (dark) Color(0xFF0A84FF) else Color(0xFF007AFF)
-    }
-}
-
-private data class UiMetrics(
-    val pagePad: androidx.compose.ui.unit.Dp,
-    val sectionGap: androidx.compose.ui.unit.Dp,
-    val rowPadV: androidx.compose.ui.unit.Dp,
-    val cardRadius: androidx.compose.ui.unit.Dp,
-    val controlRadius: androidx.compose.ui.unit.Dp,
-)
-
-private fun uiMetrics(density: String, corner: String): UiMetrics {
-    val pagePad = when (density) {
-        "compact" -> 12.dp
-        "spacious" -> 20.dp
-        else -> 16.dp
-    }
-    val sectionGap = when (density) {
-        "compact" -> 12.dp
-        "spacious" -> 22.dp
-        else -> 16.dp
-    }
-    val rowPadV = when (density) {
-        "compact" -> 8.dp
-        "spacious" -> 14.dp
-        else -> 11.dp
-    }
-    val cardRadius = when (corner) {
-        "small" -> 10.dp
-        "large" -> 18.dp
-        "xlarge" -> 24.dp
-        else -> 14.dp
-    }
-    val controlRadius = when (corner) {
-        "small" -> 8.dp
-        "large" -> 14.dp
-        "xlarge" -> 18.dp
-        else -> 11.dp
-    }
-    return UiMetrics(pagePad, sectionGap, rowPadV, cardRadius, controlRadius)
-}
-
-private fun textScaleFactor(textScale: String): Float = when (textScale) {
-    "large" -> 1.08f
-    "xlarge" -> 1.16f
-    else -> 1f
-}
-
-private fun TextStyle.scaledBy(scale: Float): TextStyle = copy(
-    fontSize = (fontSize.value * scale).sp,
-    lineHeight = (lineHeight.value * scale).sp,
-)
-
-private fun scaledTypography(scale: Float): Typography {
-    val base = Typography()
-    return Typography(
-        displayLarge = base.displayLarge.scaledBy(scale),
-        displayMedium = base.displayMedium.scaledBy(scale),
-        displaySmall = base.displaySmall.scaledBy(scale),
-        headlineLarge = base.headlineLarge.scaledBy(scale),
-        headlineMedium = base.headlineMedium.scaledBy(scale),
-        headlineSmall = base.headlineSmall.scaledBy(scale),
-        titleLarge = base.titleLarge.scaledBy(scale),
-        titleMedium = base.titleMedium.scaledBy(scale),
-        titleSmall = base.titleSmall.scaledBy(scale),
-        bodyLarge = base.bodyLarge.scaledBy(scale),
-        bodyMedium = base.bodyMedium.scaledBy(scale),
-        bodySmall = base.bodySmall.scaledBy(scale),
-        labelLarge = base.labelLarge.scaledBy(scale),
-        labelMedium = base.labelMedium.scaledBy(scale),
-        labelSmall = base.labelSmall.scaledBy(scale),
-    )
-}
-
-private fun appLightColors(accent: Color, highContrast: Boolean) = lightColorScheme(
-    primary = accent,
-    onPrimary = Color.White,
-    primaryContainer = accent.copy(alpha = 0.12f),
-    onPrimaryContainer = Color(0xFF0B1B33),
-    secondary = Color(0xFFE8E8ED),
-    onSecondary = Color(0xFF1C1C1E),
-    secondaryContainer = Color(0xFFF2F2F7),
-    onSecondaryContainer = Color(0xFF1C1C1E),
-    tertiary = AppPalette.indigo,
-    onTertiary = Color.White,
-    background = Color(0xFFF2F2F7),
-    onBackground = if (highContrast) Color(0xFF000000) else Color(0xFF1C1C1E),
-    surface = Color(0xFFFFFFFF),
-    onSurface = if (highContrast) Color(0xFF000000) else Color(0xFF1C1C1E),
-    surfaceVariant = Color(0xFFE5E5EA),
-    onSurfaceVariant = if (highContrast) Color(0xFF3A3A3C) else Color(0xFF636366),
-    surfaceContainer = Color(0xFFFFFFFF),
-    surfaceContainerHigh = Color(0xFFF7F7FA),
-    surfaceContainerHighest = Color(0xFFE5E5EA),
-    outline = if (highContrast) Color(0xFF8E8E93) else Color(0xFFC6C6C8),
-    outlineVariant = Color(0xFFE5E5EA),
-    error = Color(0xFFFF3B30),
-    onError = Color.White,
-    errorContainer = Color(0xFFFFECEA),
-    onErrorContainer = Color(0xFF93000A),
-)
-
-private fun appDarkColors(accent: Color, pureBlack: Boolean, highContrast: Boolean) = darkColorScheme(
-    primary = accent,
-    onPrimary = Color.White,
-    primaryContainer = accent.copy(alpha = 0.18f),
-    onPrimaryContainer = Color(0xFFE8F1FF),
-    secondary = Color(0xFF2C2C2E),
-    onSecondary = Color(0xFFF5F5F7),
-    secondaryContainer = Color(0xFF3A3A3C),
-    onSecondaryContainer = Color(0xFFF5F5F7),
-    tertiary = Color(0xFF5E5CE6),
-    onTertiary = Color.White,
-    background = if (pureBlack) Color(0xFF000000) else Color(0xFF0B0B0D),
-    onBackground = if (highContrast) Color(0xFFFFFFFF) else Color(0xFFF5F5F7),
-    surface = if (pureBlack) Color(0xFF1C1C1E) else Color(0xFF161618),
-    onSurface = if (highContrast) Color(0xFFFFFFFF) else Color(0xFFF5F5F7),
-    surfaceVariant = Color(0xFF2C2C2E),
-    onSurfaceVariant = if (highContrast) Color(0xFFD1D1D6) else Color(0xFF8E8E93),
-    surfaceContainer = if (pureBlack) Color(0xFF1C1C1E) else Color(0xFF161618),
-    surfaceContainerHigh = Color(0xFF2C2C2E),
-    surfaceContainerHighest = Color(0xFF3A3A3C),
-    outline = if (highContrast) Color(0xFFAEAEB2) else Color(0xFF3A3A3C),
-    outlineVariant = Color(0xFF2C2C2E),
-    error = Color(0xFFFF453A),
-    onError = Color.White,
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6),
-)
-
-private fun statusSuccess(dark: Boolean = false): Color = if (dark) Color(0xFF30D158) else Color(0xFF34C759)
-private fun statusError(dark: Boolean = false): Color = if (dark) Color(0xFFFF453A) else Color(0xFFFF3B30)
-private fun statusWarning(dark: Boolean = false): Color = if (dark) Color(0xFFFF9F0A) else Color(0xFFFF9500)
-
-// Backward-compatible aliases used across the file.
-private object AppleColors {
-    val systemBlue = AppPalette.blue
-    val systemBlueDark = AppPalette.blue
-    val systemGreen = AppPalette.green
-    val systemGreenDark = AppPalette.green
-    val systemRed = AppPalette.red
-    val systemRedDark = AppPalette.red
-    val systemOrange = AppPalette.orange
-    val systemOrangeDark = AppPalette.orange
-    val systemIndigo = AppPalette.indigo
-    val systemTeal = AppPalette.teal
-    val systemPurple = AppPalette.purple
-    object Light {
-        val background = Color(0xFFF2F2F7)
-        val secondaryBackground = Color(0xFFFFFFFF)
-        val tertiaryBackground = Color(0xFFF2F2F7)
-        val groupedBackground = Color(0xFFF2F2F7)
-        val card = Color(0xFFFFFFFF)
-        val fill = Color(0xFFE5E5EA)
-        val fillSecondary = Color(0xFFF2F2F7)
-        val separator = Color(0xFFC6C6C8)
-        val label = Color(0xFF1C1C1E)
-        val secondaryLabel = Color(0xFF636366)
-        val tertiaryLabel = Color(0xFF8E8E93)
-        val primary = AppPalette.blue
-        val onPrimary = Color.White
-        val success = AppPalette.green
-        val error = AppPalette.red
-        val warning = AppPalette.orange
-        val glass = Color(0xFFFFFFFF)
-        val glassStrong = Color(0xFFFFFFFF)
-        val glassStroke = Color(0x33C6C6C8)
-    }
-    object Dark {
-        val background = Color(0xFF000000)
-        val secondaryBackground = Color(0xFF1C1C1E)
-        val tertiaryBackground = Color(0xFF2C2C2E)
-        val groupedBackground = Color(0xFF000000)
-        val card = Color(0xFF1C1C1E)
-        val fill = Color(0xFF3A3A3C)
-        val fillSecondary = Color(0xFF2C2C2E)
-        val separator = Color(0xFF38383A)
-        val label = Color(0xFFF5F5F7)
-        val secondaryLabel = Color(0xFF8E8E93)
-        val tertiaryLabel = Color(0xFF636366)
-        val primary = AppPalette.blue
-        val onPrimary = Color.White
-        val success = AppPalette.green
-        val error = AppPalette.red
-        val warning = AppPalette.orange
-        val glass = Color(0xFF1C1C1E)
-        val glassStrong = Color(0xFF1C1C1E)
-        val glassStroke = Color(0x33FFFFFF)
-    }
-}
-
-private fun appleLightColors() = appLightColors(AppPalette.blue, false)
-private fun appleDarkColors() = appDarkColors(AppPalette.blue, true, false)
-private fun appleSuccess(dark: Boolean = false): Color = statusSuccess(dark)
-private fun appleError(dark: Boolean = false): Color = statusError(dark)
-private fun appleWarning(dark: Boolean = false): Color = statusWarning(dark)
-
-private val LocalUiMetrics = androidx.compose.runtime.staticCompositionLocalOf {
-    uiMetrics("comfortable", "medium")
-}
-private val LocalReduceMotion = androidx.compose.runtime.staticCompositionLocalOf { false }
-
-private data class WorkspaceUi(
-    val id: String,
-    val name: String,
-    val path: String,
-    val abi: String,
-    val architecture: String,
-    val bits: Int,
-    val temporary: Boolean,
-    val hasLocalAiReport: Boolean,
-)
-
-private data class SoSourceUi(
-    val name: String,
-    val path: String,
-    val source: String,
-    val abi: String,
-    val architecture: String,
-    val bits: Int,
-    val size: Long,
-    val stripped: Boolean,
-)
-
-private data class SoDetailUi(
-    val workspaceId: String,
-    val name: String,
-    val path: String,
-    val architecture: String,
-    val bits: Int,
-    val entryPoint: String,
-    val stripped: Boolean,
-    val hasDebugInfo: Boolean,
-    val hasJniOnLoad: Boolean,
-    val sectionCount: Int,
-    val symbolCount: Int,
-    val dynsymCount: Int,
-    val stringCount: Int,
-    val overview: JSONObject = JSONObject(),
-)
-
-private enum class DeepChatRole { USER, ASSISTANT }
-
-private data class DeepChatMessage(
-    val id: Long,
-    val role: DeepChatRole,
-    val text: String,
-    val events: List<DeepAnalysisEvent> = emptyList(),
-    val parts: List<RikkaPart> = emptyList(),
-    val streaming: Boolean = false,
-    val error: String = "",
-)
-
-private class AnalyzeUiState {
-    var workspaces by mutableStateOf<List<WorkspaceUi>>(emptyList())
-    var soSources by mutableStateOf<List<SoSourceUi>>(emptyList())
-    var perSoDetail by mutableStateOf<Map<String, SoDetailUi>>(emptyMap())
-    var expandedSoPath by mutableStateOf<String?>(null)
-    var message by mutableStateOf("")
-    var scanning by mutableStateOf(false)
-    var analyzingSoPath by mutableStateOf<String?>(null)
-    var scannedTreeUri by mutableStateOf<String?>(null)
-    var deepAnalyzingPath by mutableStateOf<String?>(null)
-    var deepEvents by mutableStateOf<List<DeepAnalysisEvent>>(emptyList())
-    var deepReport by mutableStateOf("")
-    var deepEvidencePreview by mutableStateOf("")
-    var showDeepReport by mutableStateOf(false)
-    var deepError by mutableStateOf("")
-    var showDeepPanel by mutableStateOf(false)
-    var deepTargetPath by mutableStateOf("")
-    var deepInput by mutableStateOf("")
-    var deepMessages by mutableStateOf<List<DeepChatMessage>>(emptyList())
-    var restoreDeepReportOnAnalyzeEntry by mutableStateOf(false)
-    var deepJob: Job? = null
 }
 
 @Composable
@@ -553,48 +246,6 @@ private fun IntegrityGate(content: @Composable () -> Unit) {
         }
     }
 }
-
-private data class UiText(
-    val zh: Boolean,
-    val appTitle: String,
-    val subtitle: String,
-    val state: String,
-    val running: String,
-    val stopped: String,
-    val power: String,
-    val directory: String,
-    val chooseDirectory: String,
-    val noDirectory: String,
-    val port: String,
-    val links: String,
-    val logs: String,
-    val tools: String,
-    val settings: String,
-    val language: String,
-    val theme: String,
-    val keepAlive: String,
-    val floating: String,
-    val wakeLock: String,
-    val predictiveBack: String,
-    val battery: String,
-    val permissions: String,
-    val test: String,
-    val copied: String,
-    val externalProbe: String,
-    val probeServiceUrl: String,
-    val reachabilityHelp: String,
-    val instructions: String,
-    val instructionsBody: String,
-    val disclaimer: String,
-    val disclaimerBody: String,
-    val about: String,
-    val aboutBody: String,
-    val joinQqGroup: String,
-    val accept: String,
-    val decline: String,
-    val firstRunDisclaimerTitle: String,
-    val externalProbeExample: String,
-)
 
 private fun localizedResources(context: Context, locale: java.util.Locale): android.content.res.Resources {
     val config = Configuration(context.resources.configuration).apply { setLocale(locale) }
@@ -1101,7 +752,7 @@ private fun ScreenHeader(
 }
 
 @Composable
-private fun GlassGroup(
+internal fun GlassGroup(
     title: String? = null,
     footer: String? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -1139,7 +790,7 @@ private fun GlassGroup(
 }
 
 @Composable
-private fun GroupDivider() {
+internal fun GroupDivider() {
     HorizontalDivider(
         modifier = Modifier.padding(start = 16.dp),
         thickness = 0.5.dp,
@@ -1148,7 +799,7 @@ private fun GroupDivider() {
 }
 
 @Composable
-private fun NavRow(
+internal fun NavRow(
     title: String,
     subtitle: String? = null,
     icon: ImageVector? = null,
@@ -1193,7 +844,7 @@ private fun NavRow(
 }
 
 @Composable
-private fun ToggleRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun ToggleRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     val metrics = LocalUiMetrics.current
     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
@@ -1392,7 +1043,7 @@ private fun ChipRow(items: List<Pair<String, String>>, selected: String, onSelec
 }
 
 @Composable
-private fun PrimaryActionButton(
+internal fun PrimaryActionButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1432,7 +1083,7 @@ private fun SecondaryActionButton(text: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PageScroll(content: @Composable ColumnScope.() -> Unit) {
+internal fun PageScroll(content: @Composable ColumnScope.() -> Unit) {
     val metrics = LocalUiMetrics.current
     Column(
         Modifier
@@ -2160,7 +1811,7 @@ private fun ComboBanner(t: UiText, settings: SettingsStore, running: Boolean, on
         }
         Text(
             when {
-                online -> if (t.zh) "已接入 MT 管理器侧边栏 APK MCP 功能（${st?.tools?.size ?: 0} 个工具）。MT 管理器负责 APK 主流程，本应用补充 SO 辅助能力。" else "APK MCP connected (${st?.tools?.size ?: 0} tools)."
+                online -> if (t.zh) "已接入 MT 管理器侧边栏 APK MCP 功能（${st.tools.size} 个工具）。MT 管理器负责 APK 主流程，本应用补充 SO 辅助能力。" else "APK MCP connected (${st.tools.size} tools)."
                 settings.apkMcpUrl.isNotBlank() -> if (t.zh) "已配置 APK MCP 地址但当前离线。" else "APK MCP URL set but offline."
                 else -> if (t.zh) "推荐配合 MT 管理器使用，并在设置中填入它的 /mcp 地址。" else "Recommended with MT Manager; enter its /mcp URL in Settings."
             },
@@ -2812,7 +2463,7 @@ private fun DeepProcessTimeline(parts: List<RikkaPart>, streaming: Boolean, zh: 
 }
 
 @Composable
-private fun MarkdownMessageContent(markdown: String, selectable: Boolean) {
+internal fun MarkdownMessageContent(markdown: String, selectable: Boolean) {
     RikkaMarkdown(content = markdown, modifier = Modifier.fillMaxWidth(), selectable = selectable)
 }
 
@@ -3053,133 +2704,6 @@ private fun SettingsHub(
     }
     }
 }
-}
-
-@Composable
-private fun SettingsUpdatesPage(
-    t: UiText,
-    settings: SettingsStore,
-    manager: GitHubUpdateManager,
-    initialRelease: GitHubRelease?,
-    onRelease: (GitHubRelease?) -> Unit,
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var autoCheck by remember { mutableStateOf(settings.autoCheckUpdates) }
-    var release by remember(initialRelease) { mutableStateOf(initialRelease) }
-    var checking by remember { mutableStateOf(false) }
-    var downloading by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(0) }
-    var downloadedFile by remember { mutableStateOf<File?>(null) }
-    var status by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-
-    fun checkUpdates() {
-        if (checking) return
-        checking = true
-        error = ""
-        status = if (t.zh) "正在检查 GitHub Releases…" else "Checking GitHub Releases…"
-        scope.launch {
-            manager.check()
-                .onSuccess { result ->
-                    when (result) {
-                        is com.soreverse.mcp.core.UpdateCheckResult.Available -> {
-                            release = result.release
-                            onRelease(result.release)
-                            status = if (t.zh) "发现新版本 ${result.release.tag}" else "Version ${result.release.tag} is available"
-                        }
-                        com.soreverse.mcp.core.UpdateCheckResult.Current -> {
-                            release = null
-                            onRelease(null)
-                            status = if (t.zh) "当前已是最新正式发行版" else "You are using the latest stable release"
-                        }
-                    }
-                }
-                .onFailure {
-                    error = it.message ?: if (t.zh) "检查更新失败" else "Update check failed"
-                    status = ""
-                }
-            checking = false
-        }
-    }
-
-    PageScroll {
-        GlassGroup {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (t.zh) "GitHub 正式发行版" else "Official GitHub releases", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(
-                    if (t.zh) "只检查 bilieebiliee1-design/SOMCP 的正式 Release。普通构建、提交、分支和标签均不会被视为更新。" else "Only stable releases from bilieebiliee1-design/SOMCP are checked. Builds, commits, branches and tags do not count as updates.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text("${if (t.zh) "当前版本" else "Current version"}: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodyMedium)
-            }
-            GroupDivider()
-            ToggleRow(if (t.zh) "启动时自动检查" else "Check automatically at startup", autoCheck) {
-                autoCheck = it
-                settings.autoCheckUpdates = it
-            }
-            GroupDivider()
-            NavRow(
-                if (checking) (if (t.zh) "正在检查…" else "Checking…") else (if (t.zh) "立即检查更新" else "Check now"),
-                status,
-                Icons.Default.Info,
-                onClick = ::checkUpdates,
-            )
-        }
-        if (error.isNotBlank()) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(error, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        release?.let { update ->
-            GlassGroup {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(update.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(update.tag, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                    if (update.notes.isNotBlank()) MarkdownMessageContent(update.notes, selectable = true)
-                    if (downloading) {
-                        LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
-                        Text("$progress%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    PrimaryActionButton(
-                        text = when {
-                            downloadedFile != null -> if (t.zh) "安装更新" else "Install update"
-                            downloading -> if (t.zh) "正在下载…" else "Downloading…"
-                            else -> if (t.zh) "下载 APK" else "Download APK"
-                        },
-                        onClick = {
-                            val file = downloadedFile
-                            if (file != null) {
-                                if (!manager.install(file)) {
-                                    status = if (t.zh) "请允许 SOMCP 安装未知应用，返回后再次点击安装。" else "Allow SOMCP to install unknown apps, then return and tap Install again."
-                                }
-                            } else if (!downloading) {
-                                downloading = true
-                                progress = 0
-                                error = ""
-                                scope.launch {
-                                    manager.download(update) { progress = it }
-                                        .onSuccess {
-                                            downloadedFile = it
-                                            status = if (t.zh) "下载并校验完成，可以安装。" else "Download and verification complete. Ready to install."
-                                        }
-                                        .onFailure { error = it.message ?: if (t.zh) "下载失败" else "Download failed" }
-                                    downloading = false
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-    }
 }
 
 @Composable
