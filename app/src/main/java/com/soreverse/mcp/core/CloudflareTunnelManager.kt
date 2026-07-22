@@ -643,7 +643,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         // state to STOPPED under the monitor and the Service is going
         // down anyway.
         runCatching {
-            context.sendBroadcast(Intent("com.soreverse.mcp.TUNNEL_STATUS").putExtra("state", _status.get().state.name))
+            context.sendBroadcast(Intent("com.soreverse.mcp.TUNNEL_STATUS").setPackage(context.packageName).putExtra("state", _status.get().state.name))
         }.onFailure { e ->
             AppLog.w("tunnel publish(): ${e.javaClass.simpleName}: ${e.message}")
         }
