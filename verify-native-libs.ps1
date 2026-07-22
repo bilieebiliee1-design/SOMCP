@@ -19,7 +19,8 @@ $pattern = '^(rz_|Rz|ZSTD_|LZ4_|XXH_|sdb_|ht_|PJ_)'
 $failed = $false
 
 foreach ($abi in $abis) {
-    $so = Join-Path $base "$abi\librz_native.so"
+    $abiDir = Join-Path $base $abi
+    $so = Join-Path $abiDir 'librz_native.so'
     if (-not (Test-Path $so)) {
         Write-Host "$abi MISSING $so" -ForegroundColor Red
         $failed = $true
@@ -30,7 +31,16 @@ foreach ($abi in $abis) {
         Select-String ' UND ' |
         ForEach-Object { ($_ -split '\s+')[-1] } |
         Sort-Object -Unique
-    $bad = @($undef | Where-Object { $_ -match $pattern })
+    $defined = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    Get-ChildItem $abiDir -Filter '*.so' | ForEach-Object {
+        & $ReadElf --dyn-syms $_.FullName |
+            Select-String -NotMatch ' UND ' |
+            ForEach-Object {
+                $parts = $_.Line -split '\s+'
+                if ($parts.Length -gt 1) { [void]$defined.Add($parts[-1]) }
+            }
+    }
+    $bad = @($undef | Where-Object { $_ -match $pattern -and -not $defined.Contains($_) })
 
     if ($bad.Count -gt 0) {
         Write-Host "$abi BAD" -ForegroundColor Red

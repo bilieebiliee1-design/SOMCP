@@ -1,6 +1,7 @@
 package com.soreverse.mcp.mcp
 
 import android.content.Context
+import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.ApkMcpBridge
 import com.soreverse.mcp.core.CloudflareTunnelManager
@@ -8,7 +9,6 @@ import com.soreverse.mcp.core.EngineProvider
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.err
-import com.soreverse.mcp.core.intValue
 import com.soreverse.mcp.core.obj
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.core.str
@@ -51,21 +51,18 @@ class McpHttpServer(private val context: Context, private val port: Int, private
      */
     private object RateLimiter {
         private val window = 60_000L
-        private val byTool = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentLinkedDeque<Long>>()
-        fun tryAcquire(name: String, limit: Int): Boolean {
-            if (limit <= 0) return true
+        private val lock = Any()
+        private val byTool = HashMap<String, ArrayDeque<Long>>()
+        fun tryAcquire(name: String, limit: Int): Boolean = synchronized(lock) {
+            if (limit <= 0) return@synchronized true
             val now = System.currentTimeMillis()
-            val dq = byTool.computeIfAbsent(name) { java.util.concurrent.ConcurrentLinkedDeque() }
-            // Evict stale entries.
-            while (true) {
-                val head = dq.peekFirst() ?: break
-                if (now - head > window) dq.pollFirst() else break
-            }
-            if (dq.size >= limit) return false
-            dq.addLast(now)
-            return true
+            val timestamps = byTool.getOrPut(name) { ArrayDeque() }
+            while (timestamps.firstOrNull()?.let { now - it > window } == true) timestamps.removeFirst()
+            if (timestamps.size >= limit) return@synchronized false
+            timestamps.addLast(now)
+            true
         }
-        fun reset(name: String? = null) {
+        fun reset(name: String? = null) = synchronized(lock) {
             if (name == null) byTool.clear() else byTool.remove(name)
         }
     }
@@ -237,15 +234,11 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put("protocolVersion", "2025-06-18")
                 .put("capabilities", JSONObject()
                     .put("tools", JSONObject().put("listChanged", false)))
-                .put("serverInfo", JSONObject().put("name", "SOMCP").put("version", "1.0.0"))
+                .put("serverInfo", JSONObject().put("name", "SOMCP").put("version", BuildConfig.VERSION_NAME))
                 .put("_meta", JSONObject()
                     .put("builtInToolsAlwaysAdvertised", true)
                     .put("fullToolCount", ToolCatalog.ALL.size)
-                    .put("toolUsageGuide", JSONObject()
-                        .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use mt_apk_* for SO tasks.")
-                        .put("apk_tasks", "mt_apk_* tools are ONLY for APK-level operations (open APK, build signed APK, smali/axml editing). Do NOT use mt_apk_* for SO file analysis.")
-                        .put("workflow", "so_open (action=list first to discover SOs) -> session_open -> analyze_*/edit_* -> build_so. mt_apk_* is only needed for the outer APK layer.")
-                        .put("common_mistake", "Calling mt_apk_open or mt_apk_list for SO file analysis is WRONG. Use so_open for SO files."))
+                    .put("toolUsageGuide", toolUsageGuide())
                     .put("hint", "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to so_open + analyze_* + edit_*, NOT mt_apk_*."))
             "notifications/initialized" -> JSONObject()
             "ping" -> JSONObject().put("ok", true)
@@ -259,11 +252,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     .put("builtInToolsAlwaysAdvertised", true)
                     .put("returnedCount", advertised.length())
                     .put("totalCatalogCount", ToolCatalog.ALL.size)
-                    .put("toolUsageGuide", JSONObject()
-                        .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use mt_apk_* for SO tasks.")
-                        .put("apk_tasks", "mt_apk_* tools are ONLY for APK-level operations (open APK, build signed APK, smali/axml editing). Do NOT use mt_apk_* for SO file analysis.")
-                        .put("workflow", "so_open (action=list first to discover SOs) -> session_open -> analyze_*/edit_* -> build_so. mt_apk_* is only needed for the outer APK layer.")
-                        .put("common_mistake", "Calling mt_apk_open or mt_apk_list for SO file analysis is WRONG. Use so_open for SO files."))
+                    .put("toolUsageGuide", toolUsageGuide())
                     .put("hint", "IMPORTANT: so_open + analyze_* + edit_* + build_so are the built-in SO reverse engineering tools. mt_apk_* are APK-layer tools only. Always route SO tasks to built-in tools."))
             }
             "tools/call" -> callTool(params)
@@ -276,6 +265,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         .put("jsonrpc", "2.0")
         .put("id", id ?: JSONObject.NULL)
         .put("error", JSONObject().put("code", code).put("message", message))
+
+    private fun toolUsageGuide(): JSONObject = JSONObject()
+        .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use mt_apk_* for SO tasks.")
+        .put("apk_tasks", "mt_apk_* tools are only for APK-level operations such as APK opening, signing, smali, and AXML editing.")
+        .put("workflow", "so_open (action=list) -> session_open -> analyze_*/edit_* -> build_so. Use mt_apk_* only for the outer APK layer.")
+        .put("common_mistake", "Do not call mt_apk_open or mt_apk_list for SO analysis; use so_open.")
 
     private fun callTool(params: JSONObject): JSONObject {
         val name = params.str("name")
@@ -293,7 +288,8 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             return err("RATE_LIMITED", "Tool $name hit the per-minute rate limit ($rateLimit/min). Retry shortly.")
         }
         val heavy = name in ToolCatalog.heavyNames
-        if (heavy && !heavyGate.tryAcquire()) {
+        val acquiredGate = heavyGate
+        if (heavy && !acquiredGate.tryAcquire()) {
             val busy = err("SERVER_BUSY", "Another analysis task is running. Retry the same call shortly.")
             busy.getJSONObject("error").put("retrySameArguments", true).put("retryAfterMillis", 750)
             busy.put("nextActions", JSONArray(listOf("Retry the exact same tool call after a short delay.")))
@@ -302,7 +298,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return try {
             callToolPayload(name, args)
         } finally {
-            if (heavy) heavyGate.release()
+            if (heavy) acquiredGate.release()
         }
     }
 
@@ -342,79 +338,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return count
     }
 
-    private val batchKeyPattern = java.util.regex.Pattern.compile("\\$\\{([a-zA-Z0-9_]+)((?:\\.[^\\s\"\\}]+)*?)\\}")
-
-    /**
-     * Execute a serial pipeline of tool calls in one round trip.
-     *
-     * Each step's `arguments` object may carry `${resultKey.jsonPath}` placeholders.
-     * Substitution walks the JSON value tree of prior step results: each segment
-     * after the key is either a `.field` lookup on an object or a `[index]` lookup
-     * on an array. String placeholders are replaced with the textual form of the
-     * referenced JSON node (object/array rendered compactly, scalar by toString()).
-     * This lets a client build a "describe then call" workflow without a second
-     * HTTP round trip:
-     *   steps=[{tool:meta_info, arguments:{action:describe, tools:["so_open"]}, resultKey:"a0"},
-     *          {tool:so_open, arguments:{path:"${a0.inputSchema.properties.path.exampleOrPre}"}}]
-     * More commonly the placeholder just threads a workspaceId or path out of step N
-     * into step N+1. stopOnError aborts on the first ok=false; otherwise every step
-     * runs and the per-step envelope is reported back.
-     */
     private fun batchTool(args: JSONObject): JSONObject {
-        val stepsArr = args.optJSONArray("steps") ?: JSONArray()
-        val stopOnError = if (args.has("stopOnError")) args.bool("stopOnError", true) else true
-        val transactional = args.bool("transactional", false)
-        val cap = args.intValue("maxSteps", 20).coerceIn(1, 50)
-        if (stepsArr.length() == 0) return err("BAD_REQUEST", "steps[] is required and must not be empty", "steps", JSONArray())
-        if (stepsArr.length() > cap) return err("TOO_MANY_STEPS", "Too many steps (got ${stepsArr.length()}, max $cap). Split the pipeline or pass maxSteps (<=50).", "steps", stepsArr.length())
-
-        val results = JSONArray()
-        val keyed = HashMap<String, JSONObject>()
-        val snapshots = LinkedHashSet<String>()
-        for (i in 0 until stepsArr.length()) {
-            val step = stepsArr.optJSONObject(i) ?: continue
-            val toolName = step.optString("tool")
-            if (toolName.isBlank()) {
-                results.put(JSONObject().put("step", i).put("ok", false).put("error", JSONObject().put("code", "BAD_REQUEST").put("message", "step.tool is required")))
-                if (stopOnError) return ok(JSONObject().put("steps", results).put("executedCount", i).put("aborted", true))
-                continue
-            }
-            val rawArgs = step.optJSONObject("arguments") ?: JSONObject()
-            val resultKey = step.optString("resultKey", "").trim()
-            val resolvedArgs = substituteBatchPlaceholders(rawArgs, keyed)
-            if (transactional) ensureBatchSnapshot(resolvedArgs, snapshots)
-            val stepEnvelope = JSONObject()
-                .put("step", i)
-                .put("tool", toolName)
-                .put("resultKey", resultKey)
-                .put("arguments", resolvedArgs)
-            val payload = try {
-                callToolWithPolicy(toolName, resolvedArgs)
-            } catch (e: Exception) {
-                JSONObject().put("ok", false).put("error", JSONObject().put("code", "STEP_EXCEPTION").put("message", e.message ?: e.javaClass.simpleName))
-            }
-            val isOk = payload.optBoolean("ok", true)
-            val stepResult = stepEnvelope.put("ok", isOk).put("result", payload)
-            results.put(stepResult)
-            if (resultKey.isNotEmpty() && resultKey.matches(Regex("^[a-zA-Z0-9_]+$"))) {
-                keyed[resultKey] = payload
-            }
-            if (!isOk && stopOnError) {
-                val rollback = if (transactional) rollbackBatchSnapshots(snapshots) else JSONArray()
-                return ok(JSONObject()
-                    .put("steps", results)
-                    .put("executedCount", i + 1)
-                    .put("aborted", true)
-                    .put("transactional", transactional)
-                    .put("rollback", rollback)
-                    .put("hint", "stopOnError=true aborted the pipeline at the first failing step. Pass stopOnError=false to execute every step regardless."))
-            }
-        }
-        return ok(JSONObject()
-            .put("steps", results)
-            .put("executedCount", results.length())
-            .put("transactional", transactional)
-            .put("aborted", false))
+        return BatchExecutor(
+            executeTool = ::callToolWithPolicy,
+            ensureSnapshot = ::ensureBatchSnapshot,
+            rollbackSnapshots = ::rollbackBatchSnapshots,
+        ).execute(args)
     }
 
     private fun ensureBatchSnapshot(args: JSONObject, snapshots: MutableSet<String>) {
@@ -437,109 +366,6 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             out.put(JSONObject().put("workspaceId", workspaceId).put("editSessionId", editSessionId).put("result", result))
         }
         return out
-    }
-
-    private fun substituteBatchPlaceholders(node: JSONObject, keyed: Map<String, JSONObject>): JSONObject {
-        val out = JSONObject()
-        for (key in node.keys()) {
-            val v = node.get(key)
-            out.put(key, substituteBatchValue(v, keyed))
-        }
-        return out
-    }
-
-    private fun substituteBatchValue(v: Any?, keyed: Map<String, JSONObject>): Any? = when (v) {
-        is String -> substituteBatchInString(v, keyed)
-        is JSONObject -> substituteBatchPlaceholders(v, keyed)
-        is JSONArray -> JSONArray().also { for (i in 0 until v.length()) it.put(substituteBatchValue(v.get(i), keyed)) }
-        else -> v
-    }
-
-    private fun substituteBatchInString(s: String, keyed: Map<String, JSONObject>): Any {
-        if (!s.contains("\${")) return s
-        var anyComplex = false
-        val sb = StringBuffer(s.length + 16)
-        val m = batchKeyPattern.matcher(s)
-        while (m.find()) {
-            val key = m.group(1) ?: ""
-            val path = m.group(2) ?: ""
-            val node = keyed[key]
-            if (node == null) {
-                m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group()))
-                continue
-            }
-            val resolved = resolveJsonPath(node, path)
-            if (resolved == null) {
-                m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group()))
-                continue
-            }
-            if (resolved is JSONObject || resolved is JSONArray) {
-                anyComplex = true
-            }
-            val textual = when (resolved) {
-                is JSONObject -> resolved.toString()
-                is JSONArray -> resolved.toString()
-                is String -> resolved
-                else -> resolved.toString()
-            }
-            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(textual))
-        }
-        m.appendTail(sb)
-        return if (anyComplex) tryParseJson(sb.toString()) else sb.toString()
-    }
-
-    private fun tryParseJson(s: String): Any = try {
-        val trimmed = s.trim()
-        when {
-            trimmed.startsWith("{") -> JSONObject(trimmed)
-            trimmed.startsWith("[") -> JSONArray(trimmed)
-            else -> s
-        }
-    } catch (_: Exception) { s }
-
-    private fun resolveJsonPath(root: Any?, path: String): Any? {
-        var cur: Any? = root
-        val tokens = path.split('.').filter { it.isNotEmpty() }
-        for (raw in tokens) {
-            if (cur == null) return null
-            cur = when (cur) {
-                is JSONObject -> {
-                    val idx = raw.indexOf('[')
-                    if (idx < 0) {
-                        val key = raw.replace("]", "")
-                        if (cur.has(key)) cur.get(key) else null
-                    } else {
-                        val fieldPart = raw.substring(0, idx)
-                        val rest = raw.substring(idx)
-                        val stepped = if (fieldPart.isBlank() || fieldPart == "]") cur else (if (cur.has(fieldPart)) cur.get(fieldPart) else null)
-                        stepArrayAccess(stepped, rest)
-                    }
-                }
-                is JSONArray -> stepArrayAccess(cur, raw)
-                else -> null
-            }
-            if (cur == null) return null
-        }
-        return cur
-    }
-
-    private fun stepArrayAccess(node: Any?, raw: String): Any? {
-        var cur: Any? = node
-        var i = 0
-        while (i < raw.length && cur != null) {
-            if (raw[i] != '[') { i++; continue }
-            val end = raw.indexOf(']', i)
-            if (end < 0) return null
-            val idxStr = raw.substring(i + 1, end).trim()
-            val idx = idxStr.toIntOrNull() ?: return null
-            cur = when (cur) {
-                is JSONArray -> if (idx in 0 until cur.length()) cur.get(idx) else null
-                is JSONObject -> if (cur.has(idxStr)) cur.get(idxStr) else null
-                else -> null
-            }
-            i = end + 1
-        }
-        return cur
     }
 
     private fun callToolPayload(name: String, args: JSONObject): JSONObject {
@@ -708,7 +534,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return JSONObject()
             .put("packageName", context.packageName)
             .put("versionName", pkg?.versionName ?: "")
-            .put("versionCode", pkg?.longVersionCode ?: 0L)
+            .put("versionCode", if (android.os.Build.VERSION.SDK_INT >= 28) pkg?.longVersionCode ?: 0L else @Suppress("DEPRECATION") (pkg?.versionCode?.toLong() ?: 0L))
             .put("supportedAbis", JSONArray(android.os.Build.SUPPORTED_ABIS.toList()))
             .put("nativeLibraryDir", nativeDir)
             .put("librzNative", nativeFileInfo(rz))
