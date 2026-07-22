@@ -253,7 +253,7 @@ class McpForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
-            @Suppress("DEPRECATION")
+            @Suppress("UnspecifiedRegisterReceiverFlag", "DEPRECATION")
             registerReceiver(receiver, filter)
         }
         reconnectReceiver = receiver
