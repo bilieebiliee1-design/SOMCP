@@ -241,7 +241,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put("_meta", JSONObject()
                     .put("builtInToolsAlwaysAdvertised", true)
                     .put("fullToolCount", ToolCatalog.ALL.size)
-                    .put("hint", "tools/list advertises the complete built-in catalog. Only oversized APK-bridge tool sets may be compacted automatically."))
+                    .put("toolUsageGuide", JSONObject()
+                        .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use mt_apk_* for SO tasks.")
+                        .put("apk_tasks", "mt_apk_* tools are ONLY for APK-level operations (open APK, build signed APK, smali/axml editing). Do NOT use mt_apk_* for SO file analysis.")
+                        .put("workflow", "so_open (action=list first to discover SOs) -> session_open -> analyze_*/edit_* -> build_so. mt_apk_* is only needed for the outer APK layer.")
+                        .put("common_mistake", "Calling mt_apk_open or mt_apk_list for SO file analysis is WRONG. Use so_open for SO files."))
+                    .put("hint", "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to so_open + analyze_* + edit_*, NOT mt_apk_*."))
             "notifications/initialized" -> JSONObject()
             "ping" -> JSONObject().put("ok", true)
             "resources/list" -> JSONObject().put("resources", JSONArray())
@@ -254,7 +259,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     .put("builtInToolsAlwaysAdvertised", true)
                     .put("returnedCount", advertised.length())
                     .put("totalCatalogCount", ToolCatalog.ALL.size)
-                    .put("hint", "tools/list returns the complete built-in catalog. Oversized APK-bridge additions may be compacted automatically."))
+                    .put("toolUsageGuide", JSONObject()
+                        .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use mt_apk_* for SO tasks.")
+                        .put("apk_tasks", "mt_apk_* tools are ONLY for APK-level operations (open APK, build signed APK, smali/axml editing). Do NOT use mt_apk_* for SO file analysis.")
+                        .put("workflow", "so_open (action=list first to discover SOs) -> session_open -> analyze_*/edit_* -> build_so. mt_apk_* is only needed for the outer APK layer.")
+                        .put("common_mistake", "Calling mt_apk_open or mt_apk_list for SO file analysis is WRONG. Use so_open for SO files."))
+                    .put("hint", "IMPORTANT: so_open + analyze_* + edit_* + build_so are the built-in SO reverse engineering tools. mt_apk_* are APK-layer tools only. Always route SO tasks to built-in tools."))
             }
             "tools/call" -> callTool(params)
             else -> return jsonRpcError(id ?: JSONObject.NULL, -32601, "Method not found")
@@ -639,7 +649,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 val schema = td.inputSchema ?: JSONObject().put("type", "object").put("properties", JSONObject())
                 val obj = JSONObject()
                     .put("name", td.name)
-                    .put("description", "[APK MCP bridge] ${td.description ?: td.title ?: "APK MCP tool"}")
+                    .put("description", "[APK ONLY — NOT for SO/native files] ${td.description ?: td.title ?: "APK MCP tool"} Use so_open + analyze_* + edit_* for SO file tasks.")
                     .put("inputSchema", schema)
                 if (includeCategory) obj.put("category", "apk-bridge")
                 if (td.outputSchema != null) obj.put("outputSchema", td.outputSchema)
@@ -747,11 +757,17 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 apkNames.put(JSONObject().put("name", it.name).put("cls", "apk").put("advertised", true))
             }
             catMap.put("apk-bridge", JSONObject()
-                .put("description", "Bridged APK MCP tools (MT Manager)")
+                .put("description", "Bridged APK MCP tools (MT Manager) — ONLY for APK-layer tasks, NOT for SO/native files")
                 .put("tools", apkNames))
         }
         return JSONObject()
             .put("usage", "Use so_open (action=list to discover), then read/analyze tools with the returned workspaceId. Pass pagination.nextCursor to meta_info (action=continue) when hasMore=true.")
+            .put("toolRouting", JSONObject()
+                .put("rule", "IMPORTANT: Route SO/native library tasks to built-in tools. ONLY route APK-layer tasks to mt_apk_* tools.")
+                .put("use_so_open_for", JSONArray(listOf("Open SO files", "List available SO files", "Download SO from URL", "Any .so/ELF file task")))
+                .put("use_mt_apk_only_for", JSONArray(listOf("Open APK packages", "List lib/ directories inside APK", "Smali/AXML editing", "Signed APK build")))
+                .put("never_do", JSONArray(listOf("Use mt_apk_open to open SO files", "Use mt_apk_list to list SO files", "Use mt_apk_* for anything related to .so/.elf files")))
+                .put("workflow", "so_open (action=list) -> analyze_*/edit_* -> build_so [for SO tasks]\nsystem_control (action=apk_probe) -> mt_apk_open -> mt_apk_list -> ... -> mt_apk_build [for APK tasks]"))
             .put("auth", "If token auth is enabled, send Authorization: Bearer <token> or append ?token=<token> to the MCP URL.")
             .put("exposure", JSONObject()
                 .put("builtInToolsAlwaysAdvertised", true)
@@ -851,7 +867,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .filter { !hasQuery || (it.name + "\n" + (it.description ?: "")).lowercase().contains(qLower) }
                 .forEach { td ->
                     if (!grouped.has("apk-bridge")) grouped.put("apk-bridge", JSONArray())
-                    grouped.getJSONArray("apk-bridge").put(JSONObject().put("name", td.name).put("description", td.description ?: (td.title ?: "APK MCP tool")))
+                    grouped.getJSONArray("apk-bridge").put(JSONObject().put("name", td.name).put("description", "[APK ONLY] ${td.description ?: (td.title ?: "APK MCP tool")} — NOT for SO files; use so_open for SO tasks."))
                     matched++
                 }
         }

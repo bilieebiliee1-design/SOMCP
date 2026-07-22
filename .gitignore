@@ -5,6 +5,7 @@
 **/build/
 **/.cxx/
 *.iml
+.trae/
 
 # Local Android configuration
 local.properties
