@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://somcp.local/schemas/blutter-request.schema.json",
+  "title": "SOMCP Blutter request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "action"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "action": {
+      "enum": ["inspect", "analyze", "status", "result", "cancel", "packages", "prune"]
+    },
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "jobId": { "type": "string", "pattern": "^blutter-[a-zA-Z0-9_-]{8,128}$" },
+    "abi": { "enum": ["auto", "arm64-v8a"] },
+    "backend": { "enum": ["auto", "embedded"] },
+    "noAnalysis": { "type": "boolean" },
+    "include": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 8,
+      "items": {
+        "enum": ["libraries", "classes", "functions", "objects", "assemblies", "frida", "raw"]
+      }
+    },
+    "cursor": { "type": "string", "maxLength": 1024 },
+    "kind": { "enum": ["libraries", "classes", "functions", "objects"] },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "olderThanMillis": { "type": "integer", "minimum": 0 },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxInputBytes": { "type": "integer", "minimum": 1048576, "maximum": 536870912 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1048576, "maximum": 536870912 },
+        "timeoutSeconds": { "type": "integer", "minimum": 30, "maximum": 3600 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "enum": ["inspect", "analyze"] } }, "required": ["action"] },
+      "then": { "required": ["path"] }
+    },
+    {
+      "if": { "properties": { "action": { "enum": ["status", "result", "cancel"] } }, "required": ["action"] },
+      "then": { "required": ["jobId"] }
+    }
+  ]
+}

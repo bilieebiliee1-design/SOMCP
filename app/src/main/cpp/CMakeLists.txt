@@ -77,6 +77,9 @@ endif()
 add_library(rz_native SHARED ${RZ_SOURCES})
 target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
+add_library(blutter_bridge SHARED blutter_bridge.cpp)
+target_link_libraries(blutter_bridge PRIVATE dl log)
+
 set(XANSO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/xAnSo-src")
 add_library(xanso_native SHARED
     xanso_jni.cpp

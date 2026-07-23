@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "matrixVersion": "2026.07.1",
+  "flutterArchiveUrl": "https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json",
+  "flutterRepository": "https://github.com/flutter/flutter.git",
+  "engineRepository": "https://github.com/flutter/engine.git",
+  "dartRepository": "https://github.com/dart-lang/sdk.git",
+  "blutterRepository": "https://github.com/worawit/blutter.git",
+  "blutterCommit": "528acbe83ba35a3a53fb97b231cb5f968c7068d1",
+  "channels": ["stable"],
+  "targetAbi": "arm64-v8a",
+  "androidApi": 26,
+  "androidNdk": "29.0.14206865",
+  "dartCheckoutMode": "revision",
+  "runnerProtocol": 1,
+  "icuVersion": "76.1",
+  "icuSourceSha256": "dfacb46bfe4747410472ce3e1144bf28a102feeaa4e3875bac9b4c6cf30f4f3e",
+  "capstoneVersion": "4.0.2",
+  "analysisMinimumDart": "2.16.0",
+  "legacyNoAnalysisMinimumDart": "2.14.0"
+}

@@ -1,0 +1,7 @@
+diff --git a/blutter/src/DartApp.h b/blutter/src/DartApp.h
+index 59f7017..bb75511 100644
+--- a/blutter/src/DartApp.h
++++ b/blutter/src/DartApp.h
+@@ -29,0 +30,2 @@ public:
++	const std::vector<DartLibrary*>& Libraries() const { return libs; }
++	const std::vector<DartClass*>& Classes() const { return classes; }
