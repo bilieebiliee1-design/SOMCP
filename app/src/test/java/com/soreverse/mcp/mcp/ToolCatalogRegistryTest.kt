@@ -11,7 +11,7 @@ class ToolCatalogRegistryTest {
     fun productionCatalogNamesAndOrderStayStable() {
         assertEquals(
             listOf(
-                "so_open", "so_close", "apk_analyze",
+                "so_open", "so_close", "apk_analyze", "flutter_blutter",
                 "analyze_elf", "read_stats", "analysis_report", "analyze_functions", "analyze_cfg", "analyze_crypto", "analyze_xrefs", "analyze_esil",
                 "search_bytes", "search_strings", "read_disasm", "read_hexdump",
                 "edit_hex", "edit_asm", "edit_symbol", "edit_fix_sections",

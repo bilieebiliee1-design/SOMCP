@@ -1,12 +1,15 @@
 package com.soreverse.mcp
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -16,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.SettingsStore
+import com.soreverse.mcp.mcp.ToolCatalog
 
 @Composable
 internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
@@ -51,6 +55,12 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
             }
             GroupDivider()
             ToggleRow(if (t.zh) "启用模拟执行 (Unidbg)" else "Enable emulation (Unidbg)", emulationEnabled) { emulationEnabled = it; settings.emulationEnabled = it }
+            Text(
+                if (t.zh) "启用模拟后允许 emulate_call / emulate_dump 验证补丁语义。" else "Emulation enables emulate_call / emulate_dump for patch validation.",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         GlassGroup {
             NumberSettingRow(if (t.zh) "重型工具并发上限" else "Heavy tool concurrency cap", maxConcurrentTools, { maxConcurrentTools = it }, { settings.maxConcurrentTools = it }, if (t.zh) "个" else "tasks")
@@ -70,6 +80,17 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
             NumberSettingRow(if (t.zh) "工具调用频率限制" else "Tool call rate limit", toolCallRateLimitPerMin, { toolCallRateLimitPerMin = it }, { settings.toolCallRateLimitPerMin = it }, if (t.zh) "次/分" else "/min")
         }
         GlassGroup {
+            Text(if (t.zh) "禁用工具" else "Disabled tools", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(horizontal = 14.dp)) {
+                val disabled = disabledTools.split(',').map(String::trim).filter(String::isNotBlank).toSet()
+                ToolCatalog.names.forEach { name ->
+                    FilterChip(selected = name in disabled, onClick = {
+                        val next = disabled.toMutableSet().apply { if (!add(name)) remove(name) }
+                        disabledTools = next.sorted().joinToString(",")
+                        settings.disabledTools = disabledTools
+                    }, label = { Text(name) })
+                }
+            }
             OutlinedTextField(
                 value = disabledTools,
                 onValueChange = { disabledTools = it; settings.disabledTools = it },
@@ -84,12 +105,7 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
                 ),
                 modifier = Modifier.fillMaxWidth().padding(14.dp),
             )
-            Text(
-                if (t.zh) "启用模拟后允许 emulate_call / emulate_dump 验证补丁语义。" else "Emulation enables emulate_call / emulate_dump for patch validation.",
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(if (t.zh) "勾选结果会同步到原始逗号分隔配置；高级用户仍可直接编辑。" else "Selections sync to the raw comma-separated configuration, which remains editable.", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
