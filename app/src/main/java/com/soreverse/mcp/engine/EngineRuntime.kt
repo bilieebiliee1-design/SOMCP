@@ -13,6 +13,7 @@ internal class EngineRuntime(internal val context: Context) {
     internal val lief = LiefEngine()
     internal val xanso = XAnSoEngine(context)
     internal val unidbg = UnidbgEmulator(context)
+    internal val blutter = BlutterCoordinator(context)
     internal var workDir: WorkDirectory? = null
     internal var workDirUri: Uri? = null
     internal var sources: List<SoSource> = emptyList()

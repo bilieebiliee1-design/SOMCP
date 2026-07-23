@@ -72,6 +72,29 @@ object ToolCatalog {
         },
     ) { engine, args, _ -> engine.analyzeApk(args.str("path").ifBlank { args.str("filePath") }, args.intValue("entryLimit", 500)) }
 
+    private val flutterBlutter = EngineToolHandler(
+        ToolMeta(
+            "flutter_blutter",
+            "Flutter AOT/Blutter 聚合工具：识别 Flutter APK、提取版本指纹，并使用内置 Flutter 3.44.x / Dart 3.12.2 arm64 Runner 完成本地分析。其他版本会明确返回不支持。",
+            "Aggregated Flutter AOT and Blutter tool using the embedded Flutter 3.44.x / Dart 3.12.2 arm64 runner. Other versions return an explicit unsupported-version result.",
+            "analyze",
+            ToolClass.CORE,
+            heavy = true,
+        ) {
+            objectSchema(props {
+                "action".oneOf("inspect | analyze | status | result | cancel | packages | prune", "inspect", "analyze", "status", "result", "cancel", "packages", "prune")
+                "path" str "APK path or directory containing libapp.so and libflutter.so."
+                "jobId" str "Persistent Blutter job id for status, result, or cancel."
+                "abi".oneOf("Target ABI", "auto", "arm64-v8a", "x86_64", "armeabi-v7a", "x86")
+                "backend".oneOf("Execution backend", "auto", "embedded")
+                "limit" int "Maximum result entities, 1..1000."
+                "kind".oneOf("Paged result collection", "libraries", "classes", "functions", "objects")
+                "cursor" str "Opaque cursor returned by a previous result page."
+                "olderThanMillis" int "Prune cached results older than this duration."
+            })
+        },
+    ) { engine, args, _ -> engine.flutterBlutter(args) }
+
     // ── ANALYZE (Rizin-backed deep analysis) ──
 
     private val analyzeElf = EngineToolHandler(
@@ -927,7 +950,7 @@ object ToolCatalog {
     // ── Registry ──
 
     val ALL: List<ToolHandler> = listOf(
-        soOpen, soClose, apkAnalyze,
+        soOpen, soClose, apkAnalyze, flutterBlutter,
         analyzeElf, readStats, analysisReport, analyzeFunctions, analyzeCfg, analyzeCrypto, analyzeXrefs, analyzeEsil,
         searchBytes, searchStrings,
         readDisasm, readHexdump,

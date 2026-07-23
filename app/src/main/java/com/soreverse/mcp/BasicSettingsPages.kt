@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.content.pm.PackageManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -141,6 +143,11 @@ internal fun ChipRow(items: List<Pair<String, String>>, selected: String, onSele
 
 @Composable
 internal fun SecondaryActionButton(text: String, onClick: () -> Unit) {
+    SecondaryActionButton(text, onClick, Modifier)
+}
+
+@Composable
+internal fun SecondaryActionButton(text: String, onClick: () -> Unit, modifier: Modifier) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.controlRadius)
     Button(
@@ -151,6 +158,7 @@ internal fun SecondaryActionButton(text: String, onClick: () -> Unit) {
             contentColor = MaterialTheme.colorScheme.primary,
         ),
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+        modifier = modifier.height(50.dp),
     ) { Text(text, fontWeight = FontWeight.Medium) }
 }
 
@@ -193,6 +201,19 @@ internal fun SettingsKeepAlivePage(t: UiText, settings: SettingsStore) {
             }
         }
         GlassGroup(footer = keepAliveAdvice(t.zh)) {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val checks = listOf(
+                (if (t.zh) "WakeLock" else "WakeLock") to wakeLock,
+                (if (t.zh) "电池无限制" else "Battery unrestricted") to (Build.VERSION.SDK_INT < 23 || powerManager.isIgnoringBatteryOptimizations(context.packageName)),
+                (if (t.zh) "通知权限" else "Notification permission") to (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED),
+                (if (t.zh) "悬浮窗权限（非保活核心）" else "Overlay permission (not keepalive)") to AndroidSettings.canDrawOverlays(context),
+                (if (t.zh) "开机自启" else "Boot autostart") to bootAutoStart,
+            )
+            checks.forEachIndexed { index, (label, ready) ->
+                if (index > 0) GroupDivider()
+                Text("${if (ready) "✓" else "○"} $label", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+            GroupDivider()
             Text(
                 if (t.zh) "开机自启依赖系统允许自启动/后台启动，并与隧道自动启动相互独立。" else "Boot autostart depends on system permissions and is independent from tunnel auto-start.",
                 modifier = Modifier.padding(14.dp),
@@ -200,11 +221,11 @@ internal fun SettingsKeepAlivePage(t: UiText, settings: SettingsStore) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             GroupDivider()
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(14.dp)) {
-                PrimaryActionButton(t.battery, { openBatterySettings(context) })
-                SecondaryActionButton(t.permissions) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(14.dp)) {
+                PrimaryActionButton(t.battery, { openBatterySettings(context) }, Modifier.fillMaxWidth())
+                SecondaryActionButton(t.permissions, {
                     context.startActivity(Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
-                }
+                }, Modifier.fillMaxWidth())
             }
         }
     }
@@ -240,6 +261,18 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
     var accessToken by remember { mutableStateOf(settings.accessToken) }
     PageScroll {
         GlassGroup {
+            Text(if (t.zh) "谁能连接" else "Who can connect", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall)
+            Text(
+                when {
+                    settings.tunnelMode != "off" -> if (t.zh) "Cloudflare 隧道已配置：公网访问必须启用 Token。" else "Cloudflare Tunnel is configured: public access requires a token."
+                    bindHost == "127.0.0.1" -> if (t.zh) "仅本机：Token 可选，适合本机客户端或 adb forward。" else "Local only: token is optional for local clients or adb forward."
+                    else -> if (t.zh) "局域网：强烈建议启用 Token。" else "LAN access: enabling a token is strongly recommended."
+                },
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            GroupDivider()
             ToggleRow(if (t.zh) "启用访问 token" else "Require access token", authEnabled) {
                 authEnabled = it
                 settings.authEnabled = it
@@ -252,6 +285,10 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
                 {
                     bindHost = it
                     settings.bindHost = it
+                    if (it == "0.0.0.0" && !authEnabled) {
+                        authEnabled = true
+                        settings.authEnabled = true
+                    }
                 },
             )
         }

@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://somcp.local/schemas/blutter-result.schema.json",
+  "title": "SOMCP Blutter result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "jobId",
+    "status",
+    "backend",
+    "createdAt",
+    "input",
+    "flutter",
+    "runner",
+    "summary",
+    "libraries",
+    "classes",
+    "functions",
+    "objects",
+    "artifacts",
+    "warnings",
+    "provenance"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "jobId": { "type": "string", "pattern": "^blutter-[a-zA-Z0-9_-]{8,128}$" },
+    "status": { "enum": ["succeeded", "failed", "cancelled", "interrupted"] },
+    "backend": { "enum": ["embedded", "none"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": ["string", "null"], "format": "date-time" },
+    "input": { "$ref": "#/$defs/input" },
+    "flutter": { "$ref": "#/$defs/flutter" },
+    "runner": { "$ref": "#/$defs/runner" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "libraries": { "$ref": "#/$defs/entityPage" },
+    "classes": { "$ref": "#/$defs/entityPage" },
+    "functions": { "$ref": "#/$defs/entityPage" },
+    "objects": { "$ref": "#/$defs/entityPage" },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/problem" }
+    },
+    "error": {
+      "oneOf": [
+        { "$ref": "#/$defs/problem" },
+        { "type": "null" }
+      ]
+    },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "address": { "type": "string", "pattern": "^0x[0-9a-fA-F]+$" },
+    "inputFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "size", "sha256"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 512 },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["displayName", "abi", "libapp", "libflutter"],
+      "properties": {
+        "displayName": { "type": "string", "maxLength": 512 },
+        "abi": { "const": "arm64-v8a" },
+        "libapp": { "$ref": "#/$defs/inputFile" },
+        "libflutter": { "$ref": "#/$defs/inputFile" }
+      }
+    },
+    "flutter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dartVersion", "engineRevision", "compressedPointers", "nullSafety", "confidence"],
+      "properties": {
+        "dartVersion": { "type": ["string", "null"], "maxLength": 128 },
+        "engineRevision": { "type": ["string", "null"], "maxLength": 128 },
+        "compressedPointers": { "type": ["boolean", "null"] },
+        "nullSafety": { "type": ["boolean", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runnerId", "source", "upstreamCommit", "sha256"],
+      "properties": {
+        "runnerId": { "type": ["string", "null"], "maxLength": 256 },
+    "source": { "enum": ["embedded", "none"] },
+        "upstreamCommit": { "type": ["string", "null"], "maxLength": 64 },
+        "sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["libraries", "classes", "functions", "objects", "artifacts", "warnings"],
+      "properties": {
+        "libraries": { "type": "integer", "minimum": 0 },
+        "classes": { "type": "integer", "minimum": 0 },
+        "functions": { "type": "integer", "minimum": 0 },
+        "objects": { "type": "integer", "minimum": 0 },
+        "artifacts": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": ["id", "kind", "name"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "kind": { "enum": ["library", "class", "function", "object"] },
+        "name": { "type": "string", "maxLength": 4096 },
+        "libraryId": { "type": ["string", "null"], "maxLength": 256 },
+        "classId": { "type": ["string", "null"], "maxLength": 256 },
+        "address": {
+          "oneOf": [
+            { "$ref": "#/$defs/address" },
+            { "type": "null" }
+          ]
+        },
+        "size": { "type": ["integer", "null"], "minimum": 0 },
+        "attributes": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "entityPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "total", "hasMore", "nextCursor"],
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "total": { "type": "integer", "minimum": 0 },
+        "hasMore": { "type": "boolean" },
+        "nextCursor": { "type": ["string", "null"], "maxLength": 1024 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "relativePath", "mediaType", "size", "sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "kind": { "enum": ["assembly", "objects", "objectPool", "frida", "raw", "log"] },
+        "relativePath": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$",
+          "maxLength": 4096
+        },
+        "mediaType": { "type": "string", "maxLength": 256 },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "recoverable"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$" },
+        "message": { "type": "string", "maxLength": 4096 },
+        "recoverable": { "type": "boolean" },
+        "retryable": { "type": "boolean" },
+        "stage": { "type": "string", "maxLength": 128 },
+        "details": { "type": "object" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "normalizerVersion", "cacheHit", "durationMillis"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "normalizerVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "cacheHit": { "type": "boolean" },
+        "durationMillis": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
