@@ -15,6 +15,7 @@ class NativeSoEngine(context: Context) {
     fun listAvailableSos(prefix: String = "", limit: Int = 50, cursor: String = ""): JSONObject = runtime.listAvailableSos(prefix, limit, cursor)
     fun open(path: String, temporary: Boolean): JSONObject = runtime.open(path, temporary)
     fun analyzeApk(path: String, entryLimit: Int = 500): JSONObject = runtime.analyzeApk(path, entryLimit)
+    fun flutterBlutter(args: JSONObject): JSONObject = runtime.flutterBlutter(args)
     fun openUrl(url: String, outputName: String = "", temporary: Boolean = false): JSONObject = runtime.openUrl(url, outputName, temporary)
     fun listWorkspaces(): JSONObject = runtime.listWorkspaces()
     fun close(workspaceId: String): JSONObject = runtime.close(workspaceId)

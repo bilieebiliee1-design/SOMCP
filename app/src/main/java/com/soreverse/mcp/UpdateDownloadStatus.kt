@@ -32,7 +32,7 @@ internal fun UpdateDownloadStatus(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            probeResults.sortedBy { it.latencyMs }.take(4).forEach { result ->
+            probeResults.sortedWith(compareByDescending<UpdateDownloadEvent.ProbeResult> { it.reachable }.thenBy { it.latencyMs }).forEach { result ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
                         result.source,

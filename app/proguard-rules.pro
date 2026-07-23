@@ -6,6 +6,10 @@
     *;
 }
 
+-keep class com.soreverse.mcp.blutter.** {
+    *;
+}
+
 -keep class com.github.unidbg.** {
     *;
 }

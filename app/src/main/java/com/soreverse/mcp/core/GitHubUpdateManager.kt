@@ -115,8 +115,9 @@ class GitHubUpdateManager(private val context: Context) {
                     withContext(Dispatchers.Main.immediate) { onEvent(event) }
                 }
                 val directory = File(context.cacheDir, "updates").apply { mkdirs() }
-                directory.listFiles()?.forEach { it.delete() }
                 val target = File(directory, release.apkName.substringAfterLast('/'))
+                cachedDownload(release)?.let { return@withContext Result.success(it) }
+                directory.listFiles()?.filter { it != target }?.forEach { it.delete() }
                 val candidates = rankedDownloadUrls(release.apkUrl, ::emit)
                 var lastFailure: Throwable? = null
                 var downloaded = false
@@ -180,6 +181,16 @@ class GitHubUpdateManager(private val context: Context) {
                 Result.failure(error)
             }
         }
+
+    fun cachedDownload(release: GitHubRelease): File? {
+        val file = File(File(context.cacheDir, "updates"), release.apkName.substringAfterLast('/'))
+        if (!file.isFile || file.length() <= 4) return null
+        val valid = runCatching { file.inputStream().use { input ->
+            val header = ByteArray(4)
+            input.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+        } }.getOrDefault(false)
+        return file.takeIf { valid && (release.apkSize <= 0 || it.length() == release.apkSize) }
+    }
 
     private suspend fun rankedDownloadUrls(
         original: String,
