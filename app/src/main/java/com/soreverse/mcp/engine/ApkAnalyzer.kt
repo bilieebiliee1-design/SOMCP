@@ -55,7 +55,8 @@ internal object ApkAnalyzer {
                 zip.closeEntry()
             }
         }
-        return JSONObject().put("path", path).put("size", bytes.size).put("sha256", sha256(bytes)).put("parser", "builtin_apk_zip_dex_axml").put("externalApkMcpRequired", false).put("entryCount", totalEntries).put("entriesTruncated", totalEntries > entries.length()).put("entries", entries).put("abis", JSONArray(abis.toList())).put("nativeLibraries", nativeLibs).put("dexFiles", dexFiles).put("manifest", manifest).put("resourcesArsc", resourcesArsc).put("v1SignatureFiles", signatures).put("hasV1Signature", signatures.length() > 0).put("limitations", JSONArray(listOf("APK Signature Scheme v2/v3/v4 block verification is not included in this basic parser", "Binary AndroidManifest attributes require the full resource table resolver")))
+        val flutter = FlutterArtifactInspector.inspectApk(bytes, path).getJSONObject("flutter")
+        return JSONObject().put("path", path).put("size", bytes.size).put("sha256", sha256(bytes)).put("parser", "builtin_apk_zip_dex_axml").put("externalApkMcpRequired", false).put("entryCount", totalEntries).put("entriesTruncated", totalEntries > entries.length()).put("entries", entries).put("abis", JSONArray(abis.toList())).put("nativeLibraries", nativeLibs).put("dexFiles", dexFiles).put("manifest", manifest).put("resourcesArsc", resourcesArsc).put("v1SignatureFiles", signatures).put("hasV1Signature", signatures.length() > 0).put("flutter", flutter).put("limitations", JSONArray(listOf("APK Signature Scheme v2/v3/v4 block verification is not included in this basic parser", "Binary AndroidManifest attributes require the full resource table resolver")))
     }
 
     private fun readEntry(zip: ZipInputStream, name: String, limits: Limits, parsedBefore: Long): ByteArray {

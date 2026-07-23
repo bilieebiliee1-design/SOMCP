@@ -570,6 +570,7 @@ private fun FloatingDock(tab: MainTab, t: UiText, onTab: (MainTab) -> Unit) {
     ) {
         Row(
             Modifier
+                .fillMaxWidth()
                 .clip(dockShape)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
                 .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)), dockShape)
@@ -586,11 +587,11 @@ private fun FloatingDock(tab: MainTab, t: UiText, onTab: (MainTab) -> Unit) {
                 )
                 Column(
                     Modifier
+                        .weight(1f)
                         .clip(RoundedCornerShape(24.dp))
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f * bg))
                         .clickable { onTab(value) }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                        .width(58.dp),
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
