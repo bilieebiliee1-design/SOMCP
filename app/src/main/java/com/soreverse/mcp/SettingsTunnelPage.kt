@@ -56,6 +56,8 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
     var tunnelKeepAlive by remember { mutableStateOf(settings.tunnelKeepAlive) }
     var keepaliveInterval by remember { mutableStateOf(settings.tunnelKeepaliveIntervalSec.toString()) }
     var reconnectBackoff by remember { mutableStateOf(settings.tunnelReconnectBackoffSec.toString()) }
+    var historyEnabled by remember { mutableStateOf(settings.tunnelHistoryEnabled) }
+    var history by remember { mutableStateOf(settings.tunnelHistoryUrls.split('\n').map { it.trim() }.filter { it.isNotBlank() }) }
     var tunnelStatus by remember { mutableStateOf<CloudflareTunnelManager.TunnelStatus?>(null) }
     var showExport by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
@@ -112,7 +114,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             }
         }
         GlassGroup(title = if (t.zh) "传输" else "Transport") {
-            NumberSettingRow(if (t.zh) "代理目标端口" else "Proxy target port", tunnelPort, { tunnelPort = it }, { settings.tunnelTargetPort = it }, if (t.zh) "端口号" else "port")
+            NumberSettingRow(if (t.zh) "代理目标端口" else "Proxy target port", tunnelPort, { tunnelPort = it }, { settings.tunnelTargetPort = it }, if (t.zh) "端口" else "port")
             GroupDivider()
             Text(if (t.zh) "传输协议" else "Protocol", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             ChipRow(listOf("auto" to "Auto", "http2" to "HTTP/2", "quic" to "QUIC"), tunnelProtocol) { tunnelProtocol = it; settings.tunnelProtocol = it }
@@ -171,13 +173,23 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                 SecondaryActionButton(if (t.zh) "导入配置" else "Import") { showImport = true; importText = "" }
             }
         }
-        val history = settings.tunnelHistoryUrls.split('\n').map { it.trim() }.filter { it.isNotBlank() }
-        if (history.isNotEmpty()) {
-            GlassGroup(title = if (t.zh) "历史隧道 URL" else "History tunnel URLs") {
-                history.take(5).forEachIndexed { idx, h ->
+        GlassGroup(title = if (t.zh) "历史隧道 URL" else "History tunnel URLs") {
+            ToggleRow(if (t.zh) "记录隧道 URL" else "Record tunnel URLs", historyEnabled) {
+                historyEnabled = it
+                settings.tunnelHistoryEnabled = it
+            }
+            if (history.isNotEmpty()) {
+                GroupDivider()
+                history.forEachIndexed { idx, h ->
                     if (idx > 0) GroupDivider()
-                    NavRow(h, onClick = { copy(context, h, t.copied) })
+                    NavRow(h, if (t.zh) "点击复制；长按不可用，可用下方按钮删除" else "Tap to copy; use the button below to delete", onClick = { copy(context, h, t.copied) })
+                    TextButton(onClick = {
+                        history = history.filterNot { it == h }
+                        settings.tunnelHistoryUrls = history.joinToString("\n")
+                    }, modifier = Modifier.padding(horizontal = 8.dp)) { Text(if (t.zh) "删除" else "Delete") }
                 }
+                GroupDivider()
+                TextButton(onClick = { history = emptyList(); settings.tunnelHistoryUrls = "" }, modifier = Modifier.padding(horizontal = 8.dp)) { Text(if (t.zh) "清空历史" else "Clear history") }
             }
         }
     }

@@ -386,6 +386,10 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("tunnelHistoryUrls", "") ?: ""
         set(value) = prefs.edit().putString("tunnelHistoryUrls", value).apply()
 
+    var tunnelHistoryEnabled: Boolean
+        get() = prefs.getBoolean("tunnelHistoryEnabled", true)
+        set(value) = prefs.edit().putBoolean("tunnelHistoryEnabled", value).apply()
+
     var tunnelProtocol: String
         get() = prefs.getString("tunnelProtocol", "http2") ?: "http2"
         set(value) = prefs.edit().putString("tunnelProtocol", if (value in setOf("http2", "quic", "auto")) value else "http2").apply()

@@ -56,6 +56,7 @@ private fun settingsTitle(t: UiText, dest: SettingsDest): String = when (dest) {
     SettingsDest.Limits -> if (t.zh) "返回数量" else "Result Limits"
     SettingsDest.Export -> if (t.zh) "导出" else "Export"
     SettingsDest.Audit -> if (t.zh) "编辑校验与审计" else "Edit & Audit"
+    SettingsDest.Blutter -> "Blutter"
     SettingsDest.Tunnel -> if (t.zh) "Cloudflare 隧道" else "Cloudflare Tunnel"
     SettingsDest.ApkBridge -> if (t.zh) "APK MCP 桥接" else "APK MCP Bridge"
     SettingsDest.AiDeep -> if (t.zh) "AI 深度分析" else "AI Deep Analysis"
@@ -171,6 +172,8 @@ internal fun SettingsHub(
                     NavRow(if (t.zh) "导出" else "Export", if (t.zh) "冲突策略与构建镜像" else "Conflict strategy", Icons.Default.Storage, onClick = { onDest(SettingsDest.Export) })
                     GroupDivider()
                     NavRow(if (t.zh) "编辑校验与审计" else "Edit & Audit", if (t.zh) "快照 / 并发 / 模拟" else "Snapshot / concurrency", Icons.Default.Security, onClick = { onDest(SettingsDest.Audit) })
+                    GroupDivider()
+                    NavRow("Blutter", if (t.zh) "Flutter 3.44 / Dart 3.12.2 / 完全离线" else "Flutter 3.44 / Dart 3.12.2 / fully offline", Icons.Default.Memory, onClick = { onDest(SettingsDest.Blutter) })
                 }
 
                 Text(if (t.zh) "诊断与关于" else "Diagnostics & about", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
@@ -214,6 +217,7 @@ internal fun SettingsHub(
             SettingsDest.Limits -> SettingsLimitsPage(t, settings)
             SettingsDest.Export -> SettingsExportPage(t, settings)
             SettingsDest.Audit -> SettingsAuditPage(t, settings)
+            SettingsDest.Blutter -> SettingsBlutterPage(t)
             SettingsDest.Tunnel -> SettingsTunnelPage(t, settings)
             SettingsDest.ApkBridge -> SettingsApkBridgePage(t, settings)
             SettingsDest.AiDeep -> SettingsAiDeepPage(t, settings)

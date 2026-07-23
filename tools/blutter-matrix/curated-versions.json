@@ -1,0 +1,7 @@
+{
+  "dartVersions": [
+    "3.12.2"
+  ],
+  "compressedPointers": true,
+  "analysis": true
+}

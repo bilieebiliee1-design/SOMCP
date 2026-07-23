@@ -53,7 +53,7 @@ internal fun SettingsUpdatesPage(
     var error by remember { mutableStateOf("") }
 
     LaunchedEffect(release?.tag) {
-        downloadedFile = null
+        downloadedFile = release?.let(manager::cachedDownload)
         if (!downloading) {
             progress = 0
             probeCompleted = 0
@@ -150,6 +150,7 @@ internal fun SettingsUpdatesPage(
                                 }
                             } else if (!downloading) {
                                 downloading = true
+                                status = ""
                                 progress = 0
                                 probeCompleted = 0
                                 probeTotal = 0
@@ -197,6 +198,9 @@ internal fun SettingsUpdatesPage(
                                 }
                             } else {
                                 downloadJob?.cancel()
+                                downloadJob = null
+                                downloading = false
+                                downloadPhase = ""
                                 status = if (t.zh) "下载已取消" else "Download cancelled"
                             }
                         },

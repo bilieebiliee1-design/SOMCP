@@ -75,6 +75,27 @@ class ApkAnalyzerTest {
         assertLimitExceeded { ApkAnalyzer.analyze(apk, "total.apk", 10, ApkAnalyzer.Limits(maxParsedEntryBytes = 100, maxParsedTotalBytes = 120)) }
     }
 
+    @Test
+    fun detectsFlutterLibrariesAndAssetsByAbi() {
+        val apk = apkBytes(
+            "lib/x86_64/libapp.so" to byteArrayOf(1),
+            "lib/x86_64/libflutter.so" to byteArrayOf(2),
+            "lib/arm64-v8a/libapp.so" to byteArrayOf(3),
+            "assets/flutter_assets/AssetManifest.json" to byteArrayOf(4),
+        )
+
+        val result = FlutterArtifactInspector.inspectApk(apk, "flutter.apk")
+        val flutter = result.getJSONObject("flutter")
+
+        assertTrue(flutter.getBoolean("detected"))
+        assertEquals("aot", flutter.getString("mode"))
+        assertEquals("x86_64", result.getJSONObject("selected").getString("abi"))
+        assertEquals(1, flutter.getJSONArray("assets").length())
+        assertEquals(2, flutter.getJSONArray("candidates").length())
+        assertTrue(flutter.getJSONArray("candidates").getJSONObject(0).getBoolean("complete"))
+        assertFalse(flutter.getJSONArray("candidates").getJSONObject(1).getBoolean("complete"))
+    }
+
     private fun apkBytes(vararg entries: Pair<String, ByteArray>): ByteArray = ByteArrayOutputStream().use { output ->
         ZipOutputStream(output).use { zip ->
             entries.forEach { (name, bytes) ->

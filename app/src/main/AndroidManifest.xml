@@ -61,6 +61,12 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <service
+            android:name=".blutter.BlutterRunnerService"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:process=":blutter" />
+
         <receiver
             android:name=".service.BootReceiver"
             android:enabled="true"
