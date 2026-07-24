@@ -63,6 +63,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - Cloudflare Tunnel：quick/named 隧道、keepalive、状态统计。
 - 可选 Unidbg：`emulate_call`、`emulate_dump`。
 - 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
+- 统一「备份与恢复」：本地导出 / 导入设置快照（JSON，密钥默认脱敏），可选 WebDAV / S3 远程备份。
 - 精简工具列表：默认只暴露核心 + meta 工具，完整能力通过 `meta_info(action=describe)` 发现。
 
 ## MCP 工具体系
@@ -162,6 +163,7 @@ system_control(action=status)
 - Blutter：查看内置 Flutter 3.44 / Dart 3.12.2 Runner、离线执行方式和精确兼容性规则。
 - Cloudflare Tunnel：quick/named、目标端口、协议、IP 版本、日志等级、keepalive、重连退避。
 - APK MCP 桥接：APK MCP URL、自动探测、工具合并、转发超时。
+- 备份与恢复：导出 / 导入配置快照（默认脱敏 token/key），可选 WebDAV / S3 远程备份。
 
 ## 从零构建
 

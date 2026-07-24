@@ -68,6 +68,7 @@ private fun settingsTitle(t: UiText, dest: SettingsDest): String = when (dest) {
     SettingsDest.Credits -> if (t.zh) "开源致谢" else "Credits"
     SettingsDest.Disclaimer -> t.disclaimer
     SettingsDest.About -> t.about
+    SettingsDest.BackupRestore -> if (t.zh) "备份与恢复" else "Backup & Restore"
 }
 
 @Composable
@@ -178,6 +179,8 @@ internal fun SettingsHub(
 
                 Text(if (t.zh) "诊断与关于" else "Diagnostics & about", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
                 SurfacePanel {
+                    NavRow(if (t.zh) "备份与恢复" else "Backup & Restore", if (t.zh) "导出 / 导入配置快照，可选 WebDAV / S3" else "Export / import config; optional WebDAV / S3", Icons.Default.Storage, onClick = { onDest(SettingsDest.BackupRestore) })
+                    GroupDivider()
                     NavRow(if (t.zh) "版本更新" else "Software update", if (t.zh) "GitHub Releases / 自动检查" else "GitHub Releases / automatic checks", Icons.Default.Info, trailing = availableRelease?.tag.orEmpty(), onClick = { onDest(SettingsDest.Updates) })
                     GroupDivider()
                     NavRow(if (t.zh) "工具调用审计" else "Tool audit", if (t.zh) "调用统计与失败率" else "Stats and failures", Icons.Default.Analytics, onClick = { onDest(SettingsDest.ToolStats) })
@@ -252,6 +255,7 @@ internal fun SettingsHub(
                     }
                 }
             }
+            SettingsDest.BackupRestore -> SettingsBackupRestorePage(t, settings)
             SettingsDest.Root -> Unit
         }
         }
