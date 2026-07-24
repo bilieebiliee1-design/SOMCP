@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 
 #include <LIEF/LIEF.hpp>
 #include <LIEF/json.hpp>
@@ -24,6 +25,22 @@
 #include <LIEF/VDEX/json.hpp>
 
 namespace {
+
+void throw_runtime(JNIEnv* env, const char* message) {
+    if (env->ExceptionCheck()) return;
+    jclass type = env->FindClass("java/lang/RuntimeException");
+    if (type != nullptr) env->ThrowNew(type, message);
+}
+
+#define JNI_GUARD_BEGIN try {
+#define JNI_GUARD_END(env) \
+    } catch (const std::exception& error) { \
+        throw_runtime(env, error.what()); \
+        return nullptr; \
+    } catch (...) { \
+        throw_runtime(env, "Unknown native LIEF failure"); \
+        return nullptr; \
+    }
 
 std::string esc(const std::string& s) {
     std::string out;
@@ -145,6 +162,7 @@ extern "C" {
 JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativeParseAny(
         JNIEnv* env, jobject, jbyteArray jbytes, jstring jformat) {
+    JNI_GUARD_BEGIN
     if (!jbytes) return env->NewStringUTF("{\"error\":\"empty\"}");
     const jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) return env->NewStringUTF("{\"error\":\"empty\"}");
@@ -172,12 +190,15 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeParseAny(
     }
     if (json.empty()) return env->NewStringUTF("{\"error\":\"parse_failed\"}");
     return env->NewStringUTF(json.c_str());
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativeParse(
         JNIEnv* env, jobject thiz, jbyteArray jbytes) {
+    JNI_GUARD_BEGIN
     (void)thiz;
+    if (!jbytes) return env->NewStringUTF("{\"error\":\"empty\"}");
     jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) {
         return env->NewStringUTF("{\"error\":\"empty\"}");
@@ -271,12 +292,15 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeParse(
 
     json += "}";
     return env->NewStringUTF(json.c_str());
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativeFixSections(
         JNIEnv* env, jobject thiz, jbyteArray jbytes) {
+    JNI_GUARD_BEGIN
     (void)thiz;
+    if (!jbytes) return env->NewByteArray(0);
     jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) {
         return env->NewByteArray(0);
@@ -301,12 +325,15 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeFixSections(
     env->SetByteArrayRegion(result, 0, static_cast<jsize>(built.size()),
                             reinterpret_cast<const jbyte*>(built.data()));
     return result;
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativePatchAddress(
         JNIEnv* env, jobject thiz, jbyteArray jbytes, jlong va, jbyteArray jpatch) {
+    JNI_GUARD_BEGIN
     (void)thiz;
+    if (!jbytes || !jpatch) return env->NewByteArray(0);
     jsize len = env->GetArrayLength(jbytes);
     jsize plen = env->GetArrayLength(jpatch);
     if (len <= 0 || plen <= 0) {
@@ -334,12 +361,15 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativePatchAddress(
     env->SetByteArrayRegion(result, 0, static_cast<jsize>(built.size()),
                             reinterpret_cast<const jbyte*>(built.data()));
     return result;
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativeGetSectionContent(
         JNIEnv* env, jobject thiz, jbyteArray jbytes, jstring jsectionName) {
+    JNI_GUARD_BEGIN
     (void)thiz;
+    if (!jbytes || !jsectionName) return env->NewByteArray(0);
     jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) {
         return env->NewByteArray(0);
@@ -371,12 +401,15 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeGetSectionContent(
                                 reinterpret_cast<const jbyte*>(content.data()));
     }
     return result;
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativeSetSectionContent(
         JNIEnv* env, jobject thiz, jbyteArray jbytes, jstring jsectionName, jbyteArray jcontent) {
+    JNI_GUARD_BEGIN
     (void)thiz;
+    if (!jbytes || !jsectionName || !jcontent) return env->NewByteArray(0);
     jsize len = env->GetArrayLength(jbytes);
     jsize clen = env->GetArrayLength(jcontent);
     if (len <= 0) {
@@ -415,12 +448,15 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeSetSectionContent(
     env->SetByteArrayRegion(result, 0, static_cast<jsize>(built.size()),
                             reinterpret_cast<const jbyte*>(built.data()));
     return result;
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativeAddExportedFunction(
         JNIEnv* env, jobject thiz, jbyteArray jbytes, jlong addr, jstring jname) {
+    JNI_GUARD_BEGIN
     (void)thiz;
+    if (!jbytes || !jname) return env->NewByteArray(0);
     jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) {
         return env->NewByteArray(0);
@@ -449,12 +485,15 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeAddExportedFunction(
     env->SetByteArrayRegion(result, 0, static_cast<jsize>(built.size()),
                             reinterpret_cast<const jbyte*>(built.data()));
     return result;
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_engine_LiefEngine_nativeRemoveSymbol(
         JNIEnv* env, jobject thiz, jbyteArray jbytes, jstring jname) {
+    JNI_GUARD_BEGIN
     (void)thiz;
+    if (!jbytes || !jname) return env->NewByteArray(0);
     jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) {
         return env->NewByteArray(0);
@@ -483,6 +522,7 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeRemoveSymbol(
     env->SetByteArrayRegion(result, 0, static_cast<jsize>(built.size()),
                             reinterpret_cast<const jbyte*>(built.data()));
     return result;
+    JNI_GUARD_END(env)
 }
 
 JNIEXPORT jboolean JNICALL

@@ -3,6 +3,7 @@ package com.soreverse.mcp.mcp
 import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.doubleValue
 import com.soreverse.mcp.core.err
+import com.soreverse.mcp.core.HexCodec
 import com.soreverse.mcp.core.intValue
 import com.soreverse.mcp.core.obj
 import com.soreverse.mcp.core.ok
@@ -10,166 +11,16 @@ import com.soreverse.mcp.core.str
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class ToolClass { CORE, META, EXTRA }
-
-@DslMarker
-annotation class SchemaDsl
-
-@SchemaDsl
-object SchemaBuilder {
-    fun emptyObject(): JSONObject = JSONObject().put("type", "object").put("properties", JSONObject())
-
-    fun objectSchema(properties: JSONObject): JSONObject = JSONObject()
-        .put("type", "object").put("properties", properties)
-
-    private fun strProp(d: String): JSONObject = JSONObject().put("type", "string").put("description", d)
-    private fun enumProp(d: String, vararg values: String): JSONObject = strProp(d).put("enum", JSONArray(values.toList()))
-    private fun intProp(d: String): JSONObject = JSONObject().put("type", "integer").put("description", d)
-    private fun numProp(d: String): JSONObject = JSONObject().put("type", "number").put("description", d)
-    private fun boolProp(d: String): JSONObject = JSONObject().put("type", "boolean").put("description", d)
-    private fun arrProp(d: String, items: JSONObject?): JSONObject =
-        JSONObject().put("type", "array").put("description", d).apply { if (items != null) put("items", items) }
-
-    fun props(block: PropList.() -> Unit): JSONObject = PropList().apply(block).build()
-
-    class PropList {
-        private val properties = JSONObject()
-        infix fun String.str(d: String) { properties.put(this, strProp(d)) }
-        fun String.oneOf(d: String, vararg values: String) { properties.put(this, enumProp(d, *values)) }
-        infix fun String.int(d: String) { properties.put(this, intProp(d)) }
-        infix fun String.num(d: String) { properties.put(this, numProp(d)) }
-        infix fun String.bool(d: String) { properties.put(this, boolProp(d)) }
-        infix fun String.arr(d: String) { properties.put(this, arrProp(d, null)) }
-        infix fun String.arr(d: Pair<String, JSONObject>) { properties.put(this, arrProp(d.first, d.second)) }
-        fun build(): JSONObject = properties
-    }
-
-    fun editsAsmSchema(): JSONObject {
-        val items = JSONObject().put("type", "object")
-            .put("description", "One assembly edit. Defaults to replacing one instruction at instructionIndex=0; set instructionCount/byteLength to cover multiple instruction slots.")
-            .put("properties", JSONObject()
-                .put("writeAsm", strProp("New assembly text (assembler syntax). Alias: newAsm / asm / assembly."))
-                .put("newAsm", strProp("Alias for writeAsm."))
-                .put("asm", strProp("Alias for writeAsm."))
-                .put("address", strProp("Hex virtual address inside the function, e.g. 0x978. Overrides instructionIndex/byteOffset."))
-                .put("instructionIndex", intProp("Index of the instruction to replace (default 0)."))
-                .put("instructionCount", intProp("Number of instruction slots to cover (default 1). Use >1 to fit multi-instruction payloads."))
-                .put("byteOffset", intProp("Byte offset inside the function (alternative to instructionIndex)."))
-                .put("byteLength", intProp("Byte length to overwrite (alternative to instructionCount). Required for insert_* and write_function modes."))
-                .put("mode", strProp("replace_instructions (default) | nop_out | delete_instructions | insert_before | insert_after | prepend_function | append_function | write_function")))
-            .put("required", JSONArray().put("writeAsm"))
-        return items
-    }
-
-    fun editsHexSchema(): JSONObject {
-        val items = JSONObject().put("type", "object")
-            .put("description", "One hex edit: write bytes at byteOffset inside the section. Hex aliases are accepted; conflicting alias values are rejected.")
-            .put("properties", JSONObject()
-                .put("newHex", strProp("Hex bytes to write, e.g. 20 00 80 52. Aliases: hex / bytes / data / rawHex / rawValue."))
-                .put("hex", strProp("Alias for newHex."))
-                .put("bytes", strProp("Alias for newHex."))
-                .put("data", strProp("Alias for newHex."))
-                .put("rawHex", strProp("Legacy alias for newHex."))
-                .put("rawValue", JSONObject().put("description", "Legacy alias: hex string or array of byte values 0..255."))
-                .put("byteOffset", strProp("Byte offset inside the section (not file offset). Alias: offset."))
-                .put("offset", strProp("Alias for byteOffset.")))
-            .put("required", JSONArray().put("byteOffset"))
-        return items
-    }
-
-    fun editsSymbolSchema(): JSONObject {
-        val items = JSONObject().put("type", "object")
-            .put("description", "One symbol edit. rename: same-or-shorter rename. add: add exported function at addr. remove: remove symbol by name.")
-            .put("properties", JSONObject()
-                .put("op", strProp("rename (default) | add | remove"))
-                .put("newName", strProp("New symbol name (for rename: must be <= original length)."))
-                .put("addr", strProp("Hex virtual address for the new exported function (add op only)."))
-                .put("name", strProp("Symbol name to remove (remove op only).")))
-            .put("required", JSONArray().put("op"))
-        return items
-    }
-
-    fun outputsSchema(): JSONObject {
-        val items = JSONObject().put("type", "object")
-            .put("description", "One build output variant.")
-            .put("properties", JSONObject()
-                .put("outputName", strProp("Output file name, e.g. libflass_patched_v1.so."))
-                .put("writeToWorkDir", JSONObject().put("type", "boolean").put("description", "Mirror this variant into the work directory."))
-                .put("writePatchReport", JSONObject().put("type", "boolean").put("description", "Write a patch-report JSON sidecar for this variant.")))
-            .put("required", JSONArray().put("outputName"))
-        return items
-    }
-
-    fun batchStepsSchema(): JSONObject {
-        val itemProps = JSONObject()
-            .put("tool", strProp("Tool name to invoke."))
-            .put("arguments", JSONObject().put("type", "object").put("description", "Arguments object for this tool. May contain \${resultKey.jsonPath} placeholders substituted from prior steps' results."))
-            .put("resultKey", strProp("Optional short key (e.g. a0, b1) used to reference this step's result JSON in later steps."))
-        val items = JSONObject().put("type", "object")
-            .put("description", "One batch pipeline step. Steps execute serially in array order.")
-            .put("properties", itemProps)
-            .put("required", JSONArray().put("tool"))
-        return items
-    }
-}
-
-class HookedContext(
-    context: android.content.Context,
-    settings: com.soreverse.mcp.core.SettingsStore,
-    engine: com.soreverse.mcp.engine.NativeSoEngine,
-    val healthHook: () -> JSONObject,
-    val statsHook: () -> JSONObject,
-    val resetStatsHook: () -> Unit,
-    val toolsCountHook: () -> JSONObject,
-    val helpHook: () -> JSONObject,
-    val listToolsHook: (String, String) -> JSONObject,
-    val describeToolsHook: (List<String>) -> JSONObject,
-    val workflowsHook: () -> JSONObject,
-    val suggestHook: (JSONObject) -> JSONObject,
-    val errorsHook: () -> JSONObject,
-    val reportHook: (JSONObject) -> JSONObject,
-    val capabilitiesHook: () -> JSONObject,
-    val batchHook: (JSONObject) -> JSONObject,
-    val continueHook: (String) -> JSONObject,
-    val sysStatusHook: (Boolean) -> JSONObject,
-    val tunnelStatusHook: () -> JSONObject,
-    val tunnelStatsHook: (Boolean) -> JSONObject,
-    val tunnelStartHook: (String, Int, String) -> JSONObject,
-    val tunnelStopHook: () -> JSONObject,
-    val apkStatusHook: (Boolean) -> JSONObject,
-    val apkProbeHook: () -> JSONObject,
-    val apkPingHook: () -> JSONObject,
-) : ToolContext(context, settings, engine)
-
 object ToolCatalog {
 
     private val pathArg: JSONObject.() -> String = { str("path").ifBlank { str("filePath").ifBlank { str("inputPath").ifBlank { str("soPath") } } } }
-
-    private fun hexLong(value: String): Long? {
-        val trimmed = value.trim()
-        if (trimmed.isBlank()) return null
-        return trimmed.removePrefix("0x").removePrefix("0X").toLongOrNull(16)
-    }
-
-    private fun hexBytes(value: String): ByteArray? {
-        val clean = value.replace(" ", "").replace("\n", "").replace("\t", "")
-        if (clean.isBlank() || clean.length % 2 != 0) return null
-        val out = ByteArray(clean.length / 2)
-        for (i in out.indices) {
-            val hi = Character.digit(clean[i * 2], 16)
-            val lo = Character.digit(clean[i * 2 + 1], 16)
-            if (hi < 0 || lo < 0) return null
-            out[i] = ((hi shl 4) + lo).toByte()
-        }
-        return out
-    }
 
     // ── WORKSPACE ──
 
     private val soOpen = EngineToolHandler(
         ToolMeta("so_open",
-            "打开 SO 文件并创建工作区（action=list 列出可用 SO）",
-            "Open a SO file and create a workspace. Use action=list to discover available SO files. Use action=open_url to download a http(s) SO into the selected work directory, then open and analyze it.",
+            "【SO 分析入口】打开 SO 文件并创建工作区（action=list 列出可用 SO）。所有 .so/.ELF 文件操作必须从 so_open 开始，不要使用 mt_apk_*。",
+            "【PRIMARY SO ENTRY POINT】Open a SO file and create a workspace. Use action=list to discover available SO files. Use action=open_url to download a http(s) SO into the selected work directory, then open and analyze it. All .so/ELF tasks MUST start from so_open — do NOT use mt_apk_* for SO files.",
             "workspace", ToolClass.CORE, heavy = true,
         ) { objectSchema(props {
             "action".oneOf("open (default) | list | open_url", "open", "list", "open_url")
@@ -220,6 +71,29 @@ object ToolCatalog {
             })
         },
     ) { engine, args, _ -> engine.analyzeApk(args.str("path").ifBlank { args.str("filePath") }, args.intValue("entryLimit", 500)) }
+
+    private val flutterBlutter = EngineToolHandler(
+        ToolMeta(
+            "flutter_blutter",
+            "Flutter AOT/Blutter 聚合工具：识别 Flutter APK、提取版本指纹，并使用内置 Flutter 3.44.x / Dart 3.12.2 arm64 Runner 完成本地分析。其他版本会明确返回不支持。",
+            "Aggregated Flutter AOT and Blutter tool using the embedded Flutter 3.44.x / Dart 3.12.2 arm64 runner. Other versions return an explicit unsupported-version result.",
+            "analyze",
+            ToolClass.CORE,
+            heavy = true,
+        ) {
+            objectSchema(props {
+                "action".oneOf("inspect | analyze | status | result | cancel | packages | prune", "inspect", "analyze", "status", "result", "cancel", "packages", "prune")
+                "path" str "APK path or directory containing libapp.so and libflutter.so."
+                "jobId" str "Persistent Blutter job id for status, result, or cancel."
+                "abi".oneOf("Target ABI", "auto", "arm64-v8a", "x86_64", "armeabi-v7a", "x86")
+                "backend".oneOf("Execution backend", "auto", "embedded")
+                "limit" int "Maximum result entities, 1..1000."
+                "kind".oneOf("Paged result collection", "libraries", "classes", "functions", "objects")
+                "cursor" str "Opaque cursor returned by a previous result page."
+                "olderThanMillis" int "Prune cached results older than this duration."
+            })
+        },
+    ) { engine, args, _ -> engine.flutterBlutter(args) }
 
     // ── ANALYZE (Rizin-backed deep analysis) ──
 
@@ -346,7 +220,7 @@ object ToolCatalog {
             "fromVa" str "Start VA hex string (blank/0 = from beginning)"
             "toVa" str "End VA hex string (blank/0 = to end)"
         }) }
-    ) { e, a, _ -> e.rzSearchBytes(a.str("workspaceId"), a.str("editSessionId"), a.str("pattern"), hexLong(a.str("fromVa")) ?: 0L, hexLong(a.str("toVa")) ?: 0L) }
+    ) { e, a, _ -> e.rzSearchBytes(a.str("workspaceId"), a.str("editSessionId"), a.str("pattern"), HexCodec.long(a.str("fromVa")) ?: 0L, HexCodec.long(a.str("toVa")) ?: 0L) }
 
     private val searchStrings = EngineToolHandler(
         ToolMeta("search_strings",
@@ -421,11 +295,10 @@ object ToolCatalog {
     ) { e, a, _ ->
         val vaStr = a.str("va")
         if (vaStr.isNotEmpty()) {
-            val va = vaStr.removePrefix("0x").toLong(16)
-            val patchHex = a.str("patchHex").replace(" ", "")
-            val patch = ByteArray(patchHex.length / 2) { i ->
-                ((Character.digit(patchHex[i * 2], 16) shl 4) + Character.digit(patchHex[i * 2 + 1], 16)).toByte()
-            }
+            val va = HexCodec.long(vaStr)
+                ?: return@EngineToolHandler err("INVALID_ARGUMENT", "va must be a hexadecimal address", "va", vaStr)
+            val patch = HexCodec.bytes(a.str("patchHex"))
+                ?: return@EngineToolHandler err("INVALID_HEX", "patchHex must contain valid byte pairs", "patchHex", a.str("patchHex"))
             e.editHexVa(a.str("workspaceId"), a.str("editSessionId"), va, patch, a.bool("dryRun"))
         } else {
             e.editHex(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.getJSONArray("edits"), a.bool("dryRun"))
@@ -465,7 +338,9 @@ object ToolCatalog {
         val op = a.str("op")
         if (op.isNotEmpty()) {
             when (op) {
-                "add" -> e.liefAddExportedFunction(a.str("workspaceId"), a.str("editSessionId"), a.str("addr").removePrefix("0x").toLong(16), a.str("name"))
+                "add" -> HexCodec.long(a.str("addr"))?.let {
+                    e.liefAddExportedFunction(a.str("workspaceId"), a.str("editSessionId"), it, a.str("name"))
+                } ?: err("INVALID_ARGUMENT", "addr must be a hexadecimal address", "addr", a.str("addr"))
                 "remove" -> e.liefRemoveSymbol(a.str("workspaceId"), a.str("editSessionId"), a.str("name"))
                 else -> e.editSymbol(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.getJSONArray("edits"), a.bool("dryRun"))
             }
@@ -580,11 +455,11 @@ object ToolCatalog {
             "functions" -> e.rzFunctions(a.str("workspaceId"), a.str("editSessionId"), a.intValue("limit", s.defaultLimit), a.str("cursor"))
             "cfg" -> e.rzCfg(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"))
             "xrefs" -> e.rzXrefs(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.str("direction", "to"))
-            "search_bytes" -> e.rzSearchBytes(a.str("workspaceId"), a.str("editSessionId"), a.str("pattern"), hexLong(a.str("fromVa")) ?: 0L, hexLong(a.str("toVa")) ?: 0L)
+            "search_bytes" -> e.rzSearchBytes(a.str("workspaceId"), a.str("editSessionId"), a.str("pattern"), HexCodec.long(a.str("fromVa")) ?: 0L, HexCodec.long(a.str("toVa")) ?: 0L)
             "crypto" -> e.rzScanCrypto(a.str("workspaceId"), a.str("editSessionId"))
             "esil" -> e.rzEsilStep(a.str("workspaceId"), a.str("editSessionId"), a.str("locator").ifBlank { a.str("addr") }, a.intValue("stepCount", 1))
             "diff" -> e.rzDiff(a.str("workspaceId"), a.str("editSessionId"), a.str("workspaceIdB"), a.str("editSessionIdB"))
-            "asm" -> e.assembleRaw(a.str("workspaceId"), a.str("editSessionId"), a.str("asm"), hexLong(a.str("addr")) ?: 0L, if (a.has("thumb")) a.bool("thumb") else null, a.str("mode", "auto"))
+            "asm" -> e.assembleRaw(a.str("workspaceId"), a.str("editSessionId"), a.str("asm"), HexCodec.long(a.str("addr")) ?: 0L, if (a.has("thumb")) a.bool("thumb") else null, a.str("mode", "auto"))
             "disasm" -> e.disasm(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.intValue("limit", s.defaultLimit), "", 0, 0, 4096, a.str("addr"), if (a.has("thumb")) a.bool("thumb") else null, a.str("mode", "auto"))
             "decompile" -> e.rzDecompile(a.str("workspaceId"), a.str("editSessionId"), a.str("locator").ifBlank { a.str("addr") }, a.bool("strict", true))
             else -> err("UNKNOWN_ACTION", "Unknown Rizin action", "action", a.str("action"))
@@ -624,8 +499,8 @@ object ToolCatalog {
             "parse" -> e.readStats(a.str("workspaceId"), a.str("editSessionId"))
             "parse_any" -> e.liefDispatch(a.str("workspaceId"), a.str("editSessionId"), "parse_any", args = JSONArray().put(a.str("format", "auto")))
             "list" -> e.list(a.str("workspaceId"), a.str("editSessionId"), a.str("subView", "sections"), a.str("query"), a.intValue("limit", s.defaultLimit))
-            "patch_address" -> e.liefPatchAddress(a.str("workspaceId"), a.str("editSessionId"), hexLong(a.str("va")) ?: return@EngineToolHandler err("INVALID_ARGUMENT", "va must be hex", "va", a.str("va")), hexBytes(a.str("patchHex")) ?: return@EngineToolHandler err("INVALID_HEX", "patchHex must be valid hex", "patchHex", a.str("patchHex")))
-            "add_export" -> e.liefAddExportedFunction(a.str("workspaceId"), a.str("editSessionId"), hexLong(a.str("va")) ?: return@EngineToolHandler err("INVALID_ARGUMENT", "va must be hex", "va", a.str("va")), a.str("name"))
+            "patch_address" -> e.liefPatchAddress(a.str("workspaceId"), a.str("editSessionId"), HexCodec.long(a.str("va")) ?: return@EngineToolHandler err("INVALID_ARGUMENT", "va must be hex", "va", a.str("va")), HexCodec.bytes(a.str("patchHex")) ?: return@EngineToolHandler err("INVALID_HEX", "patchHex must be valid hex", "patchHex", a.str("patchHex")))
+            "add_export" -> e.liefAddExportedFunction(a.str("workspaceId"), a.str("editSessionId"), HexCodec.long(a.str("va")) ?: return@EngineToolHandler err("INVALID_ARGUMENT", "va must be hex", "va", a.str("va")), a.str("name"))
             "remove_symbol" -> e.liefRemoveSymbol(a.str("workspaceId"), a.str("editSessionId"), a.str("name"))
             "build" -> e.build(a.str("workspaceId"), a.str("editSessionId"), a.str("outputName"), a.str("conflictStrategy"), a.optBoolean("writeReport", s.writePatchReport), a.optBoolean("writeToWorkDir", s.buildCopyToWorkDir))
             "fix_sections" -> e.fixSections(a.str("workspaceId"), a.str("editSessionId"))
@@ -659,7 +534,7 @@ object ToolCatalog {
             "dispatch" -> e.unidbgDispatch(a.str("workspaceId"), a.str("editSessionId"), a.str("op", "status"), a.str("method"), a.optJSONArray("args") ?: a.optJSONArray("dispatchArgs") ?: JSONArray())
             "status" -> ok(e.emulationStatus().put("enabled", s.emulationEnabled))
             "call" -> if (!s.emulationEnabled) err("EMULATION_DISABLED", "Emulation is disabled", "emulationEnabled", false) else e.emulate(a.str("workspaceId"), a.str("editSessionId"), a.str("symbolName"), a.optJSONArray("args") ?: JSONArray(), a.bool("trace", false))
-            "dump" -> if (!s.emulationEnabled) err("EMULATION_DISABLED", "Emulation is disabled", "emulationEnabled", false) else e.dumpMemory(a.str("workspaceId"), a.str("editSessionId"), hexLong(a.str("addr")) ?: return@EngineToolHandler err("INVALID_ARGUMENT", "addr must be hex", "addr", a.str("addr")), a.intValue("size", 256))
+            "dump" -> if (!s.emulationEnabled) err("EMULATION_DISABLED", "Emulation is disabled", "emulationEnabled", false) else e.dumpMemory(a.str("workspaceId"), a.str("editSessionId"), HexCodec.long(a.str("addr")) ?: return@EngineToolHandler err("INVALID_ARGUMENT", "addr must be hex", "addr", a.str("addr")), a.intValue("size", 256))
             else -> err("UNKNOWN_ACTION", "Unknown Unidbg action", "action", a.str("action"))
         }
     }
@@ -818,7 +693,7 @@ object ToolCatalog {
             "stopOnError" bool "Abort on first failed step, default true"
             "maxSteps" int "Maximum steps, default 30, max 100"
         }) }
-    ) { e, a, _ -> runUnidbgBatch(e, a) }
+    ) { e, a, _ -> UnidbgBatchRunner.run(e, a) }
 
     private val xansoApi = EngineToolHandler(
         ToolMeta("xanso_api",
@@ -1075,7 +950,7 @@ object ToolCatalog {
     // ── Registry ──
 
     val ALL: List<ToolHandler> = listOf(
-        soOpen, soClose, apkAnalyze,
+        soOpen, soClose, apkAnalyze, flutterBlutter,
         analyzeElf, readStats, analysisReport, analyzeFunctions, analyzeCfg, analyzeCrypto, analyzeXrefs, analyzeEsil,
         searchBytes, searchStrings,
         readDisasm, readHexdump,
@@ -1091,137 +966,23 @@ object ToolCatalog {
         metaInfo,
     )
 
-    val byName: Map<String, ToolHandler> = ALL.associateBy { it.meta.name }
-    val heavyNames: Set<String> = ALL.filter { it.meta.heavy }.map { it.meta.name }.toSet()
-    val names: List<String> = ALL.map { it.meta.name }
-    fun leanNames(): List<String> = ALL.filter { it.meta.cls == ToolClass.CORE || it.meta.cls == ToolClass.META || it.meta.category == "lowlevel" }.map { it.meta.name }
+    internal val registry = ToolCatalogRegistry(ALL)
+    val byName: Map<String, ToolHandler> = registry.byName
+    val heavyNames: Set<String> = registry.heavyNames
+    val names: List<String> = registry.names
+    fun leanNames(): List<String> = registry.leanNames()
 
-    fun leanNames(popularity: Map<String, Long>?): List<String> {
-        if (popularity == null || popularity.isEmpty()) return leanNames()
-        val base = leanNames().toMutableSet()
-        val candidates = ALL.filter { it.meta.cls == ToolClass.EXTRA }
-            .mapNotNull { e -> popularity[e.meta.name]?.let { e.meta.name to it } }
-            .sortedByDescending { it.second }
-            .take(ADAPTIVE_PROMOTION_SLOTS)
-            .map { it.first }
-        base.addAll(candidates)
-        return base.toList()
-    }
+    fun leanNames(popularity: Map<String, Long>?): List<String> = registry.leanNames(popularity)
 
-    fun description(name: String, zh: Boolean): String =
-        byName[name]?.let { if (zh) it.meta.zh else it.meta.en } ?: name
+    fun description(name: String, zh: Boolean): String = registry.description(name, zh)
 
-    private val ADAPTIVE_PROMOTION_SLOTS = 5
+    fun categoryDescriptions(zh: Boolean): List<Pair<String, String>> = ToolCatalogPresentation.categoryDescriptions(zh)
 
-    private val unidbgBatchKeyPattern = Regex("\\$\\{([a-zA-Z0-9_]+)([^}]*)\\}")
-    private val unidbgBatchResultKeyPattern = Regex("^[a-zA-Z0-9_]+$")
-    private val unidbgBatchIndexPattern = Regex("\\[(\\d+)\\]")
+    fun grouped(zh: Boolean, includeApk: List<String> = emptyList()): List<Pair<String, List<Pair<String, String>>>> =
+        ToolCatalogPresentation.grouped(zh, includeApk)
 
-    private fun runUnidbgBatch(e: com.soreverse.mcp.engine.NativeSoEngine, args: JSONObject): JSONObject {
-        val steps = args.optJSONArray("steps") ?: return err("BAD_REQUEST", "steps[] is required", "steps", JSONArray())
-        val stopOnError = if (args.has("stopOnError")) args.bool("stopOnError", true) else true
-        val maxSteps = args.intValue("maxSteps", 30).coerceIn(1, 100)
-        if (steps.length() > maxSteps) return err("TOO_MANY_STEPS", "Too many Unidbg batch steps", "maxSteps", maxSteps)
-        val keyed = HashMap<String, JSONObject>()
-        val out = JSONArray()
-        for (i in 0 until steps.length()) {
-            val step = steps.optJSONObject(i) ?: JSONObject()
-            val op = step.optString("op", "status")
-            val method = substituteUnidbgBatchString(step.optString("method"), keyed)
-            val stepWorkspaceId = substituteUnidbgBatchString(step.optString("workspaceId", args.str("workspaceId")), keyed)
-            val stepEditSessionId = substituteUnidbgBatchString(step.optString("editSessionId", args.str("editSessionId")), keyed)
-            val dispatchArgs = substituteUnidbgBatchValue(step.optJSONArray("args") ?: JSONArray(), keyed) as JSONArray
-            val result = try {
-                e.unidbgDispatch(stepWorkspaceId, stepEditSessionId, op, method, dispatchArgs)
-            } catch (ex: Exception) {
-                JSONObject().put("ok", false).put("error", JSONObject().put("code", "STEP_EXCEPTION").put("message", ex.message ?: ex.javaClass.simpleName))
-            }
-            val okStep = result.optBoolean("ok", true)
-            val resultKey = step.optString("resultKey").trim()
-            val envelope = JSONObject()
-                .put("step", i)
-                .put("op", op)
-                .put("method", method)
-                .put("args", dispatchArgs)
-                .put("resultKey", resultKey)
-                .put("ok", okStep)
-                .put("result", result)
-            out.put(envelope)
-            if (resultKey.matches(unidbgBatchResultKeyPattern)) keyed[resultKey] = result
-            if (!okStep && stopOnError) return ok(JSONObject().put("steps", out).put("executedCount", i + 1).put("aborted", true))
-        }
-        return ok(JSONObject().put("steps", out).put("executedCount", out.length()).put("aborted", false))
-    }
+    fun toolDescriptor(handler: ToolHandler, includeCategory: Boolean): JSONObject =
+        ToolCatalogPresentation.toolDescriptor(handler, includeCategory)
 
-    private fun substituteUnidbgBatchValue(value: Any?, keyed: Map<String, JSONObject>): Any = when (value) {
-        is JSONObject -> JSONObject().also { copy -> value.keys().forEach { key -> copy.put(key, substituteUnidbgBatchValue(value.opt(key), keyed)) } }
-        is JSONArray -> JSONArray().also { copy -> for (i in 0 until value.length()) copy.put(substituteUnidbgBatchValue(value.opt(i), keyed)) }
-        is String -> substituteUnidbgBatchString(value, keyed)
-        null -> JSONObject.NULL
-        else -> value
-    }
-
-    private fun substituteUnidbgBatchString(raw: String, keyed: Map<String, JSONObject>): String {
-        if (raw.isEmpty()) return raw
-        return unidbgBatchKeyPattern.replace(raw) { match ->
-            val root = keyed[match.groupValues[1]] ?: return@replace match.value
-            val path = match.groupValues[2].trimStart('.')
-            val value = resolveUnidbgBatchPath(root, path)
-            when (value) {
-                null, JSONObject.NULL -> ""
-                is JSONObject, is JSONArray -> value.toString()
-                else -> value.toString()
-            }
-        }
-    }
-
-    private fun resolveUnidbgBatchPath(root: Any, path: String): Any? {
-        if (path.isBlank()) return root
-        var cur: Any? = root
-        for (part in path.split('.').filter { it.isNotBlank() }) {
-            val name = part.substringBefore('[')
-            if (name.isNotBlank()) cur = (cur as? JSONObject)?.opt(name) ?: return null
-            val indexes = unidbgBatchIndexPattern.findAll(part).mapNotNull { it.groupValues[1].toIntOrNull() }
-            for (idx in indexes) cur = (cur as? JSONArray)?.opt(idx) ?: return null
-        }
-        return cur
-    }
-
-    fun categoryDescriptions(zh: Boolean): List<Pair<String, String>> = listOf(
-        "workspace" to (if (zh) "工作区生命周期：列出、打开、关闭 SO" else "Workspace lifecycle: list, open, close SO files"),
-        "analyze" to (if (zh) "深度分析：ELF 结构、函数列表、CFG、密码学扫描、交叉引用、ESIL 模拟" else "Deep analysis: ELF structure, functions, CFG, crypto scan, xrefs, ESIL emulation"),
-        "search" to (if (zh) "搜索：十六进制模式、字符串" else "Search: hex patterns, strings"),
-        "read" to (if (zh) "读取：反汇编、十六进制转储" else "Read: disassembly, hex dumps"),
-        "edit" to (if (zh) "补丁：字节/汇编/符号 + xAnSo 节区头重建" else "Patch: bytes/asm/symbols + xAnSo section rebuild"),
-        "emulate" to (if (zh) "模拟执行：Unidbg + DalvikVM 函数调用、内存转储" else "Emulate: Unidbg + DalvikVM function calls, memory dump"),
-        "diff" to (if (zh) "差异对比：结构化 SO 版本差异" else "Diff: structural SO version diff"),
-        "lowlevel" to (if (zh) "底层 API 网关：Rizin / LIEF / Unidbg / xAnSo 聚合入口" else "Low-level API gateways: aggregated Rizin / LIEF / Unidbg / xAnSo access"),
-        "session" to (if (zh) "编辑会话：打开、历史管理、审计" else "Edit session: open, history, audit"),
-        "build" to (if (zh) "构建：输出补丁后的 SO 文件" else "Build: export patched SO file"),
-        "system" to (if (zh) "系统控制：隧道、APK MCP 桥" else "System: tunnel, APK MCP bridge"),
-        "meta" to (if (zh) "元信息：帮助、工具列表、统计、批量、分页" else "Meta: help, tool list, stats, batch, pagination"),
-    )
-
-    fun grouped(zh: Boolean, includeApk: List<String> = emptyList()): List<Pair<String, List<Pair<String, String>>>> {
-        val groups = LinkedHashMap<String, MutableList<Pair<String, String>>>()
-        val order = categoryDescriptions(zh).map { it.first }
-        order.forEach { groups[it] = mutableListOf() }
-        ALL.forEach { e -> groups[e.meta.category]?.add(e.meta.name to (if (zh) e.meta.zh else e.meta.en)) }
-        if (includeApk.isNotEmpty()) {
-            groups["apk-bridge"] = includeApk.map { it to it }.toMutableList()
-        }
-        return order.map { it to (groups[it] ?: emptyList()) }.filter { it.second.isNotEmpty() }
-    }
-
-    fun toolDescriptor(handler: ToolHandler, includeCategory: Boolean): JSONObject {
-        val schema = handler.meta.schemaBuilder(SchemaBuilder)
-        val obj = JSONObject()
-            .put("name", handler.meta.name)
-            .put("description", handler.meta.en)
-            .put("inputSchema", schema)
-        if (includeCategory) obj.put("category", handler.meta.category)
-        return obj
-    }
-
-    fun categoryOf(name: String): String? = byName[name]?.meta?.category
+    fun categoryOf(name: String): String? = registry.categoryOf(name)
 }

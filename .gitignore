@@ -2,15 +2,19 @@
 .gradle/
 .kotlin/
 .idea/
+__pycache__/
+*.py[cod]
 **/build/
 **/.cxx/
 *.iml
+.trae/
 
 # Local Android configuration
 local.properties
 
 # Signing secrets
 release/
+release-assets/
 *.jks
 *.keystore
 keystore.properties
@@ -19,6 +23,9 @@ keystore.properties
 *.apk
 *.aab
 *.so
+!app/src/main/jniLibs/
+!app/src/main/jniLibs/arm64-v8a/
+!app/src/main/jniLibs/arm64-v8a/libblutter_5e4949e6decb093d82c1.so
 *.o
 *.obj
 *.aar
