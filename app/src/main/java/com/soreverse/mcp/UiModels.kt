@@ -11,7 +11,7 @@ import org.json.JSONObject
 internal enum class MainTab { Service, Analyze, Logs, Settings }
 internal enum class SetupTarget { Directory, ApkMcp, KeepAlive }
 internal enum class SettingsDest {
-    Root, ServiceConfig, Appearance, KeepAlive, Access, Limits, Export, Audit, Tunnel, ApkBridge, AiDeep, Updates, Probe, ToolStats, TunnelStats, Instructions, Credits, Disclaimer, About
+    Root, ServiceConfig, Appearance, KeepAlive, Access, Limits, Export, Audit, Blutter, Tunnel, ApkBridge, AiDeep, Updates, Probe, ToolStats, TunnelStats, Instructions, Credits, Disclaimer, About
 }
 
 internal data class WorkspaceUi(

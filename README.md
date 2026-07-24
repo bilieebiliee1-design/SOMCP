@@ -2,7 +2,7 @@
 
 SOMCP 是一个运行在 Android 手机上的本地 SO 逆向 MCP 服务器。它通过 Streamable HTTP 暴露 MCP 工具，让客户端可以在手机上完成 ELF 结构分析、Rizin 反汇编/分析、LIEF ELF 修复/重写、补丁会话、构建导出、Cloudflare Tunnel 暴露和可选 APK MCP 桥接。
 
-当前版本：`1.0.5`
+当前版本：`1.0.8`
 
 包名：`com.soreverse.mcp`
 
@@ -37,24 +37,16 @@ app/build/outputs/apk/release/app-universal-release.apk
 推荐 Release tag 使用 `v<versionName>`，并上传按 ABI 命名的 APK：
 
 ```text
-SOMCP-1.0.6-arm64-v8a.apk
-SOMCP-1.0.6-armeabi-v7a.apk
-SOMCP-1.0.6-x86.apk
-SOMCP-1.0.6-x86_64.apk
-SOMCP-1.0.6-universal.apk
+SOMCP-1.0.8-arm64-v8a.apk
+SOMCP-1.0.8-armeabi-v7a.apk
+SOMCP-1.0.8-x86.apk
+SOMCP-1.0.8-x86_64.apk
+SOMCP-1.0.8-universal.apk
 ```
 
 可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI，存在校验资产时会在安装前强制验证 SHA-256。
 
-当前 release 输出体积约为：
-
-| APK | 体积 |
-| --- | ---: |
-| `app-arm64-v8a-release.apk` | 28.76 MB |
-| `app-armeabi-v7a-release.apk` | 19.90 MB |
-| `app-x86-release.apk` | 20.73 MB |
-| `app-x86_64-release.apk` | 20.77 MB |
-| `app-universal-release.apk` | 52.19 MB |
+Release 输出体积随原生后端更新变化，以 GitHub Release 资产页面为准。
 
 ## 核心能力
 
@@ -70,11 +62,12 @@ SOMCP-1.0.6-universal.apk
 - 构建导出：自动改名/覆盖、patch report、多输出变体、镜像到工作目录。
 - Cloudflare Tunnel：quick/named 隧道、keepalive、状态统计。
 - 可选 Unidbg：`emulate_call`、`emulate_dump`。
+- 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
 - 精简工具列表：默认只暴露核心 + meta 工具，完整能力通过 `meta_info(action=describe)` 发现。
 
 ## MCP 工具体系
 
-当前目录共 29 个工具，默认 lean 模式会广告核心工具和 meta 工具，降低 LLM 初始化上下文成本。
+当前目录共 38 个内置工具，默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
 
 推荐工作流：
 
@@ -130,6 +123,7 @@ rizin_api(action=capabilities|command|analyze|functions|cfg|xrefs|search_bytes|c
 lief_api(action=capabilities|parse|list|patch_address|add_export|remove_symbol|build|fix_sections|report)
 unidbg_api(action=capabilities|status|call|dump)
 xanso_api(action=capabilities|status|fix_sections)
+flutter_blutter(action=inspect|analyze|status|result|cancel|packages|prune)
 ```
 
 `rizin_api(action=command)` 提供受控 Rizin raw command 通道，用于覆盖大量 Rizin 命令式底层能力；为安全起见，写入、文件、shell 等危险命令会被阻止。
@@ -165,6 +159,7 @@ system_control(action=status)
 - 工具暴露：lean tools、自适应 lean、禁用工具列表、工具结果字符上限、工具调用频率限制。
 - 性能保护：重型工具并发上限、请求超时、工具统计持久化。
 - 原生执行：Unidbg 模拟执行开关。
+- Blutter：查看内置 Flutter 3.44 / Dart 3.12.2 Runner、离线执行方式和精确兼容性规则。
 - Cloudflare Tunnel：quick/named、目标端口、协议、IP 版本、日志等级、keepalive、重连退避。
 - APK MCP 桥接：APK MCP URL、自动探测、工具合并、转发超时。
 

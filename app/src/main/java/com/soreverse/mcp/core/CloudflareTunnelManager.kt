@@ -619,7 +619,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     private var tunnelCredsFile: String? = null
 
     private fun addHistoryUrl(url: String) {
-        if (url.isBlank()) return
+        if (url.isBlank() || !settings.tunnelHistoryEnabled) return
         val cur = settings.tunnelHistoryUrls
             .split('\n').map { it.trim() }.filter { it.isNotBlank() }.toMutableList()
         if (url !in cur) {
@@ -643,7 +643,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         // state to STOPPED under the monitor and the Service is going
         // down anyway.
         runCatching {
-            context.sendBroadcast(Intent("com.soreverse.mcp.TUNNEL_STATUS").putExtra("state", _status.get().state.name))
+            context.sendBroadcast(Intent("com.soreverse.mcp.TUNNEL_STATUS").setPackage(context.packageName).putExtra("state", _status.get().state.name))
         }.onFailure { e ->
             AppLog.w("tunnel publish(): ${e.javaClass.simpleName}: ${e.message}")
         }

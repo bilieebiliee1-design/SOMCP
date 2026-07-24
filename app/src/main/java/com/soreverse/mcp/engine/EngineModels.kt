@@ -23,13 +23,6 @@ internal data class SourceSummary(
     val stripped: Boolean,
 )
 
-internal data class PageState(
-    val field: String,
-    val items: List<JSONObject>,
-    val offset: Int,
-    val limit: Int,
-)
-
 internal data class DisasmCursorState(
     val workspaceId: String,
     val editSessionId: String,

@@ -114,12 +114,12 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
         }
     }
 
-    fun readFile(relativePath: String): ByteArray {
+    fun readFile(relativePath: String, maxBytes: Long = Long.MAX_VALUE): ByteArray {
         var found: Uri? = null
         walk(treeUri, "", 0, ScanOptions(scanApks = true, scanSubdirectories = true, maxDepth = 32)) { uri, _, path, _, _ ->
             if (path == relativePath) found = uri
         }
-        return readBytes(found ?: error("File not found in work directory: $relativePath"))
+        return readBytes(found ?: error("File not found in work directory: $relativePath"), maxBytes)
     }
 
     fun writeRootFile(displayName: String, bytes: ByteArray, mimeType: String = "application/octet-stream"): SoSource {
@@ -230,11 +230,19 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
         }
     }
 
-    private fun readBytes(uri: Uri): ByteArray {
+    private fun readBytes(uri: Uri, maxBytes: Long = Long.MAX_VALUE): ByteArray {
         resolver.openInputStream(uri).use { input ->
             requireNotNull(input) { "Cannot open $uri" }
             val out = ByteArrayOutputStream()
-            input.copyTo(out)
+            val buffer = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > maxBytes) throw ApkAnalysisLimitException("Input exceeds $maxBytes byte limit")
+                out.write(buffer, 0, count)
+            }
             return out.toByteArray()
         }
     }

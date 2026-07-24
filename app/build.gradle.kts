@@ -19,8 +19,8 @@ android {
         applicationId = "com.soreverse.mcp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.0.6"
+        versionCode = 9
+        versionName = "1.0.8"
 
         externalNativeBuild {
             cmake {
@@ -31,6 +31,7 @@ android {
     }
 
     buildFeatures {
+        aidl = true
         compose = true
         buildConfig = true
     }
@@ -155,4 +156,5 @@ dependencies {
         exclude(group = "com.github.zhkl0228", module = "keystone")
     }
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 }
