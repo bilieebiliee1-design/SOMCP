@@ -4,6 +4,7 @@
 
 本节记录基于 `1.0.8` 的未发布变化。
 
+- 增强 Blutter Runner 多版本支持：匹配改为分层选择，单个内置 Runner 即可服务多个 Dart/Flutter 版本——依次按「引擎修订单值 → 引擎修订列表(`engineRevisions`) → Dart 版本 → snapshot hash 别名(`snapshotAliases`)」评分，并支持同 ABI/指针档位下的近似兜底(`APPROXIMATE`，结果带明确警告)。`BlutterRunnerRequirement` 现携带完整 `engineIds` 与 `snapshotHash`；`runners.json` 的 runner 也解析并暴露 `engineRevisions`/`snapshotHash`；匹配失败时不再硬编码"仅 3.44.x / 3.12.2"，而是动态回传内置 `supportedRunners` 清单。详见 `docs/blutter-multi-version.md`。
 - 新增统一「备份与恢复」入口：设置页新增「备份与恢复」，可本地导出 / 导入整份配置快照（JSON）。密钥默认脱敏，仅勾选「包含密钥」后写入真实 token/key；导入时仅在备份本身含密钥且用户允许时才恢复密钥，避免脱敏占位符覆盖真实值。
 - 新增可选远程备份：支持 WebDAV（Basic Auth）与 S3 兼容存储（AWS Signature V4、路径式寻址，含 MinIO 等自建对象存储）。上传以带时间戳文件名保存，恢复时按文件名拉取。远程凭据仅保存在本机，不进入备份文件。
 - 新增 `BackupManager` 与 `BackupPrefs`：复用既有 `SettingsStore.snapshot/applyPatch` 快照能力并封装带版本信封；远程目标配置独立存放于同一 `so_reverse_mcp` SharedPreferences，与快照数据解耦。

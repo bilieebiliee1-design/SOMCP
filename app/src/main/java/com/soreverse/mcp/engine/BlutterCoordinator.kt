@@ -51,29 +51,37 @@ internal class BlutterCoordinator(private val context: Context, private val stor
         val jobId = store.create(args)
         val analysis = inspection.optJSONObject("selectedAnalysis") ?: inspection
         val flutter = analysis.optJSONObject("flutter") ?: JSONObject()
+        val engineIds = flutter.optJSONArray("engineIds")?.let { array -> (0 until array.length()).mapNotNull { array.optString(it) }.filter { it.isNotBlank() } } ?: emptyList()
         val requirement = BlutterRunnerRequirement(
-            engineRevision = flutter.optJSONArray("engineIds")?.optString(0)?.takeIf { it.isNotBlank() },
+            engineRevision = engineIds.firstOrNull(),
             dartVersion = flutter.optString("dartVersion").takeIf { it.isNotBlank() },
             abi = analysis.optString("abi", args.str("abi", "arm64-v8a")),
             compressedPointers = flutter.optBoolean("compressedPointers", false),
             analysis = !args.optBoolean("noAnalysis", false),
+            engineRevisions = engineIds,
+            snapshotHash = flutter.optString("snapshotHash").takeIf { it.isNotBlank() },
         )
-        val runner = registry.select(requirement)
-        if (runner != null) {
+        val runnerMatch = registry.match(requirement, allowApproximate = true)
+        if (runnerMatch != null) {
+            val compatibility = runnerMatch.compatibility
+            val warnings = if (compatibility == RunnerCompatibility.APPROXIMATE) {
+                JSONArray().put("No exact Blutter runner matches this APK's Dart engine/snapshot fingerprint. An approximate runner for the same ABI/pointer profile was selected; recovered symbols may be incomplete or inaccurate. For best results use an APK built with a supported Dart/Flutter version.")
+            } else JSONArray()
             return runCatching {
                 val libraries = resolveLibraries(args, workDirectory)
-                embedded.start(jobId, runner, libraries, args)
-                ok(JSONObject().put("jobId", jobId).put("status", "running").put("backend", "embedded").put("runner", runner.toJson()))
+                embedded.start(jobId, runnerMatch.descriptor, libraries, args)
+                ok(JSONObject().put("jobId", jobId).put("status", "running").put("backend", "embedded").put("runner", runnerMatch.descriptor.toJson()).put("compatibility", compatibility.name).put("warnings", warnings))
             }.getOrElse { error ->
                 val problem = JSONObject().put("code", "INPUT_RESOLUTION_FAILED").put("message", error.message ?: "Cannot resolve Flutter libraries").put("recoverable", false).put("stage", "resolving_input")
                 store.update(jobId, "failed", "resolving_input", problem)
                 ok(JSONObject().put("jobId", jobId).put("status", "failed").put("error", problem))
             }
         }
-        val required = JSONObject().put("engineRevision", requirement.engineRevision ?: JSONObject.NULL).put("dartVersion", requirement.dartVersion ?: JSONObject.NULL).put("abi", requirement.abi).put("compressedPointers", requirement.compressedPointers).put("analysis", requirement.analysis)
-        val error = JSONObject().put("code", "FLUTTER_VERSION_NOT_SUPPORTED").put("message", "This release embeds only the Flutter 3.44.x / Dart 3.12.2 arm64-v8a Blutter runner. The target APK does not match that exact snapshot compatibility key.").put("recoverable", false).put("stage", "runner_selection").put("supportedFlutter", "3.44.x").put("supportedDart", "3.12.2").put("required", required)
+        val required = JSONObject().put("engineRevision", requirement.engineRevision ?: JSONObject.NULL).put("dartVersion", requirement.dartVersion ?: JSONObject.NULL).put("snapshotHash", requirement.snapshotHash ?: JSONObject.NULL).put("abi", requirement.abi).put("compressedPointers", requirement.compressedPointers).put("analysis", requirement.analysis)
+        val supportedRunners = JSONArray(registry.runners.map { it.toJson() })
+        val error = JSONObject().put("code", "FLUTTER_VERSION_NOT_SUPPORTED").put("message", "No embedded Blutter runner matches this APK's Dart engine or snapshot fingerprint. The embedded matrix provides ${registry.runners.size} runner profile(s); see 'supportedRunners' for the exact engine/version/snapshot keys.").put("recoverable", false).put("stage", "runner_selection").put("supportedRunners", supportedRunners).put("requiredRunner", required)
         store.update(jobId, "failed", "runner_selection", error)
-        return ok(JSONObject().put("jobId", jobId).put("status", "failed").put("inspection", inspection).put("requiredRunner", required).put("error", error).put("nextActions", JSONArray().put("use a Flutter 3.44.x APK built with Dart 3.12.2").put("inspect the APK fingerprint without running analysis")))
+        return ok(JSONObject().put("jobId", jobId).put("status", "failed").put("inspection", inspection).put("requiredRunner", required).put("supportedRunners", supportedRunners).put("error", error).put("nextActions", JSONArray().put("build the APK with a supported Dart/Flutter version or register a compatible runner in the embedded matrix").put("inspect the APK fingerprint without running analysis")))
     }
 
     private fun status(jobId: String): JSONObject = store.get(jobId)?.let { ok(it) } ?: err("JOB_NOT_FOUND", "Blutter job was not found", "jobId", jobId)
