@@ -37,7 +37,12 @@ BlutterCoordinator
 
 主进程只提取、指纹识别、runner 选择、结果校验与提交。隔离进程只接触三个 descriptor：`libapp.so`、`libflutter.so` 和输出文件。版本 runner 只从 APK 的只读 native library 目录加载，不从可写目录执行代码。
 
-每个隔离进程只执行一个作业。完成、取消、超时或崩溃后主进程解绑，服务进程退出，避免不同 Dart VM runner 的全局符号和状态在同一进程内共存。
+隔离进程内运行一个**有界线程池**（默认 `min(CPU 核数, 8)`，至少 2），因此多个反汇编作业可以**并发**执行。并发安全由两个约束保证：
+
+- **按 runner 库串行**：目标为**同一个 runner 库**的作业通过「按库加锁」（`BlutterRunnerService.libraryLocks`，对同一个 monitor 对象 `synchronized`）串行执行，因为底层 Dart VM runner 持有进程级全局状态、不可重入。这一步直接兜住同进程内 Dart VM 全局状态冲突——同一个库绝不会在进程内被并发驱动。
+- **不同库真正并行**：原生侧以 `RTLD_LOCAL` 加载（见 `cpp/blutter_bridge.cpp`），每个 `nativeRun` 调用独立 `dlopen`→`dlsym`→`dlclose`，符号对各自 handle 私有，不同 runner 库的作业在各自线程里真正并行、互不影响。
+
+「同进程内同一个库的多 runner 并发」保持关闭（按库锁串行），直到 Dart VM 全局状态压测通过；若未来要放开，再去掉按库锁、让同库也并行即可。线程池大小有上限，单个作业的墙钟超时仍由进程内看门狗强制（取消 → 宽限 5 秒 → `RUNNER_TIMEOUT` → `stopSelf()` 拆除整个进程）。进程在有活跃作业时保活，全部作业结束 30 秒后才退出，省去每次作业重建进程的开销。
 
 ## Runner 清单
 
@@ -106,6 +111,8 @@ queued
 进程终止后的非终态作业 -> interrupted
 ```
 
+`status` 与 `stage` 之外，运行中作业的状态还会写入 `progressPercent`（0–100）与 `progressEstimated`（布尔）。进度是**诚实值、不做时间假推进**：作业开始时标记 `disassembling` 且 `progressPercent=0`；若原生 runner 回传子阶段进度则原样转发（标记 `progressEstimated=false`）；`committing` 阶段由编排层写入确定性的 `100%`（`progressEstimated=false`）。我们不靠计时器把百分比向 90% 线性伪造。`status` 查询会原样返回这些字段。
+
 结果缓存键为：
 
 ```text
@@ -134,13 +141,13 @@ SHA-256(
 - 拒绝绝对路径、`..`、NUL、重复目标和越界 artifact。
 - runner library name 只允许 `blutter_[A-Za-z0-9_]+`，并且必须存在于已校验清单。
 - 不执行目标 APK 中任何代码，不加载用户提供的 SO，不调用下载到可写目录的二进制。
-- 每个作业限制输入、输出、文件数、内存和墙钟时间。
+- 每个作业限制输入、输出、文件数、内存和墙钟时间。**墙钟超时现已强制**：`analyze` 可传 `timeoutMillis`（默认 30 分钟，夹在 1–60 分钟之间）。主进程编排层与隔离进程内各自持有一个看门狗——编排层覆盖「服务从未连上」的场景并产出结构化 `RUNNER_TIMEOUT`；隔离进程内的看门狗在超时后先请求取消、再给 5 秒宽限，仍未结束则上报 `RUNNER_TIMEOUT` 并 `stopSelf()` 拆掉整个隔离进程，确保单个卡死的作业永远不会把 runner 挂死。
 - 日志不记录符号全文、对象池内容或输入私有路径。
 
 ## MCP 操作
 
 - `inspect`：识别 Flutter 输入和兼容指纹。
-- `analyze`：选择同 APK runner 并创建本地作业。
+- `analyze`：选择同 APK runner 并创建本地作业。可选参数 `timeoutMillis`（墙钟超时，毫秒，默认 30 分钟、夹在 1–60 分钟）控制隔离进程行为。
 - `status`：查询阶段、进度和结构化错误。
 - `result`：读取结构化结果和分页实体。
 - `cancel`：取消运行作业并终止隔离进程。

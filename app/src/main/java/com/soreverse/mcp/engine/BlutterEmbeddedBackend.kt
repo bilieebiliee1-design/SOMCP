@@ -14,30 +14,53 @@ import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 internal class BlutterEmbeddedBackend(
     private val context: Context,
     private val store: BlutterResultStore,
 ) {
     private val active = ConcurrentHashMap<String, ActiveJob>()
+    // Orchestration-level watchdogs. The runner process enforces its own
+    // per-job wall-clock timeout; these only cover the gaps around it:
+    //  - the connect watchdog fires if the isolated process never binds, and
+    //  - the job watchdog (started only after onServiceConnected) fires if
+    //    the process connects but then hangs without the runner reporting back.
+    // The job watchdog is deliberately scheduled AFTER the runner connects so a
+    // job merely queued behind the per-library lock in the runner process is
+    // never falsely timed out.
+    private val watchdog = Executors.newSingleThreadScheduledExecutor()
 
     fun start(jobId: String, runner: BlutterRunnerDescriptor, libraries: FlutterLibraries, options: JSONObject) {
         val jobDir = File(context.noBackupFilesDir, "blutter/v1/jobs/$jobId/input").apply { mkdirs() }
         val libapp = File(jobDir, "libapp.so").apply { writeBytes(libraries.libapp) }
         val libflutter = File(jobDir, "libflutter.so").apply { writeBytes(libraries.libflutter) }
         val output = File(jobDir.parentFile, "runner-result.json").apply { if (exists()) delete() }
-        val connection = RunnerConnection(jobId, runner, libraries, libapp, libflutter, output, options)
-        active[jobId] = ActiveJob(connection)
+        val timeoutMillis = options.optLong("timeoutMillis", DEFAULT_TIMEOUT_MILLIS)
+            .let { if (it <= 0) DEFAULT_TIMEOUT_MILLIS else it.coerceIn(MIN_TIMEOUT_MILLIS, MAX_TIMEOUT_MILLIS) }
+        val connection = RunnerConnection(jobId, runner, libraries, libapp, libflutter, output, options, timeoutMillis)
+        // Connect watchdog: a job whose runner process never binds gets a
+        // structured failure instead of hanging forever.
+        val handle = watchdog.schedule({
+            val job = active.remove(jobId) ?: return@schedule
+            val problem = JSONObject().put("code", "RUNNER_TIMEOUT").put("message", "Blutter runner process never connected within the timeout").put("recoverable", false).put("stage", "binding_runner")
+            store.update(jobId, "failed", "binding_runner", problem)
+            runCatching { context.unbindService(job.connection) }
+        }, CONNECT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        active[jobId] = ActiveJob(connection, timeoutHandle = handle)
         store.update(jobId, "running", "binding_runner")
         val intent = Intent(context, BlutterRunnerService::class.java)
         if (!context.bindService(intent, connection, Context.BIND_AUTO_CREATE)) {
-            active.remove(jobId)
+            active.remove(jobId)?.timeoutHandle?.let { runCatching { it.cancel(false) } }
             fail(jobId, "RUNNER_BIND_FAILED", "Cannot bind the isolated Blutter runner process", "binding_runner", true)
         }
     }
 
     fun cancel(jobId: String): Boolean {
         val job = active.remove(jobId) ?: return false
+        job.timeoutHandle?.let { runCatching { it.cancel(false) } }
         runCatching { job.runner?.cancel(jobId) }
         store.update(jobId, "cancelling", "cancelling")
         runCatching { context.unbindService(job.connection) }
@@ -52,12 +75,23 @@ internal class BlutterEmbeddedBackend(
         private val libflutter: File,
         private val output: File,
         private val options: JSONObject,
+        private val timeoutMillis: Long,
     ) : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val runner = IBlutterRunner.Stub.asInterface(binder)
             val job = active[jobId] ?: return
             job.runner = runner
             store.update(jobId, "running", "runner_execution")
+            // Swap the connect watchdog for the real job watchdog. It only
+            // starts now that the runner is actually executing, so the wall-clock
+            // budget is spent on the disassembly, not on waiting to be bound.
+            job.timeoutHandle?.let { runCatching { it.cancel(false) } }
+            job.timeoutHandle = watchdog.schedule({
+                val j = active.remove(jobId) ?: return@schedule
+                val problem = JSONObject().put("code", "RUNNER_TIMEOUT").put("message", "Blutter disassembly exceeded the wall-clock timeout of ${timeoutMillis}ms").put("recoverable", false).put("stage", "running")
+                store.update(jobId, "failed", "running", problem)
+                runCatching { context.unbindService(j.connection) }
+            }, timeoutMillis, TimeUnit.MILLISECONDS)
             val appFd = ParcelFileDescriptor.open(libapp, ParcelFileDescriptor.MODE_READ_ONLY)
             val flutterFd = ParcelFileDescriptor.open(libflutter, ParcelFileDescriptor.MODE_READ_ONLY)
             val resultFd = ParcelFileDescriptor.open(output, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE)
@@ -86,7 +120,7 @@ internal class BlutterEmbeddedBackend(
 
         private val callback = object : IBlutterRunnerCallback.Stub() {
             override fun onProgress(callbackJobId: String, stage: String, percent: Int) {
-                if (callbackJobId == jobId && active.containsKey(jobId)) store.update(jobId, "running", stage)
+                if (callbackJobId == jobId && active.containsKey(jobId)) store.progress(jobId, stage, percent, true)
             }
 
             override fun onCompleted(callbackJobId: String, exitCode: Int, errorCode: String, message: String, resultBytes: Long, resultSha256: String) {
@@ -124,7 +158,7 @@ internal class BlutterEmbeddedBackend(
                 .put("summary", nativeSummary)
                 .put("provenance", JSONObject().put("protocolVersion", 1).put("normalizerVersion", "native-1").put("cacheHit", false).put("durationMillis", 0))
             val key = digest(libapp, libflutter, descriptor.sha256, options.toString())
-            store.update(jobId, "running", "committing")
+            store.update(jobId, "running", "committing", progressPercent = 100, progressEstimated = false)
             store.commit(jobId, result, key)
             finish()
         }
@@ -135,6 +169,8 @@ internal class BlutterEmbeddedBackend(
         }
 
         private fun finish() {
+            val job = active[jobId]
+            job?.timeoutHandle?.let { runCatching { it.cancel(false) } }
             if (active.remove(jobId) != null) runCatching { context.unbindService(this) }
             runCatching { libapp.parentFile?.deleteRecursively() }
             runCatching { output.delete() }
@@ -164,9 +200,13 @@ internal class BlutterEmbeddedBackend(
         }
     }
 
-    private data class ActiveJob(val connection: ServiceConnection, var runner: IBlutterRunner? = null)
+    private data class ActiveJob(val connection: ServiceConnection, var runner: IBlutterRunner? = null, var timeoutHandle: ScheduledFuture<*>? = null)
 
     private companion object {
+        const val DEFAULT_TIMEOUT_MILLIS = 30L * 60L * 1000L
+        const val MIN_TIMEOUT_MILLIS = 60L * 1000L
+        const val MAX_TIMEOUT_MILLIS = 60L * 60L * 1000L
+        const val CONNECT_TIMEOUT_MILLIS = 30L * 1000L
         const val MAX_RESULT_BYTES = 512L * 1024L * 1024L
     }
 }

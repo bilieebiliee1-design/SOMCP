@@ -27,12 +27,28 @@ internal class BlutterResultStore(context: Context) {
     }
 
     @Synchronized
-    fun update(jobId: String, status: String, stage: String, error: JSONObject? = null, resultKey: String? = null) {
+    fun update(jobId: String, status: String, stage: String, error: JSONObject? = null, resultKey: String? = null, progressPercent: Int? = null, progressEstimated: Boolean = false) {
         requireValidJobId(jobId)
         val state = readState(jobId) ?: return
         state.put("status", status).put("stage", stage).put("updatedAt", System.currentTimeMillis())
         if (error != null) state.put("error", error) else state.remove("error")
         if (resultKey != null) state.put("resultKey", resultKey)
+        if (progressPercent != null) state.put("progressPercent", progressPercent.coerceIn(0, 100)).put("progressEstimated", progressEstimated)
+        write(File(File(jobs, jobId), "state.json"), state)
+    }
+
+    @Synchronized
+    fun progress(jobId: String, stage: String, percent: Int, estimated: Boolean = true) {
+        requireValidJobId(jobId)
+        val state = readState(jobId) ?: return
+        // Only refine progress while the job is still running, so a late heartbeat
+        // from the progress pump never clobbers a terminal/failed status written
+        // by another path (commit, timeout, cancel).
+        if (state.optString("status") != "running") return
+        state.put("stage", stage)
+            .put("progressPercent", percent.coerceIn(0, 100))
+            .put("progressEstimated", estimated)
+            .put("updatedAt", System.currentTimeMillis())
         write(File(File(jobs, jobId), "state.json"), state)
     }
 
@@ -46,7 +62,7 @@ internal class BlutterResultStore(context: Context) {
         val dir = File(results, key)
         if (!dir.exists()) dir.mkdirs()
         write(File(dir, "result.json"), result)
-        update(jobId, "succeeded", "committed", resultKey = key)
+        update(jobId, "succeeded", "committed", resultKey = key, progressPercent = 100, progressEstimated = false)
         return result
     }
 
