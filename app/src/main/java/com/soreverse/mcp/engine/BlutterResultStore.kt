@@ -88,10 +88,18 @@ internal class BlutterResultStore(context: Context) {
     @Synchronized
     fun prune(olderThanMillis: Long): JSONObject {
         val cutoff = System.currentTimeMillis() - olderThanMillis.coerceAtLeast(0)
-        var removed = 0
+        var removedJobs = 0
+        jobs.listFiles()?.forEach { dir ->
+            val state = readState(dir.name)
+            val terminal = state?.optString("status") in setOf("succeeded", "failed", "cancelled", "interrupted")
+            if (terminal && state?.optLong("updatedAt", Long.MAX_VALUE) ?: Long.MAX_VALUE < cutoff) {
+                if (dir.deleteRecursively()) removedJobs++
+            }
+        }
+        var removedResults = 0
         val referenced = jobs.listFiles().orEmpty().mapNotNull { readState(it.name)?.optString("resultKey")?.takeIf(String::isNotBlank) }.toSet()
-        results.listFiles()?.filter { it.lastModified() < cutoff && it.name !in referenced }?.forEach { it.deleteRecursively(); removed++ }
-        return JSONObject().put("removedResults", removed).put("cutoff", cutoff)
+        results.listFiles()?.filter { it.lastModified() < cutoff && it.name !in referenced }?.forEach { if (it.deleteRecursively()) removedResults++ }
+        return JSONObject().put("removedJobs", removedJobs).put("removedResults", removedResults).put("cutoff", cutoff)
     }
 
     private fun readState(jobId: String): JSONObject? = runCatching { requireValidJobId(jobId); File(File(jobs, jobId), "state.json").takeIf { it.isFile }?.let { JSONObject(it.readText()) } }.getOrNull()

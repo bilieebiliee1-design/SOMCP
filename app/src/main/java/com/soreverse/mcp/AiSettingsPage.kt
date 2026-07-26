@@ -215,10 +215,6 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
                         }
                     }, Modifier.fillMaxWidth(),
                 )
-                SecondaryActionButton(if (t.zh) "恢复默认提示词" else "Reset prompt", {
-                    systemPrompt = SettingsStore.DEFAULT_AI_SYSTEM_PROMPT
-                    settings.aiSystemPrompt = systemPrompt
-                }, Modifier.fillMaxWidth())
             }
             if (status.isNotBlank()) {
                 Text(status, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -331,6 +327,10 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
                 ),
                 modifier = Modifier.fillMaxWidth().padding(14.dp),
             )
+            SecondaryActionButton(if (t.zh) "恢复默认提示词" else "Reset prompt", {
+                systemPrompt = SettingsStore.DEFAULT_AI_SYSTEM_PROMPT
+                settings.aiSystemPrompt = systemPrompt
+            }, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp))
         }
     }
 }
