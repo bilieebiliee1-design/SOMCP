@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import org.json.JSONObject
 import java.io.File
+import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.URI
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicReference
@@ -41,6 +43,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     private var watchThread: Thread? = null
     private var healthThread: Thread? = null
     @Volatile private var stopRequested = false
+    @Volatile private var terminalFailure = false
     private val generation = java.util.concurrent.atomic.AtomicInteger(0)
 
     @Volatile private var runningSinceMs = 0L
@@ -117,7 +120,10 @@ class CloudflareTunnelManager(private val context: Context, private val settings
 
     @Synchronized
     private fun startInternal(targetPort: Int, mode: Mode, token: String, userInitiated: Boolean): TunnelStatus {
-        if (userInitiated) stopRequested = false
+        if (userInitiated) {
+            stopRequested = false
+            terminalFailure = false
+        }
         // Refuse re-entrant restart once stop() has been requested. The earlier
         // version allowed the keepalive health thread — which sits in a sibling
         // thread to stop() — to observe a probe failure and recurse into
@@ -348,9 +354,11 @@ class CloudflareTunnelManager(private val context: Context, private val settings
 
     private fun startNamed(bin: File, targetPort: Int, token: String, runGeneration: Int) {
         require(token.isNotBlank()) { "named tunnel token is empty" }
+        val publicUrl = normalizePublicUrl(settings.tunnelNamedPublicUrl)
         val cmd = mutableListOf(
             bin.absolutePath, "tunnel", "--no-autoupdate",
             "--edge-ip-version", settings.tunnelEdgeIpVersion,
+            "--loglevel", settings.tunnelLogLevel,
             "run", "--token", token,
         )
         val edges = edgeIps()
@@ -358,7 +366,8 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             val insertAt = cmd.indexOf("run")
             edges.forEachIndexed { i, ip -> cmd.addAll(insertAt + i * 2, listOf("--edge", ip)) }
         }
-        launch(bin, cmd, Mode.NAMED, null, targetPort, runGeneration)
+        launch(bin, cmd, Mode.NAMED, publicUrl, targetPort, runGeneration)
+        publicUrl?.let(::addHistoryUrl)
     }
 
     private fun launch(bin: File, cmd: MutableList<String>, mode: Mode, url: String?, targetPort: Int, runGeneration: Int) {
@@ -388,24 +397,17 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         val capturedUrl = url
         val t = Thread({
             try {
-                InputStreamReader(p.inputStream, Charsets.UTF_8).use { reader ->
-                    val buf = CharArray(2048)
-                    while (true) {
-                        val n = reader.read(buf)
-                        if (n < 0) break
-                        if (n > 0) {
-                            val chunk = String(buf, 0, n)
-                            chunk.split('\n').forEach { line ->
-                                if (line.isNotBlank()) {
-                                    AppLog.i("clfl: $line")
-                                    parseTunnelLine(line, mode)?.let { detectedUrl ->
-                                        if (generation.get() == runGeneration && _status.get().state == State.STARTING) {
-                                            transitionTo(State.RUNNING, mode, publicUrl = _status.get().publicUrl ?: detectedUrl, message = "running")
-                                            publish()
-                                            if (mode == Mode.NAMED) addHistoryUrl(detectedUrl)
-                                        }
-                                    }
-                                }
+                BufferedReader(InputStreamReader(p.inputStream, Charsets.UTF_8)).useLines { lines ->
+                    lines.forEach { line ->
+                        if (line.isBlank()) return@forEach
+                        AppLog.i("clfl: $line")
+                        if (generation.get() != runGeneration || process !== p) return@forEach
+                        parseTunnelLine(line, mode, runGeneration, p)?.let { detectedUrl ->
+                            val current = _status.get()
+                            if (generation.get() == runGeneration && current.state in setOf(State.STARTING, State.RUNNING)) {
+                                transitionTo(State.RUNNING, mode, publicUrl = detectedUrl, message = "running")
+                                publish()
+                                if (mode == Mode.NAMED) addHistoryUrl(detectedUrl)
                             }
                         }
                     }
@@ -416,7 +418,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             } finally {
                 val exit = runCatching { p.exitValue() }.getOrDefault(-1)
                 val wasRunning = _status.get().state
-                if (!stopRequested && generation.get() == runGeneration) {
+                if (!stopRequested && !terminalFailure && generation.get() == runGeneration) {
                     transitionTo(
                         State.STOPPED,
                         mode = Mode.OFF,
@@ -525,7 +527,8 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     private val urlPattern: Pattern = Pattern.compile("https://[a-z0-9-]+\\.(trycloudflare\\.com|cfargotunnel\\.com)", Pattern.CASE_INSENSITIVE)
     private val connPattern: Pattern = Pattern.compile("Registered tunnel connection|Registered tunnel connection connIndex=", Pattern.CASE_INSENSITIVE)
 
-    private fun parseTunnelLine(line: String, mode: Mode): String? {
+    private fun parseTunnelLine(line: String, mode: Mode, runGeneration: Int, owner: Process): String? {
+        if (generation.get() != runGeneration || process !== owner) return null
         val m = urlPattern.matcher(line)
         if (m.find()) return m.group()
         if (connPattern.matcher(line).find()) {
@@ -535,10 +538,28 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                 publish()
             }
         }
-        if (line.contains("ERR", true) && (line.contains("tunnel") || line.contains("connect"))) {
+        if (mode == Mode.NAMED && (line.contains("Unauthorized", true) || line.contains("Tunnel not found", true))) {
+            terminalFailure = true
+            stopRequested = true
+            transitionTo(State.FAILED, mode, message = "permanent tunnel authorization failed; update the tunnel token")
+            publish()
+            runCatching { owner.destroy() }
+        } else if (line.contains("ERR", true) && (line.contains("tunnel") || line.contains("connect"))) {
             AppLog.w("tunnel error: $line")
         }
         return null
+    }
+
+    private fun normalizePublicUrl(value: String): String? {
+        val raw = value.trim()
+        if (raw.isBlank()) return null
+        val candidate = if (raw.contains("://")) raw else "https://$raw"
+        val uri = runCatching { URI(candidate) }.getOrNull()
+            ?: throw IllegalArgumentException("invalid named tunnel public URL")
+        require(uri.scheme.equals("https", true) && !uri.host.isNullOrBlank()) {
+            "named tunnel public URL must use HTTPS and include a hostname"
+        }
+        return candidate.trimEnd('/')
     }
 
     private data class QuickTunnel(val tunnelId: String, val hostname: String, val accountTag: String, val secret: String)
@@ -643,7 +664,12 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         // state to STOPPED under the monitor and the Service is going
         // down anyway.
         runCatching {
-            context.sendBroadcast(Intent("com.soreverse.mcp.TUNNEL_STATUS").setPackage(context.packageName).putExtra("state", _status.get().state.name))
+            context.sendBroadcast(
+                Intent("com.soreverse.mcp.TUNNEL_STATUS")
+                    .setPackage(context.packageName)
+                    .putExtra("state", _status.get().state.name)
+                    .putExtra("terminal", terminalFailure)
+            )
         }.onFailure { e ->
             AppLog.w("tunnel publish(): ${e.javaClass.simpleName}: ${e.message}")
         }

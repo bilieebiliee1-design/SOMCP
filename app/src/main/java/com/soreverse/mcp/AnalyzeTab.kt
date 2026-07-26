@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
@@ -66,6 +67,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -163,10 +165,32 @@ internal fun AnalyzeTab(
             title = if (t.zh) "分析" else "Analyze",
             subtitle = if (t.zh) "SO 文件程序基础分析" else "Program-level SO analysis",
             trailing = {
-                TextButton(onClick = { showWorkspaces = true }) {
-                    Icon(Icons.Default.Storage, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(if (t.zh) "工作区" else "Workspaces")
+                Row {
+                    IconButton(
+                        enabled = !state.scanning && state.analyzingSoPath == null && state.deepAnalyzingPath == null,
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    val engine = EngineProvider.get(context)
+                                    engine.clearCaches()
+                                    engine.flutterBlutter(org.json.JSONObject().put("action", "prune").put("olderThanMillis", 0))
+                                }
+                                state.workspaces = emptyList()
+                                state.soSources = emptyList()
+                                state.perSoDetail = emptyMap()
+                                state.expandedSoPath = null
+                                state.scannedTreeUri = null
+                                state.message = if (t.zh) "缓存、工作区和已结束的 Blutter 结果已清理" else "Caches, workspaces, and completed Blutter results cleared"
+                            }
+                        },
+                    ) {
+                        Icon(Icons.Default.DeleteSweep, if (t.zh) "清理分析资源" else "Clear analysis resources")
+                    }
+                    TextButton(onClick = { showWorkspaces = true }) {
+                        Icon(Icons.Default.Storage, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (t.zh) "工作区" else "Workspaces")
+                    }
                 }
             },
         )

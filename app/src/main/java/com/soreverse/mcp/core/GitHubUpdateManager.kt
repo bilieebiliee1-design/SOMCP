@@ -20,6 +20,8 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
 
 data class GitHubRelease(
@@ -116,14 +118,16 @@ class GitHubUpdateManager(private val context: Context) {
                 }
                 val directory = File(context.cacheDir, "updates").apply { mkdirs() }
                 val target = File(directory, release.apkName.substringAfterLast('/'))
+                val partial = File(directory, "${target.name}.part")
+                val verified = File(directory, "${target.name}.verified")
                 cachedDownload(release)?.let { return@withContext Result.success(it) }
-                directory.listFiles()?.filter { it != target }?.forEach { it.delete() }
+                directory.listFiles()?.filter { it !in setOf(target, verified) }?.forEach { it.delete() }
                 val candidates = rankedDownloadUrls(release.apkUrl, ::emit)
                 var lastFailure: Throwable? = null
                 var downloaded = false
                 for (url in candidates) {
                     ensureActive()
-                    target.delete()
+                    partial.delete()
                     try {
                         emit(UpdateDownloadEvent.Selected(sourceName(url)))
                         val request = Request.Builder()
@@ -135,7 +139,7 @@ class GitHubUpdateManager(private val context: Context) {
                             val body = response.body
                             val total = body.contentLength().takeIf { it > 0 } ?: release.apkSize
                             body.byteStream().use { input ->
-                                target.outputStream().use { output ->
+                                partial.outputStream().use { output ->
                                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                                     var copied = 0L
                                     var lastPercent = -1
@@ -156,7 +160,7 @@ class GitHubUpdateManager(private val context: Context) {
                                 }
                             }
                         }
-                        if (target.length() > 4 && target.inputStream().use {
+                        if (partial.length() > 4 && partial.inputStream().use {
                                 val header = ByteArray(4)
                                 it.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
                             }) {
@@ -165,7 +169,7 @@ class GitHubUpdateManager(private val context: Context) {
                         }
                         error("Downloaded asset is not a valid APK archive")
                     } catch (error: CancellationException) {
-                        target.delete()
+                        partial.delete()
                         throw error
                     } catch (error: Throwable) {
                         lastFailure = error
@@ -173,23 +177,35 @@ class GitHubUpdateManager(private val context: Context) {
                 }
                 require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
                 emit(UpdateDownloadEvent.Verifying)
-                release.checksumUrl?.let { verifyChecksum(target, it) }
+                val checksumUrl = requireNotNull(release.checksumUrl) { "Release checksum is required" }
+                verifyChecksum(partial, checksumUrl, target.name)
+                runCatching {
+                    Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+                }.getOrElse {
+                    Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+                verified.writeText(verificationMarker(release))
                 Result.success(target)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
+                File(File(context.cacheDir, "updates"), "${release.apkName.substringAfterLast('/')}.part").delete()
                 Result.failure(error)
             }
         }
 
     fun cachedDownload(release: GitHubRelease): File? {
         val file = File(File(context.cacheDir, "updates"), release.apkName.substringAfterLast('/'))
+        val verified = File(file.parentFile, "${file.name}.verified")
         if (!file.isFile || file.length() <= 4) return null
         val valid = runCatching { file.inputStream().use { input ->
             val header = ByteArray(4)
             input.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
         } }.getOrDefault(false)
-        return file.takeIf { valid && (release.apkSize <= 0 || it.length() == release.apkSize) }
+        return file.takeIf {
+            valid && verified.readTextOrNull() == verificationMarker(release) &&
+                (release.apkSize <= 0 || it.length() == release.apkSize)
+        }
     }
 
     private suspend fun rankedDownloadUrls(
@@ -274,7 +290,7 @@ class GitHubUpdateManager(private val context: Context) {
         return false
     }
 
-    private suspend fun verifyChecksum(file: File, url: String) {
+    private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name) {
         var expected: String? = null
         var lastFailure: Throwable? = null
         for (candidate in rankedDownloadUrls(url) {}) {
@@ -283,10 +299,10 @@ class GitHubUpdateManager(private val context: Context) {
                 expected = client.newCall(request).await().use { response ->
                     if (!response.isSuccessful) error("Checksum HTTP ${response.code}")
                     val text = response.body.string()
-                    Regex("(?i)([a-f0-9]{64})\\s+\\*?${Regex.escape(file.name)}(?:\\s|$)")
+                    Regex("(?i)([a-f0-9]{64})\\s+\\*?${Regex.escape(assetName)}(?:\\s|$)")
                         .find(text)?.groupValues?.get(1)
                         ?: Regex("(?i)^[a-f0-9]{64}$").find(text.trim())?.value
-                        ?: error("Checksum file does not contain ${file.name}")
+                        ?: error("Checksum file does not contain $assetName")
                 }
                 break
             } catch (error: CancellationException) {
@@ -309,6 +325,11 @@ class GitHubUpdateManager(private val context: Context) {
         val actual = digest.digest().joinToString("") { "%02x".format(it) }
         require(actual.equals(expected, true)) { "APK SHA-256 verification failed" }
     }
+
+    private fun verificationMarker(release: GitHubRelease): String =
+        listOf(release.tag, release.apkName.substringAfterLast('/'), release.apkSize, release.checksumUrl.orEmpty()).joinToString("\n")
+
+    private fun File.readTextOrNull(): String? = runCatching { takeIf(File::isFile)?.readText() }.getOrNull()
 
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
