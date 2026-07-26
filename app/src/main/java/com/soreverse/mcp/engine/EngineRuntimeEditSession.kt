@@ -21,11 +21,15 @@ internal fun EngineRuntime.editSnapshot(workspaceId: String, editSessionId: Stri
     val ws = workspaces[workspaceId] ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
     val session = ws.edits[editSessionId] ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
     val settings = SettingsStore(context)
-    if (session.snapshots.size >= settings.maxSnapshots) session.snapshots.removeAt(0)
-    val snap = Snapshot(session.revision, sha256(session.data), System.currentTimeMillis(), session.patches.size, session.data.copyOf())
+    if (session.snapshots.size >= settings.maxSnapshots) {
+        val removable = session.snapshots.indexOfFirst { !it.protected }
+        if (removable >= 0) session.snapshots.removeAt(removable)
+    }
+    val snap = Snapshot(session.revision, sha256(session.data), System.currentTimeMillis(), session.patches.size, session.data.copyOf(), protected = label.startsWith("batch-transaction-"))
     session.snapshots += snap
     ok(JSONObject()
         .put("snapshotIndex", session.snapshots.size - 1)
+        .put("snapshotId", snap.id)
         .put("revision", snap.revision)
         .put("sha256", snap.sha256)
         .put("patchCount", snap.patchCount)
@@ -56,6 +60,22 @@ internal fun EngineRuntime.editRollback(workspaceId: String, editSessionId: Stri
         .put("revision", session.revision)
         .put("patchCount", session.patches.size)
         .put("newTargetVersion", sha256(session.data)))
+}
+
+internal fun EngineRuntime.editRollbackById(workspaceId: String, editSessionId: String, snapshotId: String): JSONObject = guarded {
+    val ws = workspaces[workspaceId] ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
+    val session = ws.edits[editSessionId] ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
+    val index = session.snapshots.indexOfFirst { it.id == snapshotId }
+    if (index < 0) return@guarded err("SNAPSHOT_NOT_FOUND", "Snapshot id not found", "snapshotId", snapshotId)
+    val result = editRollback(workspaceId, editSessionId, index)
+    session.snapshots.removeAll { it.id == snapshotId }
+    result
+}
+
+internal fun EngineRuntime.editDropSnapshotById(workspaceId: String, editSessionId: String, snapshotId: String): JSONObject = guarded {
+    val session = workspaces[workspaceId]?.edits?.get(editSessionId)
+        ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
+    ok(JSONObject().put("dropped", session.snapshots.removeAll { it.id == snapshotId }).put("snapshotId", snapshotId))
 }
 
 internal fun EngineRuntime.editUndo(workspaceId: String, editSessionId: String, count: Int = 1): JSONObject = guarded {
@@ -128,7 +148,11 @@ internal fun EngineRuntime.editReset(workspaceId: String, editSessionId: String)
 
 internal fun EngineRuntime.maybeAutoSnapshot(session: EditSession, trigger: String, settings: SettingsStore) {
     if (!settings.autoSnapshotBeforeEdit) return
-    if (session.snapshots.size >= settings.maxSnapshots) session.snapshots.removeAt(0)
+    if (session.snapshots.size >= settings.maxSnapshots) {
+        val removable = session.snapshots.indexOfFirst { !it.protected }
+        if (removable < 0) return
+        session.snapshots.removeAt(removable)
+    }
     session.snapshots += Snapshot(session.revision, sha256(session.data), System.currentTimeMillis(), session.patches.size, session.data.copyOf())
     AppLog.i("Auto-snapshot (trigger=$trigger) rev=${session.revision} patches=${session.patches.size}")
 }

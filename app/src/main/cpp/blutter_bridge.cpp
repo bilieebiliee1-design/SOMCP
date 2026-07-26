@@ -5,11 +5,13 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 using RunFn = int (*)(int, int, int, const char*, volatile int*);
 std::mutex cancel_mutex;
 std::unordered_map<long long, std::shared_ptr<int>> cancellations;
+std::unordered_set<long long> pending_cancellations;
 
 void throw_runtime(JNIEnv* env, const std::string& message) {
     jclass type = env->FindClass("java/lang/RuntimeException");
@@ -25,6 +27,20 @@ bool valid_library(const std::string& value) {
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_soreverse_mcp_blutter_NativeBlutterBridge_nativeRun(JNIEnv* env, jobject, jstring library_name, jint libapp_fd, jint libflutter_fd, jint result_fd, jstring options_json, jlong token) {
+    auto cancelled = std::make_shared<int>(0);
+    {
+        std::lock_guard<std::mutex> lock(cancel_mutex);
+        if (pending_cancellations.erase(token) > 0) __atomic_store_n(cancelled.get(), 1, __ATOMIC_RELEASE);
+        cancellations[token] = cancelled;
+    }
+    struct Registration {
+        long long token;
+        ~Registration() {
+            std::lock_guard<std::mutex> lock(cancel_mutex);
+            cancellations.erase(token);
+            pending_cancellations.erase(token);
+        }
+    } registration{token};
     if (library_name == nullptr || options_json == nullptr || libapp_fd < 0 || libflutter_fd < 0 || result_fd < 0) {
         throw_runtime(env, "Invalid Blutter runner arguments");
         return -1;
@@ -54,16 +70,7 @@ Java_com_soreverse_mcp_blutter_NativeBlutterBridge_nativeRun(JNIEnv* env, jobjec
         throw_runtime(env, "Blutter runner does not export blutter_run_fd");
         return -1;
     }
-    auto cancelled = std::make_shared<int>(0);
-    {
-        std::lock_guard<std::mutex> lock(cancel_mutex);
-        cancellations[token] = cancelled;
-    }
     int result = run(libapp_fd, libflutter_fd, result_fd, raw_options, cancelled.get());
-    {
-        std::lock_guard<std::mutex> lock(cancel_mutex);
-        cancellations.erase(token);
-    }
     env->ReleaseStringUTFChars(options_json, raw_options);
     dlclose(handle);
     return result;
@@ -73,5 +80,9 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_soreverse_mcp_blutter_NativeBlutterBridge_nativeCancel(JNIEnv*, jobject, jlong token) {
     std::lock_guard<std::mutex> lock(cancel_mutex);
     auto found = cancellations.find(token);
-    if (found != cancellations.end()) __atomic_store_n(found->second.get(), 1, __ATOMIC_RELEASE);
+    if (found != cancellations.end()) {
+        __atomic_store_n(found->second.get(), 1, __ATOMIC_RELEASE);
+    } else {
+        pending_cancellations.insert(token);
+    }
 }
