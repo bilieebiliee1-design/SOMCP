@@ -1,6 +1,7 @@
 package com.soreverse.mcp.engine
 
 import org.json.JSONObject
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 data class Workspace(
@@ -57,6 +58,8 @@ data class Snapshot(
     val timeMillis: Long,
     val patchCount: Int,
     val dataCopy: ByteArray,
+    val id: String = UUID.randomUUID().toString(),
+    val protected: Boolean = false,
 )
 
 data class PatchRecord(

@@ -104,8 +104,9 @@ internal object BatchTemplateResolver {
 
 internal class BatchExecutor(
     private val executeTool: (String, JSONObject) -> JSONObject,
-    private val ensureSnapshot: (JSONObject, MutableSet<String>) -> Unit,
-    private val rollbackSnapshots: (Set<String>) -> JSONArray,
+    private val ensureSnapshot: (JSONObject, MutableMap<String, String>) -> JSONObject?,
+    private val rollbackSnapshots: (Map<String, String>) -> JSONArray,
+    private val releaseSnapshots: (Map<String, String>) -> Unit = {},
 ) {
     fun execute(args: JSONObject): JSONObject {
         val steps = args.optJSONArray("steps") ?: JSONArray()
@@ -117,7 +118,7 @@ internal class BatchExecutor(
 
         val results = JSONArray()
         val keyed = HashMap<String, JSONObject>()
-        val snapshots = LinkedHashSet<String>()
+        val snapshots = LinkedHashMap<String, String>()
         for (index in 0 until steps.length()) {
             val step = steps.optJSONObject(index) ?: continue
             val toolName = step.optString("tool")
@@ -127,7 +128,17 @@ internal class BatchExecutor(
                 continue
             }
             val resolvedArgs = BatchTemplateResolver.substitute(step.optJSONObject("arguments") ?: JSONObject(), keyed)
-            if (transactional) ensureSnapshot(resolvedArgs, snapshots)
+            val snapshotFailure = if (transactional) ensureSnapshot(resolvedArgs, snapshots) else null
+            if (snapshotFailure != null) {
+                results.put(JSONObject().put("step", index).put("tool", toolName).put("arguments", resolvedArgs).put("ok", false).put("result", snapshotFailure))
+                return ok(JSONObject()
+                    .put("steps", results)
+                    .put("executedCount", index)
+                    .put("aborted", true)
+                    .put("transactional", true)
+                    .put("rollback", rollbackSnapshots(snapshots))
+                    .put("hint", "The transaction was aborted because its rollback snapshot could not be created."))
+            }
             val resultKey = step.optString("resultKey", "").trim()
             val payload = try {
                 executeTool(toolName, resolvedArgs)
@@ -147,6 +158,7 @@ internal class BatchExecutor(
                     .put("hint", "stopOnError=true aborted the pipeline at the first failing step. Pass stopOnError=false to execute every step regardless."))
             }
         }
+        if (transactional) releaseSnapshots(snapshots)
         return ok(JSONObject().put("steps", results).put("executedCount", results.length()).put("transactional", transactional).put("aborted", false))
     }
 }

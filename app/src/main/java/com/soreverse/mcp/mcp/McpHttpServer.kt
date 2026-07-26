@@ -343,29 +343,41 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             executeTool = ::callToolWithPolicy,
             ensureSnapshot = ::ensureBatchSnapshot,
             rollbackSnapshots = ::rollbackBatchSnapshots,
+        releaseSnapshots = ::releaseBatchSnapshots,
         ).execute(args)
     }
 
-    private fun ensureBatchSnapshot(args: JSONObject, snapshots: MutableSet<String>) {
+    private fun ensureBatchSnapshot(args: JSONObject, snapshots: MutableMap<String, String>): JSONObject? {
         val workspaceId = args.optString("workspaceId")
         val editSessionId = args.optString("editSessionId")
-        if (workspaceId.isBlank() || editSessionId.isBlank()) return
+        if (workspaceId.isBlank() || editSessionId.isBlank()) return null
         val key = "$workspaceId::$editSessionId"
-        if (!snapshots.add(key)) return
-        EngineProvider.get(context).editSnapshot(workspaceId, editSessionId, "batch-transaction-${System.currentTimeMillis()}")
+        if (snapshots.containsKey(key)) return null
+        val result = EngineProvider.get(context).editSnapshot(workspaceId, editSessionId, "batch-transaction-${System.currentTimeMillis()}")
+        if (!result.optBoolean("ok", false)) return result
+        snapshots[key] = result.getString("snapshotId")
+        return null
     }
 
-    private fun rollbackBatchSnapshots(snapshots: Set<String>): JSONArray {
+    private fun rollbackBatchSnapshots(snapshots: Map<String, String>): JSONArray {
         val out = JSONArray()
         val engine = EngineProvider.get(context)
-        for (key in snapshots.toList().asReversed()) {
+        for ((key, snapshotId) in snapshots.entries.toList().asReversed()) {
             val parts = key.split("::", limit = 2)
             val workspaceId = parts.getOrNull(0).orEmpty()
             val editSessionId = parts.getOrNull(1).orEmpty()
-            val result = engine.editRollback(workspaceId, editSessionId, -1)
+            val result = engine.editRollbackById(workspaceId, editSessionId, snapshotId)
             out.put(JSONObject().put("workspaceId", workspaceId).put("editSessionId", editSessionId).put("result", result))
         }
         return out
+    }
+
+    private fun releaseBatchSnapshots(snapshots: Map<String, String>) {
+        val engine = EngineProvider.get(context)
+        snapshots.forEach { (key, snapshotId) ->
+            val parts = key.split("::", limit = 2)
+            if (parts.size == 2) engine.editDropSnapshotById(parts[0], parts[1], snapshotId)
+        }
     }
 
     private fun callToolPayload(name: String, args: JSONObject): JSONObject {

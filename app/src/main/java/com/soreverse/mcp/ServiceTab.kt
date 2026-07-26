@@ -85,7 +85,7 @@ internal fun ServiceTab(
     var setupPrompt by remember { mutableStateOf<SetupTarget?>(null) }
     var showStartDiagnosis by remember { mutableStateOf(false) }
     var quickPublicUrl by remember { mutableStateOf<String?>(null) }
-    var apkConnected by remember { mutableStateOf(false) }
+    var apkConnected by remember { mutableStateOf<Boolean?>(null) }
     var apkToolNames by remember { mutableStateOf<List<String>>(emptyList()) }
     var showToolCatalog by remember { mutableStateOf(false) }
     var keepAliveReady by remember { mutableStateOf(isKeepAliveReady(context, settings)) }
@@ -185,7 +185,7 @@ internal fun ServiceTab(
         if (running) {
             McpForegroundService.stop(context)
             running = false
-        } else if (treeUri == null || !apkConnected || !keepAliveReady) {
+        } else if (treeUri == null || (settings.apkMcpMergeTools && apkConnected != true) || !keepAliveReady) {
             showStartDiagnosis = true
         } else {
             startServerUnchecked()
@@ -238,8 +238,12 @@ internal fun ServiceTab(
                         ),
                         ReadinessItem(
                             label = "APK MCP",
-                            value = if (apkConnected) (if (t.zh) "已连接" else "Online") else (if (t.zh) "未连接" else "Offline"),
-                            ok = apkConnected,
+                            value = when (apkConnected) {
+                                true -> if (t.zh) "已连接" else "Online"
+                                false -> if (t.zh) "未连接" else "Offline"
+                                null -> if (t.zh) "检测中" else "Checking"
+                            },
+                            ok = apkConnected == true || !settings.apkMcpMergeTools,
                             onClick = { setupPrompt = SetupTarget.ApkMcp },
                         ),
                         ReadinessItem(
@@ -288,7 +292,7 @@ internal fun ServiceTab(
             onDismissRequest = { setupPrompt = null },
             title = { Text(setupPromptTitle(target, t.zh)) },
             text = {
-                Text(setupPromptBody(target, t.zh, workDirReady, apkConnected, keepAliveReady))
+                Text(setupPromptBody(target, t.zh, workDirReady, apkConnected == true, keepAliveReady))
             },
             confirmButton = {
                 Button(onClick = {
@@ -312,7 +316,9 @@ internal fun ServiceTab(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     DiagnosisLine(if (t.zh) "目录" else "Directory", workDirReady, if (t.zh) "未设置时无法扫描和打开 SO" else "SO scan/open will be unavailable")
-                    DiagnosisLine("APK MCP", apkConnected, if (t.zh) "未连接时无法使用 APK 协同工具" else "APK bridge tools will be unavailable")
+                    if (settings.apkMcpMergeTools) {
+                        DiagnosisLine("APK MCP", apkConnected == true, if (t.zh) "未连接时无法使用 APK 协同工具" else "APK bridge tools will be unavailable")
+                    }
                     DiagnosisLine(if (t.zh) "保活" else "Keep-alive", keepAliveReady, if (t.zh) "后台运行可能被系统中断" else "The system may stop background work")
                     Text(if (t.zh) "仍要启动吗？" else "Start anyway?", fontWeight = FontWeight.SemiBold)
                 }
