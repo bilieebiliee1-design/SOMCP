@@ -382,6 +382,10 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("tunnelNamedToken", "") ?: ""
         set(value) = prefs.edit().putString("tunnelNamedToken", value.trim()).apply()
 
+    var tunnelNamedPublicUrl: String
+        get() = prefs.getString("tunnelNamedPublicUrl", "") ?: ""
+        set(value) = prefs.edit().putString("tunnelNamedPublicUrl", value.trim()).apply()
+
     var tunnelHistoryUrls: String
         get() = prefs.getString("tunnelHistoryUrls", "") ?: ""
         set(value) = prefs.edit().putString("tunnelHistoryUrls", value).apply()

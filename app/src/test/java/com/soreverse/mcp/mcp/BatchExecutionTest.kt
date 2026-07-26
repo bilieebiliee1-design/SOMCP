@@ -33,10 +33,10 @@ class BatchExecutionTest {
     fun abortsAndRollsBackTransactionalPipeline() {
         val calls = mutableListOf<String>()
         val snapshots = mutableListOf<String>()
-        var rolledBack = emptySet<String>()
+        var rolledBack = emptyMap<String, String>()
         val executor = BatchExecutor(
             executeTool = { name, _ -> calls += name; JSONObject().put("ok", name != "fail").put("workspaceId", "ws-1") },
-            ensureSnapshot = { args, keys -> args.optString("editSessionId").takeIf { it.isNotBlank() }?.let { keys += it; snapshots += it } },
+            ensureSnapshot = { args, keys -> args.optString("editSessionId").takeIf { it.isNotBlank() }?.let { keys[it] = "snapshot-3"; snapshots += it }; null },
             rollbackSnapshots = { keys -> rolledBack = keys; JSONArray(keys.toList()) },
         )
         val steps = JSONArray()
@@ -50,14 +50,14 @@ class BatchExecutionTest {
         assertTrue(result.getBoolean("aborted"))
         assertEquals(listOf("open", "fail"), calls)
         assertEquals(listOf("edit-1"), snapshots)
-        assertEquals(setOf("edit-1"), rolledBack)
+        assertEquals(mapOf("edit-1" to "snapshot-3"), rolledBack)
     }
 
     @Test
     fun continuesWhenStopOnErrorIsDisabled() {
         val executor = BatchExecutor(
             executeTool = { name, _ -> JSONObject().put("ok", name != "fail") },
-            ensureSnapshot = { _, _ -> },
+            ensureSnapshot = { _, _ -> null },
             rollbackSnapshots = { JSONArray() },
         )
         val steps = JSONArray().put(JSONObject().put("tool", "fail")).put(JSONObject().put("tool", "next"))
@@ -66,5 +66,41 @@ class BatchExecutionTest {
 
         assertFalse(result.getBoolean("aborted"))
         assertEquals(2, result.getInt("executedCount"))
+    }
+
+    @Test
+    fun abortsBeforeExecutingWhenSnapshotCreationFails() {
+        var executed = false
+        var rollback = emptyMap<String, String>()
+        val executor = BatchExecutor(
+            executeTool = { _, _ -> executed = true; JSONObject().put("ok", true) },
+            ensureSnapshot = { _, _ -> JSONObject().put("ok", false).put("error", JSONObject().put("code", "SNAPSHOT_FAILED")) },
+            rollbackSnapshots = { rollback = it; JSONArray() },
+        )
+        val steps = JSONArray().put(JSONObject().put("tool", "edit").put("arguments", JSONObject().put("workspaceId", "ws").put("editSessionId", "edit")))
+
+        val result = executor.execute(JSONObject().put("steps", steps).put("transactional", true))
+
+        assertTrue(result.getBoolean("aborted"))
+        assertEquals(0, result.getInt("executedCount"))
+        assertFalse(executed)
+        assertTrue(rollback.isEmpty())
+    }
+
+    @Test
+    fun releasesTransactionalSnapshotsAfterSuccess() {
+        var released = emptyMap<String, String>()
+        val executor = BatchExecutor(
+            executeTool = { _, _ -> JSONObject().put("ok", true) },
+            ensureSnapshot = { _, snapshots -> snapshots["ws::edit"] = "snapshot-id"; null },
+            rollbackSnapshots = { JSONArray() },
+            releaseSnapshots = { released = it.toMap() },
+        )
+        val steps = JSONArray().put(JSONObject().put("tool", "edit").put("arguments", JSONObject().put("workspaceId", "ws").put("editSessionId", "edit")))
+
+        val result = executor.execute(JSONObject().put("steps", steps).put("transactional", true))
+
+        assertFalse(result.getBoolean("aborted"))
+        assertEquals(mapOf("ws::edit" to "snapshot-id"), released)
     }
 }

@@ -146,6 +146,9 @@ internal fun EngineRuntime.close(workspaceId: String): JSONObject = guarded {
 }
 
 internal fun EngineRuntime.clearCaches() {
+    emulatorSessions.values.forEach { session -> session.live?.let(unidbg::closeSession) }
+    emulatorSessions.clear()
+    workspaces.clear()
     sources = emptyList()
     sourceFingerprint = emptyList()
     sourceSummaryCache.clear()

@@ -32,6 +32,8 @@ class NativeSoEngine(context: Context) {
     fun editOpen(workspaceId: String): JSONObject = runtime.editOpen(workspaceId)
     fun editSnapshot(workspaceId: String, editSessionId: String, label: String = ""): JSONObject = runtime.editSnapshot(workspaceId, editSessionId, label)
     fun editRollback(workspaceId: String, editSessionId: String, snapshotIndex: Int = -1): JSONObject = runtime.editRollback(workspaceId, editSessionId, snapshotIndex)
+    fun editRollbackById(workspaceId: String, editSessionId: String, snapshotId: String): JSONObject = runtime.editRollbackById(workspaceId, editSessionId, snapshotId)
+    fun editDropSnapshotById(workspaceId: String, editSessionId: String, snapshotId: String): JSONObject = runtime.editDropSnapshotById(workspaceId, editSessionId, snapshotId)
     fun editUndo(workspaceId: String, editSessionId: String, count: Int = 1): JSONObject = runtime.editUndo(workspaceId, editSessionId, count)
     fun editRedo(workspaceId: String, editSessionId: String, count: Int = 1): JSONObject = runtime.editRedo(workspaceId, editSessionId, count)
     fun editReset(workspaceId: String, editSessionId: String): JSONObject = runtime.editReset(workspaceId, editSessionId)
