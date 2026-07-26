@@ -49,6 +49,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
     var tunnelAutoStart by remember { mutableStateOf(settings.tunnelAutoStart) }
     var tunnelPort by remember { mutableStateOf(settings.tunnelTargetPort.toString()) }
     var namedToken by remember { mutableStateOf(settings.tunnelNamedToken) }
+    var namedPublicUrl by remember { mutableStateOf(settings.tunnelNamedPublicUrl) }
     var tunnelProtocol by remember { mutableStateOf(settings.tunnelProtocol) }
     var edgeIpVersion by remember { mutableStateOf(settings.tunnelEdgeIpVersion) }
     var tunnelLogLevel by remember { mutableStateOf(settings.tunnelLogLevel) }
@@ -110,6 +111,21 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                         unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                     ),
                     modifier = Modifier.fillMaxWidth().padding(14.dp),
+                )
+                OutlinedTextField(
+                    value = namedPublicUrl,
+                    onValueChange = { namedPublicUrl = it; settings.tunnelNamedPublicUrl = it },
+                    label = { Text(if (t.zh) "公网主机名或 URL" else "Public hostname or URL") },
+                    supportingText = { Text(if (t.zh) "例如 mcp.example.com；一个隧道有多个域名时填写要展示的地址" else "For example mcp.example.com; choose the address to display when the tunnel has multiple hostnames") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
                 )
             }
         }
@@ -200,6 +216,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             appendLine("protocol: ${settings.tunnelProtocol}")
             appendLine("edgeIpVersion: ${settings.tunnelEdgeIpVersion}")
             appendLine("targetPort: ${settings.tunnelTargetPort}")
+            appendLine("publicUrl: ${settings.tunnelNamedPublicUrl}")
             appendLine("logLevel: ${settings.tunnelLogLevel}")
             appendLine("autoStart: ${settings.tunnelAutoStart}")
             appendLine("reconnect: ${settings.tunnelReconnect}")
@@ -249,6 +266,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     keepaliveInterval = settings.tunnelKeepaliveIntervalSec.toString()
                     reconnectBackoff = settings.tunnelReconnectBackoffSec.toString()
                     namedToken = settings.tunnelNamedToken
+                    namedPublicUrl = settings.tunnelNamedPublicUrl
                     showImport = false
                     Toast.makeText(context, if (t.zh) "配置已导入" else "Imported", Toast.LENGTH_SHORT).show()
                 }) { Text(if (t.zh) "应用" else "Apply") }
@@ -284,6 +302,7 @@ private fun applyTunnelConfigYaml(settings: SettingsStore, yaml: String) {
     map["protocol"]?.let { if (it in setOf("http2", "quic", "auto")) settings.tunnelProtocol = it }
     map["edgeIpVersion"]?.let { if (it in setOf("4", "6", "auto")) settings.tunnelEdgeIpVersion = it }
     map["targetPort"]?.toIntOrNull()?.let { settings.tunnelTargetPort = it }
+    map["publicUrl"]?.let { settings.tunnelNamedPublicUrl = it }
     map["logLevel"]?.let { if (it in setOf("debug", "info", "warn", "error", "fatal")) settings.tunnelLogLevel = it }
     map["autoStart"]?.lowercase()?.let { settings.tunnelAutoStart = it == "true" || it == "1" }
     map["reconnect"]?.lowercase()?.let { settings.tunnelReconnect = it == "true" || it == "1" }
