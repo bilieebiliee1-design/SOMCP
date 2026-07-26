@@ -174,7 +174,7 @@ internal fun SettingsHub(
                     GroupDivider()
                     NavRow(if (t.zh) "编辑校验与审计" else "Edit & Audit", if (t.zh) "快照 / 并发 / 模拟" else "Snapshot / concurrency", Icons.Default.Security, onClick = { onDest(SettingsDest.Audit) })
                     GroupDivider()
-                    NavRow("Blutter", if (t.zh) "Flutter 3.44 / Dart 3.12.2 / 完全离线" else "Flutter 3.44 / Dart 3.12.2 / fully offline", Icons.Default.Memory, onClick = { onDest(SettingsDest.Blutter) })
+                    NavRow("Blutter", if (t.zh) "Flutter 3.41 / 3.44 · Dart 3.11.5 / 3.12.2 · 完全离线" else "Flutter 3.41 / 3.44 · Dart 3.11.5 / 3.12.2 · fully offline", Icons.Default.Memory, onClick = { onDest(SettingsDest.Blutter) })
                 }
 
                 Text(if (t.zh) "诊断与关于" else "Diagnostics & about", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))

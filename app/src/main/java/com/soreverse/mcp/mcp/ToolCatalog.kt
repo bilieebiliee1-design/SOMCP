@@ -75,8 +75,8 @@ object ToolCatalog {
     private val flutterBlutter = EngineToolHandler(
         ToolMeta(
             "flutter_blutter",
-            "Flutter AOT/Blutter 聚合工具：识别 Flutter APK、提取版本指纹，并使用内置 Flutter 3.44.x / Dart 3.12.2 arm64 Runner 完成本地分析。其他版本会明确返回不支持。",
-            "Aggregated Flutter AOT and Blutter tool using the embedded Flutter 3.44.x / Dart 3.12.2 arm64 runner. Other versions return an explicit unsupported-version result.",
+            "Flutter AOT/Blutter 聚合工具：识别 Flutter APK、提取版本指纹，并使用内置 Flutter 3.41.x / 3.44.x（Dart 3.11.5 / 3.12.2）arm64 Runner 完成本地分析。其他版本会明确返回不支持。",
+            "Aggregated Flutter AOT and Blutter tool using the embedded Flutter 3.41.x / 3.44.x (Dart 3.11.5 / 3.12.2) arm64 runner. Other versions return an explicit unsupported-version result.",
             "analyze",
             ToolClass.CORE,
             heavy = true,
