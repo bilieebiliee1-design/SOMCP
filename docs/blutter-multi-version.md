@@ -1,7 +1,7 @@
 # Blutter Runner 多版本支持
 
 SOMCP 内置的 Blutter 逆向能力依赖预编译的 `libblutter_<id>.so` Runner。历史上
-`runners.json` 只内置了一个 Runner（Flutter 3.44.x / Dart 3.12.2，arm64-v8a），
+`runners.json` 内置了多个 Runner（含 Flutter 3.44.x / Dart 3.12.2，以及新增的 Flutter 3.41.x / Dart 3.11.5，均为 arm64-v8a），
 且选择逻辑只做「单值引擎修订 + Dart 版本」的精确比对——任何其它 Dart/Flutter
 版本都会直接被判为 `FLUTTER_VERSION_NOT_SUPPORTED`。
 

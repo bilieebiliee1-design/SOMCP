@@ -2,7 +2,7 @@
 
 ## 目标
 
-SOMCP 在单个 APK 内提供 Flutter Android AOT 分析。当前正式发行版只内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 compressed-pointer analysis Runner。运行时不依赖 Python、Git、CMake、Termux、独立 Runner APK 或远端服务，不上传 `libapp.so`、`libflutter.so`、符号、对象池或分析结果。
+SOMCP 在单个 APK 内提供 Flutter Android AOT 分析。当前正式发行版内置 Flutter 3.41.7–3.41.9 / 3.44.2–3.44.7（Dart 3.11.5 / 3.12.2）arm64 compressed-pointer analysis Runner。运行时不依赖 Python、Git、CMake、Termux、独立 Runner APK 或远端服务，不上传 `libapp.so`、`libflutter.so`、符号、对象池或分析结果。
 
 构建机从官方 Flutter archive 解析 stable 版本，固定 Blutter commit，并为发行矩阵选定的兼容键下载对应 Dart SDK 源码、交叉编译 Android arm64 Runner。历史索引只用于识别和构建规划，不代表全部打包。Android 设备冒烟是可选增强验证，不是用户安装或应用运行前置条件。
 
