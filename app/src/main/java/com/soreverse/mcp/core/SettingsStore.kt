@@ -44,8 +44,8 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putInt("port", value.coerceIn(1024, 65535)).apply()
 
     var bindHost: String
-        get() = prefs.getString("bindHost", "0.0.0.0") ?: "0.0.0.0"
-        set(value) = prefs.edit().putString("bindHost", if (value == "127.0.0.1") "127.0.0.1" else "0.0.0.0").apply()
+        get() = prefs.getString("bindHost", "127.0.0.1") ?: "127.0.0.1"
+        set(value) = prefs.edit().putString("bindHost", if (value == "0.0.0.0") "0.0.0.0" else "127.0.0.1").apply()
 
     var authEnabled: Boolean
         get() = prefs.getBoolean("authEnabled", true)
@@ -618,7 +618,7 @@ class SettingsStore(context: Context) {
                 .put("systemPromptChars", aiSystemPrompt.length))
     }
 
-    fun applyPatch(patch: org.json.JSONObject, allowSecrets: Boolean = true): org.json.JSONObject {
+    fun applyPatch(patch: org.json.JSONObject, allowSecrets: Boolean = true, allowSecurityFields: Boolean = false): org.json.JSONObject {
         val changed = org.json.JSONArray()
         fun touch(key: String) { changed.put(key) }
         fun obj(name: String): org.json.JSONObject? = patch.optJSONObject(name)
@@ -655,9 +655,9 @@ class SettingsStore(context: Context) {
 
         val service = obj("service") ?: patch
         applyInt(service, "port") { port = it }
-        applyStr(service, "bindHost") { bindHost = it }
-        applyBool(service, "authEnabled") { authEnabled = it }
-        if (allowSecrets) applyStr(service, "accessToken") { accessToken = it }
+        if (allowSecurityFields) applyStr(service, "bindHost") { bindHost = it }
+        if (allowSecurityFields) applyBool(service, "authEnabled") { authEnabled = it }
+        if (allowSecrets && allowSecurityFields) applyStr(service, "accessToken") { accessToken = it }
         applyStr(service, "defaultWorkDirPath") { defaultWorkDirPath = it }
         applyBool(service, "useDefaultWorkDir") { useDefaultWorkDir = it }
         applyBool(service, "floatingEnabled") { floatingEnabled = it }
@@ -714,7 +714,7 @@ class SettingsStore(context: Context) {
         applyStr(tunnel, "tunnelMode") { tunnelMode = it }
         applyBool(tunnel, "tunnelAutoStart") { tunnelAutoStart = it }
         applyInt(tunnel, "tunnelTargetPort") { tunnelTargetPort = it }
-        if (allowSecrets) applyStr(tunnel, "tunnelNamedToken") { tunnelNamedToken = it }
+        if (allowSecrets && allowSecurityFields) applyStr(tunnel, "tunnelNamedToken") { tunnelNamedToken = it }
         applyStr(tunnel, "tunnelProtocol") { tunnelProtocol = it }
         applyStr(tunnel, "tunnelEdgeIpVersion") { tunnelEdgeIpVersion = it }
         applyBool(tunnel, "tunnelReconnect") { tunnelReconnect = it }
@@ -757,9 +757,9 @@ class SettingsStore(context: Context) {
                 "textScale" -> { textScale = patch.optString(key); touch(key) }
                 "predictiveBackEnabled" -> { predictiveBackEnabled = patch.optBoolean(key); touch(key) }
                 "port" -> { port = patch.optInt(key); touch(key) }
-                "bindHost" -> { bindHost = patch.optString(key); touch(key) }
-                "authEnabled" -> { authEnabled = patch.optBoolean(key); touch(key) }
-                "accessToken" -> if (allowSecrets) { accessToken = patch.optString(key); touch(key) }
+                "bindHost" -> if (allowSecurityFields) { bindHost = patch.optString(key); touch(key) }
+                "authEnabled" -> if (allowSecurityFields) { authEnabled = patch.optBoolean(key); touch(key) }
+                "accessToken" -> if (allowSecrets && allowSecurityFields) { accessToken = patch.optString(key); touch(key) }
                 "floatingEnabled" -> { floatingEnabled = patch.optBoolean(key); touch(key) }
                 "wakeLockEnabled" -> { wakeLockEnabled = patch.optBoolean(key); touch(key) }
                 "bootAutoStart" -> { bootAutoStart = patch.optBoolean(key); touch(key) }
@@ -774,7 +774,7 @@ class SettingsStore(context: Context) {
                 "tunnelMode" -> { tunnelMode = patch.optString(key); touch(key) }
                 "tunnelAutoStart" -> { tunnelAutoStart = patch.optBoolean(key); touch(key) }
                 "tunnelTargetPort" -> { tunnelTargetPort = patch.optInt(key); touch(key) }
-                "tunnelNamedToken" -> if (allowSecrets) { tunnelNamedToken = patch.optString(key); touch(key) }
+                "tunnelNamedToken" -> if (allowSecrets && allowSecurityFields) { tunnelNamedToken = patch.optString(key); touch(key) }
                 "tunnelProtocol" -> { tunnelProtocol = patch.optString(key); touch(key) }
                 "apkMcpUrl" -> { apkMcpUrl = patch.optString(key); touch(key) }
                 "apkMcpToken" -> if (allowSecrets) { apkMcpToken = patch.optString(key); touch(key) }

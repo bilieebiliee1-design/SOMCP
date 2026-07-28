@@ -63,15 +63,23 @@ if(EXISTS "${LIEF_LIB}")
 endif()
 
 # Source files: always include rizin_core.cpp (or stub), plus lief_elf.cpp if LIEF is available.
+# REQUIRE_NATIVE_BACKENDS (default OFF for local dev) turns a missing real
+# backend into a hard build failure, so release/CI builds can never ship an
+# APK that silently degraded to an empty stub .so.
+option(REQUIRE_NATIVE_BACKENDS "Fail the build if Rizin/LIEF backends are unavailable" OFF)
 set(RZ_SOURCES "")
 if(RIZIN_AVAILABLE)
     list(APPEND RZ_SOURCES rizin_core.cpp)
+elseif(REQUIRE_NATIVE_BACKENDS)
+    message(FATAL_ERROR "Rizin backend not found for ABI ${ANDROID_ABI} but REQUIRE_NATIVE_BACKENDS=ON. Refusing to ship a stub librz_native.so.")
 else()
     list(APPEND RZ_SOURCES rizin_stub.cpp)
 endif()
 
 if(LIEF_AVAILABLE)
     list(APPEND RZ_SOURCES lief_elf.cpp)
+elseif(REQUIRE_NATIVE_BACKENDS)
+    message(FATAL_ERROR "LIEF backend not found for ABI ${ANDROID_ABI} but REQUIRE_NATIVE_BACKENDS=ON. Refusing to ship without LIEF.")
 endif()
 
 add_library(rz_native SHARED ${RZ_SOURCES})

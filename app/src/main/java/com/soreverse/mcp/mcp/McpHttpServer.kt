@@ -407,10 +407,13 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             sysStatusHook = { probe -> sysStatus(probe) },
             tunnelStatusHook = { ok(tunnel.snapshotJson()) },
             tunnelStatsHook = { reset -> if (reset) tunnel.resetTunnelStats(); ok(tunnel.tunnelStats()) },
-            tunnelStartHook = { mode, port, token ->
+            tunnelStartHook = { mode, port, token, publicUrl ->
                 val resolvedMode = if (mode == "named") CloudflareTunnelManager.Mode.NAMED else CloudflareTunnelManager.Mode.QUICK
                 val targetPort = if (port > 0) port else settings.tunnelTargetPort
                 val tok = if (token.isNotBlank()) token else settings.tunnelNamedToken
+                if (resolvedMode == CloudflareTunnelManager.Mode.NAMED && !publicUrl.isNullOrBlank()) {
+                    settings.tunnelNamedPublicUrl = publicUrl
+                }
                 val ts = tunnel.start(targetPort, resolvedMode, tok)
                 ok(tunnel.snapshotJson().put("message", ts.message).put("publicUrl", ts.publicUrl ?: JSONObject.NULL))
             },
@@ -455,12 +458,15 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val settings = SettingsStore(context)
         if (!settings.authEnabled) return true
         val token = settings.accessToken
-        if (token.isBlank()) return true
+        // Fail closed: auth is enabled but no token is configured -> reject rather than allow.
+        if (token.isBlank()) return false
         val auth = request.header("Authorization").orEmpty()
         val bearer = auth.removePrefix("Bearer").trim()
         val queryToken = request.uri.substringAfter("token=", "").substringBefore('&')
-        return bearer == token || queryToken == token
+        return constantTimeEquals(bearer, token) || constantTimeEquals(queryToken, token)
     }
+
+    private fun constantTimeEquals(candidate: String, secret: String): Boolean = tokenConstantTimeEquals(candidate, secret)
 
     private fun authError(): JSONObject =
         JSONObject().put("jsonrpc", "2.0").put("id", JSONObject.NULL).put("error", JSONObject().put("code", -32001).put("message", "Unauthorized: missing or invalid SOMCP token"))
@@ -751,4 +757,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         }
         return out
     }
+}
+
+// Constant-time token comparison, extracted as a pure function so it is unit
+// testable. Uses MessageDigest.isEqual which does not short-circuit on the
+// first differing byte, preventing timing side-channels on the access token.
+internal fun tokenConstantTimeEquals(candidate: String, secret: String): Boolean {
+    if (candidate.isEmpty() || secret.isEmpty()) return false
+    return java.security.MessageDigest.isEqual(candidate.toByteArray(Charsets.UTF_8), secret.toByteArray(Charsets.UTF_8))
 }
