@@ -828,13 +828,14 @@ object ToolCatalog {
             "action".oneOf("status | tunnel_start | tunnel_stop | tunnel_status | tunnel_stats | apk_status | apk_probe | apk_ping", "status", "tunnel_start", "tunnel_stop", "tunnel_status", "tunnel_stats", "apk_status", "apk_probe", "apk_ping")
             "mode".oneOf("Tunnel mode: quick | named (tunnel_start)", "quick", "named")
             "targetPort" int "Tunnel target port (tunnel_start)"
+            "publicUrl" str "Named tunnel public HTTPS hostname/URL to display and persist (tunnel_start)"
             "probe" bool "Force re-probe (apk_status/status)"
         }) }
         override fun handle(ctx: ToolContext, args: JSONObject): JSONObject {
             val hooked = ctx as? HookedContext ?: return JSONObject().put("error", "System hooks not available")
             return when (args.str("action", "status")) {
                 "status" -> hooked.sysStatusHook(args.bool("probe", false))
-                "tunnel_start" -> hooked.tunnelStartHook(args.str("mode", "quick"), args.intValue("targetPort", 0), "")
+                "tunnel_start" -> hooked.tunnelStartHook(args.str("mode", "quick"), args.intValue("targetPort", 0), "", args.optString("publicUrl").takeIf { it.isNotBlank() })
                 "tunnel_stop" -> hooked.tunnelStopHook()
                 "tunnel_status" -> hooked.tunnelStatusHook()
                 "tunnel_stats" -> hooked.tunnelStatsHook(args.bool("probe", false))
@@ -891,7 +892,7 @@ object ToolCatalog {
                         }
                         else -> args
                     }
-                    settings.applyPatch(patch, allowSecrets = args.bool("allowSecrets", true))
+                    settings.applyPatch(patch, allowSecrets = args.bool("allowSecrets", true), allowSecurityFields = false)
                 }
                 else -> ok(settings.snapshot(maskSecrets = args.bool("maskSecrets", true)))
             }

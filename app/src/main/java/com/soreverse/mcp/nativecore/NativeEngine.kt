@@ -24,8 +24,15 @@ import java.io.File
  *    the backend is selected as active.
  *
  * Backend: [RizinNativeEngine] — Rizin (librz_asm/librz_analysis/librz_bin)
- * via JNI, statically linked into librz_native.so. Capstone/Keystone have been
- * fully removed from the project.
+ * via JNI, statically linked into librz_native.so, powers this interface's
+ * disassemble/assemble path.
+ *
+ * NOTE: Capstone and Keystone are NOT part of this NativeEngine backend, but
+ * they are still shipped and REQUIRED by the Unidbg emulation path
+ * ([com.soreverse.mcp.engine.UnidbgEmulator], which loads and self-tests
+ * libcapstone.so / libkeystone.so / libunicorn.so). Do not remove those
+ * native libraries on the assumption that "the engine dropped Capstone" —
+ * the emulator still hard-depends on them.
  */
 interface NativeEngine {
     val backendName: String
@@ -97,8 +104,9 @@ interface NativeEngine {
 
 /**
  * Rizin backend (librz_arch/librz_analysis/librz_asm/librz_bin) exposed through
- * a dedicated JNI surface in librz_native.so. This is the sole native backend
- * now that Capstone/Keystone have been removed.
+ * a dedicated JNI surface in librz_native.so. This is the sole NativeEngine
+ * disasm/asm backend; Capstone/Keystone are not used here (though they remain
+ * shipped for the Unidbg emulation path).
  *
  * librz_native.so is built by CMake from rizin_core.cpp and statically links
  * the Rizin archives produced by the meson cross-compile (see
