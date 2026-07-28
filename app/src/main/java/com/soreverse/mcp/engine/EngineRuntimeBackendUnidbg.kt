@@ -7,6 +7,12 @@ import org.json.JSONObject
 import java.util.UUID
 
 internal fun EngineRuntime.unidbgDispatch(workspaceId: String, editSessionId: String = "", op: String, method: String = "", args: JSONArray = JSONArray()): JSONObject = guarded {
+    if (op.startsWith("session_") && op !in setOf("session_open", "session_list", "session_close")) {
+        val live = emulatorSessions[args.optString(0)]?.live
+        if (live != null && live.closed.get()) {
+            return@guarded err("SESSION_CLOSED", "Emulator session has been closed", "emulatorSessionId", args.optString(0))
+        }
+    }
     return@guarded when (op) {
         "status", "roots" -> ok(emulationStatus().put("roots", JSONArray(listOf("emulator", "memory", "vm", "module", "symbols", "jni", "framework", "hooks", "environment", "debugger"))))
         "methods" -> ok(JSONObject().put("methods", JSONArray(listOf("session_open", "session_list", "session_close", "session_call", "session_call_address", "session_dump", "session_memory_maps", "session_registers", "session_modules", "session_exports", "session_trace_code", "session_breakpoint_add", "session_memory_write", "session_memory_map", "session_memory_protect", "session_memory_unmap", "native_schemas", "native_tool", "call", "dump", "modules", "exports", "imports", "reflect", "framework_matrix", "stub_template", "hook_template", "env_template"))).put("roots", JSONArray(listOf("emulator", "memory", "vm", "module", "symbols", "jni", "framework", "hooks", "environment", "debugger"))))

@@ -129,5 +129,7 @@ object IntegrityGuard {
         }
     }
 
-    private fun String.normalizeDigest(): String = filter { it.isLetterOrDigit() }.uppercase()
+    private fun String.normalizeDigest(): String = normalizeSignerDigest(this)
 }
+
+internal fun normalizeSignerDigest(value: String): String = value.filter { it.isLetterOrDigit() }.uppercase()

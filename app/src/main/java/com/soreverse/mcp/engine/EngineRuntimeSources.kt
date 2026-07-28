@@ -96,6 +96,9 @@ internal fun EngineRuntime.open(path: String, temporary: Boolean): JSONObject = 
 internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSONObject = guarded {
     if (path.isBlank()) return@guarded err("INVALID_ARGUMENT", "APK path is required", "path", path)
     val local = File(path)
+    if (local.isFile && !isAllowedLocalInput(local)) {
+        return@guarded err("PATH_NOT_ALLOWED", "Local APK path must be inside the app's private/external files directory or the selected work directory", "path", path)
+    }
     if (local.isFile && local.length() > ApkAnalyzer.MAX_INPUT_BYTES) return@guarded err("APK_LIMIT_EXCEEDED", "APK exceeds ${ApkAnalyzer.MAX_INPUT_BYTES / 1024 / 1024} MiB input limit", "path", path)
     val bytes = try {
         if (local.isFile) local.readBytes() else (workDir ?: return@guarded err("WORK_DIRECTORY_NOT_SELECTED", "APK path is not a local file and no work directory is selected", "path", path)).readFile(path, ApkAnalyzer.MAX_INPUT_BYTES)
@@ -114,6 +117,11 @@ internal fun EngineRuntime.openUrl(url: String, outputName: String = "", tempora
     val dir = workDir ?: return@guarded err("WORK_DIRECTORY_NOT_SELECTED", "A work directory must be selected before downloading a SO URL")
     val parsed = runCatching { URL(url.trim()) }.getOrNull() ?: return@guarded err("INVALID_ARGUMENT", "url must be a valid http(s) URL", "url", url)
     if (parsed.protocol !in setOf("http", "https")) return@guarded err("UNSUPPORTED_URL_SCHEME", "Only http and https URLs are supported", "url", url)
+    runCatching { java.net.InetAddress.getAllByName(parsed.host) }.getOrNull()?.let { addresses ->
+        if (addresses.any { it.isLoopbackAddress || it.isAnyLocalAddress || it.isLinkLocalAddress || it.isSiteLocalAddress || it.isMulticastAddress }) {
+            return@guarded err("URL_HOST_NOT_ALLOWED", "Refusing to download from a private, loopback, or link-local address", "url", url)
+        }
+    }
     val timeout = SettingsStore(context).requestTimeoutMs
     val conn = (parsed.openConnection() as HttpURLConnection).apply { connectTimeout = timeout.coerceAtMost(30_000); readTimeout = timeout; instanceFollowRedirects = true; requestMethod = "GET" }
     val status = conn.responseCode
@@ -163,7 +171,18 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     val archiveEntry = path.substringAfterLast('!', "")
     if (archiveEntry.isNotBlank() && !archiveEntry.endsWith(".so", ignoreCase = true)) error("NOT_ELF_INPUT: $path is an APK/JAR entry, not an ELF SO file. Use apk_analyze or an APK MCP tool.")
     val keyFallback = "local:$path"
-    val src = findSource(path) ?: resolveLocalSoSource(path) ?: error("SO path not found: $path")
+    val src = findSource(path) ?: resolveLocalSoSource(path) ?: run {
+        val trimmed = path.trim()
+        val absolute = trimmed.startsWith("/")
+        val root = workDir?.rootAbsolutePath()
+        if (workDir == null && absolute) {
+            error("WORK_DIRECTORY_NOT_SELECTED: No work directory selected. Select the containing directory with the work-directory picker, then pass the path returned by so_open action=list or the same absolute path: $trimmed")
+        }
+        if (absolute && root != null && !trimmed.isSameOrChildOf(root)) {
+            error("PATH_OUTSIDE_WORK_DIRECTORY: '$trimmed' is outside the selected work directory root '$root'. Pick the containing directory or an ancestor with the work-directory picker.")
+        }
+        error("SO path not found: $path")
+    }
     val key = sourceKey(src).ifBlank { keyFallback }
     workspaceBySourceKey[key]?.let { existingId -> workspaces[existingId]?.let { return it } }
     val original = when (src.source) { "build_output", "local_file" -> runCatching { File(src.path).readBytes() }.getOrElse { error("SO path not found: $path") }; else -> (workDir ?: error("No work directory selected")).readSource(src) }
@@ -190,6 +209,14 @@ internal fun EngineRuntime.prepareAnalysisInput(original: ByteArray): Triple<Byt
     return Triple(recovered, "xanso_recovered_sections", facts)
 }
 
+internal fun EngineRuntime.isAllowedLocalInput(file: File): Boolean {
+    val extDir = context.getExternalFilesDir(null)?.canonicalPath
+    val intDir = runCatching { context.filesDir.canonicalPath }.getOrNull()
+    val cacheDir = runCatching { context.cacheDir.canonicalPath }.getOrNull()
+    val canonical = runCatching { file.canonicalPath }.getOrNull() ?: return false
+    return listOfNotNull(extDir, intDir, cacheDir).any { canonical.startsWith(it) }
+}
+
 internal fun EngineRuntime.resolveLocalSoSource(rawPath: String): SoSource? {
     if (rawPath.isBlank()) return null
     val file = File(rawPath)
@@ -203,15 +230,25 @@ internal fun EngineRuntime.resolveLocalSoSource(rawPath: String): SoSource? {
 
 internal fun EngineRuntime.findSource(rawPath: String): SoSource? {
     if (rawPath.isBlank()) return null
-    val path = rawPath.trim().removePrefix("/")
+    val trimmed = rawPath.trim()
+    val path = trimmed.removePrefix("/")
     workDir?.let { ensureSources(it) }
-    val apkUri = rawPath.trim().removePrefix("content://apk/")
-    if (apkUri != rawPath.trim() && apkUri.isNotBlank()) {
+    val apkUri = trimmed.removePrefix("content://apk/")
+    if (apkUri != trimmed && apkUri.isNotBlank()) {
         val separator = apkUri.indexOf('/')
         if (separator > 0) sources.firstOrNull { it.source == "apk" && it.apkPath?.substringAfterLast('/') == apkUri.substring(0, separator) && it.apkEntry == apkUri.substring(separator + 1) }?.let { return it }
     }
-    return sources.firstOrNull { it.path == rawPath || it.path == path } ?: sources.firstOrNull { it.name == rawPath || it.name == path } ?: sources.firstOrNull { it.apkEntry == rawPath || it.apkEntry == path } ?: sources.firstOrNull { it.path.endsWith("/$path") || it.path.contains(path) }
+    val candidates = mutableListOf(trimmed, path)
+    workDir?.rootAbsolutePath()?.let { root ->
+        if (trimmed.isSameOrChildOf(root)) candidates += trimmed.drop(root.length).removePrefix("/")
+    }
+    candidates.distinct().forEach { candidate ->
+        sources.firstOrNull { it.path == candidate || it.name == candidate || it.apkEntry == candidate }?.let { return it }
+    }
+    return sources.firstOrNull { it.path.endsWith("/$path") }
 }
+
+private fun String.isSameOrChildOf(root: String): Boolean = this == root || this.startsWith(root.trimEnd('/') + "/")
 
 internal fun EngineRuntime.ensureSources(dir: WorkDirectory): List<SoSource> {
     val settings = SettingsStore(context)
