@@ -3,6 +3,7 @@ package com.soreverse.mcp.engine
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 
 data class Workspace(
     val id: String,
@@ -40,7 +41,10 @@ data class EditSession(
     val patches: MutableList<PatchRecord> = mutableListOf(),
     val snapshots: MutableList<Snapshot> = mutableListOf(),
     val undone: MutableList<PatchRecord> = mutableListOf(),
-)
+) {
+    @Transient
+    val lock: ReentrantLock = ReentrantLock()
+}
 
 internal data class EmulatorSession(
     val id: String,

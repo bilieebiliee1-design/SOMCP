@@ -125,6 +125,7 @@ class UnidbgEmulator(private val context: Context) {
         val objects: MutableMap<String, Any> = LinkedHashMap(),
         val traceHooks: MutableMap<String, Any> = LinkedHashMap(),
         val traceEvents: MutableList<JSONObject> = ArrayList(),
+        val closed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
     )
 
     fun available(): Boolean = runCatching {
@@ -248,6 +249,7 @@ class UnidbgEmulator(private val context: Context) {
 
     fun closeSession(live: LiveSession) {
         synchronized(live.lock) {
+            if (!live.closed.compareAndSet(false, true)) return
             runCatching { live.emulator.javaClass.getMethod("close").invoke(live.emulator) }
             runCatching { live.path.delete() }
         }
@@ -256,6 +258,7 @@ class UnidbgEmulator(private val context: Context) {
     fun sessionCall(live: LiveSession, symbolName: String, argsJson: JSONArray, enableTrace: Boolean): JSONObject = runCatching {
         val result = JSONObject()
         synchronized(live.lock) {
+            if (live.closed.get()) return@runCatching JSONObject().put("ok", false).put("error", JSONObject().put("code", "SESSION_CLOSED").put("message", "Emulator session has been closed"))
             runCatching { doLiveCall(live, symbolName, argsJson, enableTrace, result) }
                 .onFailure { e ->
                     val root = rootCause(e)
@@ -274,6 +277,7 @@ class UnidbgEmulator(private val context: Context) {
     fun sessionDump(live: LiveSession, addr: Long, size: Int): JSONObject = runCatching {
         val result = JSONObject()
         synchronized(live.lock) {
+            if (live.closed.get()) return@runCatching JSONObject().put("ok", false).put("error", JSONObject().put("code", "SESSION_CLOSED").put("message", "Emulator session has been closed"))
             runCatching { readLiveMemory(live, addr, size, result) }
                 .onFailure { e ->
                     val root = rootCause(e)
@@ -383,6 +387,7 @@ class UnidbgEmulator(private val context: Context) {
 
     fun sessionCallAddress(live: LiveSession, address: Long, argsJson: JSONArray): JSONObject = runCatching {
         synchronized(live.lock) {
+            if (live.closed.get()) return@runCatching JSONObject().put("ok", false).put("error", JSONObject().put("code", "SESSION_CLOSED").put("message", "Emulator session has been closed"))
             val moduleClass = Class.forName("com.github.unidbg.Module")
             val emulateFunction = moduleClass.getMethod("emulateFunction", Class.forName("com.github.unidbg.Emulator"), Long::class.javaPrimitiveType, Array<Any>::class.java)
             val ret = emulateFunction.invoke(null, live.emulator, address, toArgList(argsJson).toTypedArray())

@@ -178,13 +178,13 @@ class GitHubUpdateManager(private val context: Context) {
                 require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
                 emit(UpdateDownloadEvent.Verifying)
                 val checksumUrl = requireNotNull(release.checksumUrl) { "Release checksum is required" }
-                verifyChecksum(partial, checksumUrl, target.name)
+                val verifiedHash = verifyChecksum(partial, checksumUrl, target.name)
                 runCatching {
                     Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
                 }.getOrElse {
                     Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
                 }
-                verified.writeText(verificationMarker(release))
+                verified.writeText(verifiedHash)
                 Result.success(target)
             } catch (error: CancellationException) {
                 throw error
@@ -198,13 +198,11 @@ class GitHubUpdateManager(private val context: Context) {
         val file = File(File(context.cacheDir, "updates"), release.apkName.substringAfterLast('/'))
         val verified = File(file.parentFile, "${file.name}.verified")
         if (!file.isFile || file.length() <= 4) return null
-        val valid = runCatching { file.inputStream().use { input ->
-            val header = ByteArray(4)
-            input.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
-        } }.getOrDefault(false)
+        val expectedHash = verified.readTextOrNull()?.trim()?.lowercase()?.takeIf { it.matches(Regex("[a-f0-9]{64}")) } ?: return null
+        // Re-hash the actual bytes: a predictable marker alone must never be trusted.
+        val actualHash = runCatching { fileSha256(file) }.getOrNull() ?: return null
         return file.takeIf {
-            valid && verified.readTextOrNull() == verificationMarker(release) &&
-                (release.apkSize <= 0 || it.length() == release.apkSize)
+            actualHash == expectedHash && (release.apkSize <= 0 || it.length() == release.apkSize)
         }
     }
 
@@ -290,7 +288,7 @@ class GitHubUpdateManager(private val context: Context) {
         return false
     }
 
-    private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name) {
+    private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
         var expected: String? = null
         var lastFailure: Throwable? = null
         for (candidate in rankedDownloadUrls(url) {}) {
@@ -312,22 +310,23 @@ class GitHubUpdateManager(private val context: Context) {
             }
         }
         requireNotNull(expected) { lastFailure?.message ?: "All checksum mirrors failed" }
+        val actual = fileSha256(file)
+        require(actual.equals(expected, true)) { "APK SHA-256 verification failed" }
+        return actual.lowercase()
+    }
+
+    private fun fileSha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             while (true) {
-                currentCoroutineContext().ensureActive()
                 val count = input.read(buffer)
                 if (count < 0) break
                 digest.update(buffer, 0, count)
             }
         }
-        val actual = digest.digest().joinToString("") { "%02x".format(it) }
-        require(actual.equals(expected, true)) { "APK SHA-256 verification failed" }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
-
-    private fun verificationMarker(release: GitHubRelease): String =
-        listOf(release.tag, release.apkName.substringAfterLast('/'), release.apkSize, release.checksumUrl.orEmpty()).joinToString("\n")
 
     private fun File.readTextOrNull(): String? = runCatching { takeIf(File::isFile)?.readText() }.getOrNull()
 
