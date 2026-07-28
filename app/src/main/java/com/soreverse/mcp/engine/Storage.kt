@@ -106,7 +106,7 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
 
     fun readSource(source: SoSource): ByteArray {
         return if (source.source == "apk") {
-            val heapBudget = (Runtime.getRuntime().maxMemory() / 8L).coerceIn(8L * 1024 * 1024, 64L * 1024 * 1024)
+            val heapBudget = (Runtime.getRuntime().maxMemory() / 8L).coerceIn(8L * 1024L * 1024, 64L * 1024L * 1024)
             val declaredLimit = source.size.takeIf { it > 0 }?.plus(1L) ?: heapBudget
             extractZipEntry(
                 source.treeDocumentUri ?: error("Missing APK document uri"),
@@ -144,6 +144,8 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
         }
         return DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
     }
+
+    fun rootAbsolutePath(): String = displayPath(treeUri)
 
     fun isAccessible(): Boolean = runCatching {
         val doc = documentUriForTree()
