@@ -82,6 +82,13 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             if (tunnelStatus?.message?.isNotBlank() == true) {
                 Text(tunnelStatus!!.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
             }
+            if (tunnelStatus?.mode == CloudflareTunnelManager.Mode.NAMED && tunnelStatus?.state == CloudflareTunnelManager.State.RUNNING && tunnelStatus?.publicUrl.isNullOrBlank()) {
+                Text(if (t.zh) "永久隧道已连接，但需要在下方填写 Cloudflare 已发布应用的公网主机名/URL 才能显示可复制地址。" else "Named tunnel is connected, but enter the Cloudflare published application hostname/URL below to display a copyable public address.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
+            }
+            if (settings.authEnabled && settings.accessToken.isNotBlank()) {
+                GroupDivider()
+                NavRow(if (t.zh) "复制当前访问 Token" else "Copy current access token", if (t.zh) "公网隧道必须携带 token 访问 /mcp" else "Public tunnel access must include this token for /mcp", Icons.Default.Link, onClick = { copy(context, settings.accessToken, t.copied) })
+            }
             tunnelStatus?.publicUrl?.takeIf { it.isNotBlank() }?.let { url ->
                 GroupDivider()
                 NavRow(url, if (t.zh) "点击复制公网地址" else "Tap to copy public URL", Icons.Default.Public, onClick = { copy(context, url, t.copied) })
@@ -92,7 +99,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                 }
             }
         }
-        GlassGroup(title = if (t.zh) "模式" else "Mode", footer = if (t.zh) "临时隧道无需账号，URL 重启变化；永久隧道需 Cloudflare Tunnel token。" else "Quick tunnel needs no account; named tunnel needs a Cloudflare token.") {
+        GlassGroup(title = if (t.zh) "模式" else "Mode", footer = if (t.zh) "临时隧道无需账号，URL 重启变化；永久隧道需 Cloudflare Tunnel token，并需在 Cloudflare 后台把公网域名路由到本机 MCP 端口。" else "Quick tunnel needs no account; named tunnel needs a Cloudflare token and a Cloudflare published application route to the local MCP port.") {
             ChipRow(
                 listOf("off" to if (t.zh) "关闭" else "Off", "quick" to if (t.zh) "临时隧道" else "Quick", "named" to if (t.zh) "永久隧道" else "Named"),
                 tunnelMode,
@@ -102,6 +109,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     value = namedToken,
                     onValueChange = { namedToken = it; settings.tunnelNamedToken = it },
                     label = { Text(if (t.zh) "Tunnel token" else "Tunnel token") },
+                    supportingText = { Text(if (t.zh) "从 Cloudflare Tunnel 安装命令中复制 --token 后面的完整值。" else "Copy the full value after --token from the Cloudflare Tunnel install command.") },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -116,7 +124,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     value = namedPublicUrl,
                     onValueChange = { namedPublicUrl = it; settings.tunnelNamedPublicUrl = it },
                     label = { Text(if (t.zh) "公网主机名或 URL" else "Public hostname or URL") },
-                    supportingText = { Text(if (t.zh) "例如 mcp.example.com；一个隧道有多个域名时填写要展示的地址" else "For example mcp.example.com; choose the address to display when the tunnel has multiple hostnames") },
+                    supportingText = { Text(if (t.zh) "例如 mcp.example.com；必须先在 Cloudflare Tunnel Routes/Published application 中映射到 http://localhost:${settings.tunnelTargetPort}" else "For example mcp.example.com; first map it in Cloudflare Tunnel Routes/Published application to http://localhost:${settings.tunnelTargetPort}") },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -165,6 +173,10 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     val tunnel = activeTunnel(context)
                     if (tunnel == null) {
                         Toast.makeText(context, if (t.zh) "请先启动 MCP 服务器总开关" else "Turn on the MCP server master switch first", Toast.LENGTH_SHORT).show()
+                    } else if (!settings.authEnabled || settings.accessToken.isBlank()) {
+                        Toast.makeText(context, if (t.zh) "请先启用 MCP Token 并设置访问 Token，公网隧道不会无认证启动" else "Enable MCP token auth and set an access token before exposing a public tunnel", Toast.LENGTH_LONG).show()
+                    } else if (mode == CloudflareTunnelManager.Mode.NAMED && namedPublicUrl.isBlank()) {
+                        Toast.makeText(context, if (t.zh) "建议先填写 Cloudflare 公网主机名/URL，否则连接成功后不会显示公网地址" else "Enter the Cloudflare public hostname/URL first; otherwise the public address cannot be displayed", Toast.LENGTH_LONG).show()
                     } else {
                         scope.launch {
                             withContext(Dispatchers.IO) { tunnel.start(settings.tunnelTargetPort, mode, namedToken) }
