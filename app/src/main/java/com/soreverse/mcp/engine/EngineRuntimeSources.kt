@@ -163,7 +163,20 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     val archiveEntry = path.substringAfterLast('!', "")
     if (archiveEntry.isNotBlank() && !archiveEntry.endsWith(".so", ignoreCase = true)) error("NOT_ELF_INPUT: $path is an APK/JAR entry, not an ELF SO file. Use apk_analyze or an APK MCP tool.")
     val keyFallback = "local:$path"
-    val src = findSource(path) ?: resolveLocalSoSource(path) ?: error("SO path not found: $path")
+    val src = findSource(path) ?: resolveLocalSoSource(path)
+    if (src == null) {
+        // Provide an actionable error instead of a bare "SO path not found".
+        val trimmed = path.trim()
+        val isAbsolute = trimmed.startsWith("/")
+        if (workDir == null) {
+            if (isAbsolute) error("WORK_DIRECTORY_NOT_SELECTED: No work directory selected. The path '$trimmed' is an absolute filesystem path, but this app can only read files through a Storage Access Framework tree you picked. Select the containing directory (or an ancestor such as /storage/emulated/0) via the work-directory picker, then pass the path as returned by so_open action=list (or the same absolute path).")
+            error("SO path not found: $path")
+        }
+        workDir?.rootAbsolutePath()?.let { root ->
+            if (isAbsolute && !trimmed.startsWith(root)) error("PATH_OUTSIDE_WORK_DIRECTORY: '$trimmed' is outside the selected work directory root '$root'. Pick the containing directory (or an ancestor) via the work-directory picker so the app can reach it through SAF.")
+        }
+        error("SO path not found: $path")
+    }
     val key = sourceKey(src).ifBlank { keyFallback }
     workspaceBySourceKey[key]?.let { existingId -> workspaces[existingId]?.let { return it } }
     val original = when (src.source) { "build_output", "local_file" -> runCatching { File(src.path).readBytes() }.getOrElse { error("SO path not found: $path") }; else -> (workDir ?: error("No work directory selected")).readSource(src) }
@@ -203,14 +216,29 @@ internal fun EngineRuntime.resolveLocalSoSource(rawPath: String): SoSource? {
 
 internal fun EngineRuntime.findSource(rawPath: String): SoSource? {
     if (rawPath.isBlank()) return null
-    val path = rawPath.trim().removePrefix("/")
+    val trimmed = rawPath.trim()
     workDir?.let { ensureSources(it) }
-    val apkUri = rawPath.trim().removePrefix("content://apk/")
-    if (apkUri != rawPath.trim() && apkUri.isNotBlank()) {
+    val apkUri = trimmed.removePrefix("content://apk/")
+    if (apkUri != trimmed && apkUri.isNotBlank()) {
         val separator = apkUri.indexOf('/')
         if (separator > 0) sources.firstOrNull { it.source == "apk" && it.apkPath?.substringAfterLast('/') == apkUri.substring(0, separator) && it.apkEntry == apkUri.substring(separator + 1) }?.let { return it }
     }
-    return sources.firstOrNull { it.path == rawPath || it.path == path } ?: sources.firstOrNull { it.name == rawPath || it.name == path } ?: sources.firstOrNull { it.apkEntry == rawPath || it.apkEntry == path } ?: sources.firstOrNull { it.path.endsWith("/$path") || it.path.contains(path) }
+    // Build the list of candidate paths to match against the scanned sources.
+    // Besides the raw path and its leading-slash-stripped form, also try the
+    // relative path obtained by stripping the selected SAF work directory's
+    // absolute root. This lets callers pass an absolute path such as
+    // /storage/emulated/0/火车/libcocos2dcpp.so while the scanned source path
+    // is the SAF-relative "火车/libcocos2dcpp.so".
+    val noSlash = trimmed.removePrefix("/")
+    val candidates = mutableListOf(trimmed, noSlash)
+    workDir?.rootAbsolutePath()?.let { root ->
+        if (trimmed.startsWith(root + "/")) candidates += trimmed.drop(root.length + 1)
+        else if (trimmed.startsWith(root)) candidates += trimmed.drop(root.length).removePrefix("/")
+    }
+    for (c in candidates.distinct()) {
+        sources.firstOrNull { it.path == c || it.name == c || it.apkEntry == c }?.let { return it }
+    }
+    return sources.firstOrNull { it.path.endsWith("/$noSlash") || it.path.contains(noSlash) }
 }
 
 internal fun EngineRuntime.ensureSources(dir: WorkDirectory): List<SoSource> {

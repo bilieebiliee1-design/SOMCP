@@ -35,6 +35,8 @@ internal class EngineRuntime(internal val context: Context) {
         when {
             message.startsWith("Workspace not found") && message.substringAfterLast(": ", "").isBlank() -> err("WORKSPACE_REQUIRED", "No workspaceId was provided. Call so_open first and use its returned workspaceId.", "workspaceId", "")
             message.startsWith("Workspace not found") -> err("WORKSPACE_NOT_FOUND", "$message. Call so_open again and use its returned workspaceId.", "workspaceId", message.substringAfterLast(": ", ""))
+            message.startsWith("WORK_DIRECTORY_NOT_SELECTED") -> err("WORK_DIRECTORY_NOT_SELECTED", message, "path", message.substringAfter(": ", ""))
+            message.startsWith("PATH_OUTSIDE_WORK_DIRECTORY") -> err("PATH_OUTSIDE_WORK_DIRECTORY", message, "path", message.substringAfter(": ", ""))
             message.startsWith("No work directory selected") -> err("WORK_DIRECTORY_NOT_SELECTED", message)
             message.startsWith("NOT_ELF_INPUT") -> err("NOT_ELF_INPUT", message.substringAfter(": ").ifBlank { "The selected entry is not an ELF SO file." })
             message.startsWith("SO path not found") -> err("SO_NOT_FOUND", message, "path", message.substringAfter(": ", ""))
