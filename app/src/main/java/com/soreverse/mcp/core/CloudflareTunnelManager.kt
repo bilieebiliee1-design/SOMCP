@@ -136,12 +136,17 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         if (stopRequested) {
             return _status.get()
         }
-        // Security precondition: a tunnel exposes the MCP service to the public
-        // internet. Refuse to start unless authentication is enabled with a
-        // non-blank access token, so the reverse-engineering tool surface is
-        // never published without a credential.
-        if (!settings.authEnabled || settings.accessToken.isBlank()) {
-            return fail(mode, targetPort, "Refusing to start tunnel: enable authentication and set an access token first.")
+        // A tunnel exposes the MCP service to the public internet. Authentication
+        // is NOT forced by default (per the 1.0.12 UX change): if the user has
+        // enabled auth we require a non-blank token so a credentialed surface is
+        // never published tokenless; if the user has deliberately left auth off,
+        // we honour that choice and start the tunnel, logging a clear warning
+        // about the exposure instead of refusing.
+        if (settings.authEnabled && settings.accessToken.isBlank()) {
+            return fail(mode, targetPort, "Authentication is enabled but no access token is set. Set an access token or disable authentication before starting the tunnel.")
+        }
+        if (!settings.authEnabled) {
+            AppLog.w("Starting Cloudflare tunnel WITHOUT authentication: the MCP service will be reachable publicly with no token. Enable authentication in settings if this is not intended.")
         }
         // Already running on the same target with the same mode and a live
         // process — nothing to do. Avoids costly stop/restart churn from
