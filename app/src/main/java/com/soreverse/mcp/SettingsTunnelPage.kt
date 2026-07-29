@@ -173,11 +173,14 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     val tunnel = activeTunnel(context)
                     if (tunnel == null) {
                         Toast.makeText(context, if (t.zh) "请先启动 MCP 服务器总开关" else "Turn on the MCP server master switch first", Toast.LENGTH_SHORT).show()
-                    } else if (!settings.authEnabled || settings.accessToken.isBlank()) {
-                        Toast.makeText(context, if (t.zh) "请先启用 MCP Token 并设置访问 Token，公网隧道不会无认证启动" else "Enable MCP token auth and set an access token before exposing a public tunnel", Toast.LENGTH_LONG).show()
+                    } else if (settings.authEnabled && settings.accessToken.isBlank()) {
+                        Toast.makeText(context, if (t.zh) "已开启鉴权但未设置访问 Token，请先设置 Token 或关闭鉴权后再启动隧道" else "Authentication is on but no access token is set. Set a token or turn auth off before starting the tunnel", Toast.LENGTH_LONG).show()
                     } else if (mode == CloudflareTunnelManager.Mode.NAMED && namedPublicUrl.isBlank()) {
                         Toast.makeText(context, if (t.zh) "建议先填写 Cloudflare 公网主机名/URL，否则连接成功后不会显示公网地址" else "Enter the Cloudflare public hostname/URL first; otherwise the public address cannot be displayed", Toast.LENGTH_LONG).show()
                     } else {
+                        if (!settings.authEnabled) {
+                            Toast.makeText(context, if (t.zh) "提示：隧道将以无鉴权方式公开暴露 MCP 服务。如需保护请在设置中开启鉴权。" else "Note: the tunnel will expose the MCP service publicly with no authentication. Enable auth in settings to protect it.", Toast.LENGTH_LONG).show()
+                        }
                         scope.launch {
                             withContext(Dispatchers.IO) { tunnel.start(settings.tunnelTargetPort, mode, namedToken) }
                             tunnelStatus = tunnelStatusOf(context)

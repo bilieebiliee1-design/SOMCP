@@ -14,6 +14,19 @@ class SettingsStore(context: Context) {
                 .putBoolean("apkAutoProbeDefaultMigrated", true)
                 .apply()
         }
+        // One-time correction of misconfiguration introduced by the 1.0.10/1.0.11
+        // updates, which silently forced bindHost=127.0.0.1 and authEnabled=true
+        // onto existing installs and broke the LAN-link experience. Per the
+        // emergency 1.0.12 patch we reset these back to the user-friendly
+        // defaults (LAN on, no token) exactly once; users who prefer the stricter
+        // setup can re-enable it afterwards.
+        if (!prefs.getBoolean("lanDefaultsRestored_v1_0_12", false)) {
+            prefs.edit()
+                .putString("bindHost", "0.0.0.0")
+                .putBoolean("authEnabled", false)
+                .putBoolean("lanDefaultsRestored_v1_0_12", true)
+                .apply()
+        }
     }
 
     var treeUri: Uri?
@@ -44,11 +57,11 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putInt("port", value.coerceIn(1024, 65535)).apply()
 
     var bindHost: String
-        get() = prefs.getString("bindHost", "127.0.0.1") ?: "127.0.0.1"
+        get() = prefs.getString("bindHost", "0.0.0.0") ?: "0.0.0.0"
         set(value) = prefs.edit().putString("bindHost", if (value == "0.0.0.0") "0.0.0.0" else "127.0.0.1").apply()
 
     var authEnabled: Boolean
-        get() = prefs.getBoolean("authEnabled", true)
+        get() = prefs.getBoolean("authEnabled", false)
         set(value) = prefs.edit().putBoolean("authEnabled", value).apply()
 
     var accessToken: String
