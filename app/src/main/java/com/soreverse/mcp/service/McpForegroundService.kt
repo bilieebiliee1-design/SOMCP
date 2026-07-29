@@ -63,6 +63,7 @@ class McpForegroundService : Service() {
                 // collapses to zero.
                 running = false
                 runCatching { server?.tunnel?.requestStop() }
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
             ACTION_REFRESH_FLOATING -> updateFloating()
@@ -80,6 +81,7 @@ class McpForegroundService : Service() {
         // thread spawned moments before unregisterTunnelReconnect() sees the
         // guard as false and exits without re-entering tunnel.start().
         running = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
         val sv = server
         currentServer = null
         // SYNCHRONOUS teardown — DO NOT spawn a background thread.
@@ -123,6 +125,14 @@ class McpForegroundService : Service() {
         removeFloating()
         AppLog.i("Foreground service destroyed")
         super.onDestroy()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        AppLog.w("Foreground service timeout: startId=$startId type=$fgsType")
+        running = false
+        runCatching { server?.tunnel?.requestStop() }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
     }
 
     private fun startServer() {
@@ -211,7 +221,8 @@ class McpForegroundService : Service() {
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: Intent?) {
                 val state = intent?.getStringExtra("state") ?: return
-                if (state == "FAILED" && settings.tunnelAutoStart) {
+                val terminal = intent.getBooleanExtra("terminal", false)
+                if (state == "FAILED" && settings.tunnelAutoStart && !terminal) {
                     AppLog.w("Tunnel reported FAILED — scheduling reconnect")
                     Thread {
                         // Back off long enough that an in-flight onDestroy()

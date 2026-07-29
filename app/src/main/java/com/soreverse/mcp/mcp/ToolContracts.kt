@@ -111,7 +111,7 @@ class HookedContext(
     val sysStatusHook: (Boolean) -> JSONObject,
     val tunnelStatusHook: () -> JSONObject,
     val tunnelStatsHook: (Boolean) -> JSONObject,
-    val tunnelStartHook: (String, Int, String) -> JSONObject,
+    val tunnelStartHook: (String, Int, String, String?) -> JSONObject,
     val tunnelStopHook: () -> JSONObject,
     val apkStatusHook: (Boolean) -> JSONObject,
     val apkProbeHook: () -> JSONObject,

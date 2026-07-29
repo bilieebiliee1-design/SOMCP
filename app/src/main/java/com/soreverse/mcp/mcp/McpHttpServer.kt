@@ -238,6 +238,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put("_meta", JSONObject()
                     .put("builtInToolsAlwaysAdvertised", true)
                     .put("fullToolCount", ToolCatalog.ALL.size)
+                    .put("provenance", com.soreverse.mcp.core.Provenance.json())
                     .put("toolUsageGuide", toolUsageGuide())
                     .put("hint", "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to so_open + analyze_* + edit_*, NOT mt_apk_*."))
             "notifications/initialized" -> JSONObject()
@@ -343,29 +344,41 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             executeTool = ::callToolWithPolicy,
             ensureSnapshot = ::ensureBatchSnapshot,
             rollbackSnapshots = ::rollbackBatchSnapshots,
+        releaseSnapshots = ::releaseBatchSnapshots,
         ).execute(args)
     }
 
-    private fun ensureBatchSnapshot(args: JSONObject, snapshots: MutableSet<String>) {
+    private fun ensureBatchSnapshot(args: JSONObject, snapshots: MutableMap<String, String>): JSONObject? {
         val workspaceId = args.optString("workspaceId")
         val editSessionId = args.optString("editSessionId")
-        if (workspaceId.isBlank() || editSessionId.isBlank()) return
+        if (workspaceId.isBlank() || editSessionId.isBlank()) return null
         val key = "$workspaceId::$editSessionId"
-        if (!snapshots.add(key)) return
-        EngineProvider.get(context).editSnapshot(workspaceId, editSessionId, "batch-transaction-${System.currentTimeMillis()}")
+        if (snapshots.containsKey(key)) return null
+        val result = EngineProvider.get(context).editSnapshot(workspaceId, editSessionId, "batch-transaction-${System.currentTimeMillis()}")
+        if (!result.optBoolean("ok", false)) return result
+        snapshots[key] = result.getString("snapshotId")
+        return null
     }
 
-    private fun rollbackBatchSnapshots(snapshots: Set<String>): JSONArray {
+    private fun rollbackBatchSnapshots(snapshots: Map<String, String>): JSONArray {
         val out = JSONArray()
         val engine = EngineProvider.get(context)
-        for (key in snapshots.toList().asReversed()) {
+        for ((key, snapshotId) in snapshots.entries.toList().asReversed()) {
             val parts = key.split("::", limit = 2)
             val workspaceId = parts.getOrNull(0).orEmpty()
             val editSessionId = parts.getOrNull(1).orEmpty()
-            val result = engine.editRollback(workspaceId, editSessionId, -1)
+            val result = engine.editRollbackById(workspaceId, editSessionId, snapshotId)
             out.put(JSONObject().put("workspaceId", workspaceId).put("editSessionId", editSessionId).put("result", result))
         }
         return out
+    }
+
+    private fun releaseBatchSnapshots(snapshots: Map<String, String>) {
+        val engine = EngineProvider.get(context)
+        snapshots.forEach { (key, snapshotId) ->
+            val parts = key.split("::", limit = 2)
+            if (parts.size == 2) engine.editDropSnapshotById(parts[0], parts[1], snapshotId)
+        }
     }
 
     private fun callToolPayload(name: String, args: JSONObject): JSONObject {
@@ -395,10 +408,13 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             sysStatusHook = { probe -> sysStatus(probe) },
             tunnelStatusHook = { ok(tunnel.snapshotJson()) },
             tunnelStatsHook = { reset -> if (reset) tunnel.resetTunnelStats(); ok(tunnel.tunnelStats()) },
-            tunnelStartHook = { mode, port, token ->
+            tunnelStartHook = { mode, port, token, publicUrl ->
                 val resolvedMode = if (mode == "named") CloudflareTunnelManager.Mode.NAMED else CloudflareTunnelManager.Mode.QUICK
                 val targetPort = if (port > 0) port else settings.tunnelTargetPort
                 val tok = if (token.isNotBlank()) token else settings.tunnelNamedToken
+                if (resolvedMode == CloudflareTunnelManager.Mode.NAMED && !publicUrl.isNullOrBlank()) {
+                    settings.tunnelNamedPublicUrl = publicUrl
+                }
                 val ts = tunnel.start(targetPort, resolvedMode, tok)
                 ok(tunnel.snapshotJson().put("message", ts.message).put("publicUrl", ts.publicUrl ?: JSONObject.NULL))
             },
@@ -443,12 +459,15 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val settings = SettingsStore(context)
         if (!settings.authEnabled) return true
         val token = settings.accessToken
-        if (token.isBlank()) return true
+        // Fail closed: auth is enabled but no token is configured -> reject rather than allow.
+        if (token.isBlank()) return false
         val auth = request.header("Authorization").orEmpty()
         val bearer = auth.removePrefix("Bearer").trim()
         val queryToken = request.uri.substringAfter("token=", "").substringBefore('&')
-        return bearer == token || queryToken == token
+        return constantTimeEquals(bearer, token) || constantTimeEquals(queryToken, token)
     }
+
+    private fun constantTimeEquals(candidate: String, secret: String): Boolean = tokenConstantTimeEquals(candidate, secret)
 
     private fun authError(): JSONObject =
         JSONObject().put("jsonrpc", "2.0").put("id", JSONObject.NULL).put("error", JSONObject().put("code", -32001).put("message", "Unauthorized: missing or invalid SOMCP token"))
@@ -488,6 +507,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     private fun health(): JSONObject = ok(JSONObject()
         .put("status", "ok")
         .put("server", "somcp")
+        .put("provenance", com.soreverse.mcp.core.Provenance.json())
         .put("runtime", runtimeInfo())
         .put("toolCount", advertisedTools().length())
         .put("totalCatalogCount", ToolCatalog.ALL.size)
@@ -739,4 +759,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         }
         return out
     }
+}
+
+// Constant-time token comparison, extracted as a pure function so it is unit
+// testable. Uses MessageDigest.isEqual which does not short-circuit on the
+// first differing byte, preventing timing side-channels on the access token.
+internal fun tokenConstantTimeEquals(candidate: String, secret: String): Boolean {
+    if (candidate.isEmpty() || secret.isEmpty()) return false
+    return java.security.MessageDigest.isEqual(candidate.toByteArray(Charsets.UTF_8), secret.toByteArray(Charsets.UTF_8))
 }

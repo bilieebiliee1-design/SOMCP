@@ -9,12 +9,14 @@ import org.json.JSONObject
 
 
 internal fun EngineRuntime.editHex(workspaceId: String, editSessionId: String, locator: String, edits: JSONArray, dryRun: Boolean = false): JSONObject = guarded {
-        val session = workspaces[workspaceId]?.edits?.get(editSessionId) ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
+    withSession(workspaceId, editSessionId,
+        onMissingWorkspace = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") },
+        onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }) { session ->
         val settings = SettingsStore(context)
         val strict = settings.editStrictValidation
         val maxPatch = settings.maxPatchBytes
         val elf = lief.parse(session.data)
-        val sec = ElfSectionResolver.resolve(elf, locator) ?: return@guarded err("SECTION_NOT_FOUND", "Section '${LocatorParser.target(locator, "so_section")}' not found. Call analyze_elf (view=list, subView=sections) to see available sections. If names are duplicated, pass the full locator returned by analyze_elf.", "locator", locator, "availableSections" to elf.sections.mapIndexed { index, section -> EngineJson.sectionKey(section, index) })
+        val sec = ElfSectionResolver.resolve(elf, locator) ?: return@withSession err("SECTION_NOT_FOUND", "Section '${LocatorParser.target(locator, "so_section")}' not found. Call analyze_elf (view=list, subView=sections) to see available sections. If names are duplicated, pass the full locator returned by analyze_elf.", "locator", locator, "availableSections" to elf.sections.mapIndexed { index, section -> EngineJson.sectionKey(section, index) })
         val sectionName = sec.name
         val previews = JSONArray()
         val pending = mutableListOf<Pair<Int, ByteArray>>()
@@ -29,35 +31,35 @@ internal fun EngineRuntime.editHex(workspaceId: String, editSessionId: String, l
                 is JSONArray -> aliases += "rawValue" to (0 until rawValue.length()).joinToString("") { index -> "%02x".format(rawValue.optInt(index).coerceIn(0, 255)) }
             }
             val normalizedValues = aliases.map { it.second.replace(Regex("[\\s,]"), "").lowercase() }.distinct()
-            if (normalizedValues.size > 1) return@guarded err("CONFLICTING_ARGUMENTS", "Hex aliases contain different values at edit index $i", "edits[$i]", JSONObject(aliases.toMap()))
+            if (normalizedValues.size > 1) return@withSession err("CONFLICTING_ARGUMENTS", "Hex aliases contain different values at edit index $i", "edits[$i]", JSONObject(aliases.toMap()))
             val rawHex = aliases.firstOrNull()?.second.orEmpty()
             if (rawHex.isBlank()) {
-                return@guarded err("INVALID_ARGUMENT", "Missing newHex (aliases: hex/bytes/data/rawHex/rawValue) for hex edit at index $i", "edits[$i].newHex", null)
+                return@withSession err("INVALID_ARGUMENT", "Missing newHex (aliases: hex/bytes/data/rawHex/rawValue) for hex edit at index $i", "edits[$i].newHex", null)
             }
             val cleaned = rawHex.replace(" ", "").replace("\t", "").replace("\n", "").replace(",", "")
             if (cleaned.isEmpty() || cleaned.length % 2 != 0 || !cleaned.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) {
-                return@guarded err("INVALID_HEX", "newHex must be even-length hex digits, got: $rawHex", "edits[$i].newHex", rawHex)
+                return@withSession err("INVALID_HEX", "newHex must be even-length hex digits, got: $rawHex", "edits[$i].newHex", rawHex)
             }
             val patch = cleaned.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             if (patch.isEmpty()) {
-                return@guarded err("INVALID_ARGUMENT", "Decoded patch is empty for hex edit at index $i", "edits[$i].newHex", rawHex)
+                return@withSession err("INVALID_ARGUMENT", "Decoded patch is empty for hex edit at index $i", "edits[$i].newHex", rawHex)
             }
             if (patch.size > maxPatch) {
-                return@guarded err("PATCH_TOO_LARGE", "Patch size ${patch.size} exceeds maxPatchBytes $maxPatch", "edits[$i].newHex", patch.size)
+                return@withSession err("PATCH_TOO_LARGE", "Patch size ${patch.size} exceeds maxPatchBytes $maxPatch", "edits[$i].newHex", patch.size)
             }
             val relOff = edit.optInt("byteOffset", edit.optInt("offset", Int.MIN_VALUE))
             if (relOff == Int.MIN_VALUE) {
-                return@guarded err("INVALID_ARGUMENT", "Missing byteOffset (alias: offset) for hex edit at index $i", "edits[$i].byteOffset", null)
+                return@withSession err("INVALID_ARGUMENT", "Missing byteOffset (alias: offset) for hex edit at index $i", "edits[$i].byteOffset", null)
             }
             if (strict && relOff < 0) {
-                return@guarded err("OFFSET_OUT_OF_RANGE", "byteOffset must be >= 0, got $relOff", "edits[$i].byteOffset", relOff)
+                return@withSession err("OFFSET_OUT_OF_RANGE", "byteOffset must be >= 0, got $relOff", "edits[$i].byteOffset", relOff)
             }
             val off = sec.offset.toInt() + relOff
             if (off < 0 || off + patch.size > session.data.size) {
-                return@guarded err("OFFSET_OUT_OF_RANGE", "Hex edit range [${hex(off.toLong())}, +${patch.size}) exceeds file bytes (${session.data.size})", "edits[$i].byteOffset", relOff)
+                return@withSession err("OFFSET_OUT_OF_RANGE", "Hex edit range [${hex(off.toLong())}, +${patch.size}) exceeds file bytes (${session.data.size})", "edits[$i].byteOffset", relOff)
             }
             if (off < sec.offset.toInt() || off + patch.size > sec.offset.toInt() + sec.size.toInt()) {
-                return@guarded err("OFFSET_OUT_OF_RANGE", "Hex edit range falls outside section '$sectionName'", "edits[$i].byteOffset", relOff)
+                return@withSession err("OFFSET_OUT_OF_RANGE", "Hex edit range falls outside section '$sectionName'", "edits[$i].byteOffset", relOff)
             }
             val old = session.data.copyOfRange(off, off + patch.size)
             val preview = JSONObject()
@@ -73,7 +75,7 @@ internal fun EngineRuntime.editHex(workspaceId: String, editSessionId: String, l
             pending += off to patch
         }
         if (dryRun) {
-            return@guarded ok(JSONObject()
+            return@withSession ok(JSONObject()
                 .put("dryRun", true)
                 .put("preview", previews)
                 .put("previewCount", previews.length())
@@ -99,15 +101,18 @@ internal fun EngineRuntime.editHex(workspaceId: String, editSessionId: String, l
         maybeAutoPersist(workspaceId, session, settings)?.let { res.put("autoPersist", it) }
         ok(res)
     }
+}
 
 internal fun EngineRuntime.editHexVa(workspaceId: String, editSessionId: String, va: Long, patch: ByteArray, dryRun: Boolean = false): JSONObject = guarded {
-        val session = workspaces[workspaceId]?.edits?.get(editSessionId) ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
-        if (patch.isEmpty()) return@guarded err("INVALID_ARGUMENT", "patchHex decoded to empty bytes", "patchHex", "")
+    withSession(workspaceId, editSessionId,
+        onMissingWorkspace = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") },
+        onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }) { session ->
+        if (patch.isEmpty()) return@withSession err("INVALID_ARGUMENT", "patchHex decoded to empty bytes", "patchHex", "")
         val settings = SettingsStore(context)
-        if (patch.size > settings.maxPatchBytes) return@guarded err("PATCH_TOO_LARGE", "Patch size ${patch.size} exceeds maxPatchBytes ${settings.maxPatchBytes}", "patchHex", patch.size)
+        if (patch.size > settings.maxPatchBytes) return@withSession err("PATCH_TOO_LARGE", "Patch size ${patch.size} exceeds maxPatchBytes ${settings.maxPatchBytes}", "patchHex", patch.size)
         val elf = lief.parse(session.data)
-        val off = vaToOffset(elf, va)?.toInt() ?: return@guarded err("OFFSET_OUT_OF_RANGE", "Address ${hex(va)} cannot be mapped to a file offset", "va", hex(va))
-        if (off < 0 || off + patch.size > session.data.size) return@guarded err("OFFSET_OUT_OF_RANGE", "Patch range [${hex(off.toLong())}, +${patch.size}) exceeds file bytes (${session.data.size})", "va", hex(va))
+        val off = vaToOffset(elf, va)?.toInt() ?: return@withSession err("OFFSET_OUT_OF_RANGE", "Address ${hex(va)} cannot be mapped to a file offset", "va", hex(va))
+        if (off < 0 || off + patch.size > session.data.size) return@withSession err("OFFSET_OUT_OF_RANGE", "Patch range [${hex(off.toLong())}, +${patch.size}) exceeds file bytes (${session.data.size})", "va", hex(va))
         val old = session.data.copyOfRange(off, off + patch.size)
         val section = sectionForOffset(elf, off.toLong())
         val preview = JSONObject()
@@ -119,7 +124,7 @@ internal fun EngineRuntime.editHexVa(workspaceId: String, editSessionId: String,
             .put("newHex", PatchByteUtils.hexBytes(patch))
             .put("length", patch.size)
         if (dryRun) {
-            return@guarded ok(JSONObject()
+            return@withSession ok(JSONObject()
                 .put("dryRun", true)
                 .put("preview", JSONArray().put(preview))
                 .put("previewCount", 1)
@@ -143,16 +148,19 @@ internal fun EngineRuntime.editHexVa(workspaceId: String, editSessionId: String,
         maybeAutoPersist(workspaceId, session, settings)?.let { res.put("autoPersist", it) }
         ok(res)
     }
+}
 
 internal fun EngineRuntime.editAsm(workspaceId: String, editSessionId: String, locator: String, edits: JSONArray, dryRun: Boolean = false): JSONObject = guarded {
-        val session = workspaces[workspaceId]?.edits?.get(editSessionId) ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
+    withSession(workspaceId, editSessionId,
+        onMissingWorkspace = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") },
+        onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }) { session ->
         val settings = SettingsStore(context)
         val maxPatch = settings.maxPatchBytes
         val elf = lief.parse(session.data)
         val name = LocatorParser.target(locator, "so_function")
         val sym = (elf.symbols + elf.dynSymbols).firstOrNull { it.name == name }
-        val startVa = resolveCodeAddress(session.data, elf, locator) ?: return@guarded err("FUNCTION_NOT_FOUND", "Function or address '$name' could not be resolved", "locator", locator, "acceptedForms" to acceptedLocatorForms())
-        val base = vaToOffset(elf, startVa)?.toInt() ?: return@guarded err("OFFSET_OUT_OF_RANGE", "Function address ${hex(startVa)} cannot be mapped", "locator", locator)
+        val startVa = resolveCodeAddress(session.data, elf, locator) ?: return@withSession err("FUNCTION_NOT_FOUND", "Function or address '$name' could not be resolved", "locator", locator, "acceptedForms" to acceptedLocatorForms())
+        val base = vaToOffset(elf, startVa)?.toInt() ?: return@withSession err("OFFSET_OUT_OF_RANGE", "Function address ${hex(startVa)} cannot be mapped", "locator", locator)
         val thumb = elf.architecture == "arm32" && ((sym?.value ?: startVa) and 1L) == 1L
         val functionSize = rizinFunctionSize(session.data, elf, startVa) ?: sym?.let { functionByteSize(elf, it, base, session.data.size) } ?: functionByteSizeFromAddress(elf, startVa, base, session.data.size)
         val assembledNop = runCatching { NativeEngine.active().assemble("nop", elf.architecture, startVa, thumb) }
@@ -165,27 +173,27 @@ internal fun EngineRuntime.editAsm(workspaceId: String, editSessionId: String, l
             val edit = edits.getJSONObject(i)
             val mode = edit.optString("mode", "replace_instructions")
             if (mode in setOf("insert_before", "insert_after", "prepend_function", "append_function", "write_function") && !edit.has("byteLength") && !edit.has("instructionCount")) {
-                return@guarded err("UNSUPPORTED_OPERATION", "Insertion-style asm edits require an explicit byteLength or instructionCount because Android native build does not relocate downstream function bytes")
+                return@withSession err("UNSUPPORTED_OPERATION", "Insertion-style asm edits require an explicit byteLength or instructionCount because Android native build does not relocate downstream function bytes")
             }
             var range = asmEditRange(edit, startVa, thumb, elf.architecture, nop.size, functionSize)
             val patch = if (mode == "nop_out" || mode == "delete_instructions") {
                 PatchByteUtils.repeatBytes(nop, range.second)
             } else {
                 val asm = edit.optString("writeAsm", edit.optString("newAsm", edit.optString("asm", edit.optString("assembly", "")))).trim()
-                if (asm.isBlank()) return@guarded err("ASM_SYNTAX_ERROR", "Missing writeAsm/newAsm/asm (alias: assembly) for asm edit at index $i")
+                if (asm.isBlank()) return@withSession err("ASM_SYNTAX_ERROR", "Missing writeAsm/newAsm/asm (alias: assembly) for asm edit at index $i")
                 val encoded = runCatching { NativeEngine.active().assemble(asm, elf.architecture, startVa + range.first, thumb) }
-                    .getOrElse { return@guarded err("ASM_SYNTAX_ERROR", it.message ?: "Assembler failed to encode: $asm") }
-                if (encoded.isEmpty()) return@guarded err("ASM_SYNTAX_ERROR", "Assembler produced no bytes for: $asm")
+                    .getOrElse { return@withSession err("ASM_SYNTAX_ERROR", it.message ?: "Assembler failed to encode: $asm") }
+                if (encoded.isEmpty()) return@withSession err("ASM_SYNTAX_ERROR", "Assembler produced no bytes for: $asm")
                 if (encoded.size > range.second && !edit.has("instructionCount") && !edit.has("byteLength")) {
                     val step = if (thumb) 2 else if (elf.architecture in setOf("arm32", "arm64")) 4 else nop.size.coerceAtLeast(1)
                     val needed = ((encoded.size + step - 1) / step) * step
                     if (range.first + needed <= functionSize) range = range.first to needed
                 }
-                if (encoded.size > range.second) return@guarded err("SIZE_MISMATCH", "Assembled code (${encoded.size}B) is larger than selected instruction range (${range.second}B). Set instructionCount/byteLength to cover multiple instructions, or split into single-instruction edits.", "edits[$i]", JSONObject().put("assembled", encoded.size).put("range", range.second))
+                if (encoded.size > range.second) return@withSession err("SIZE_MISMATCH", "Assembled code (${encoded.size}B) is larger than selected instruction range (${range.second}B). Set instructionCount/byteLength to cover multiple instructions, or split into single-instruction edits.", "edits[$i]", JSONObject().put("assembled", encoded.size).put("range", range.second))
                 encoded + PatchByteUtils.repeatBytes(nop, range.second - encoded.size)
             }
             if (patch.size > maxPatch) {
-                return@guarded err("PATCH_TOO_LARGE", "Patch size ${patch.size} exceeds maxPatchBytes $maxPatch", "edits[$i]", patch.size)
+                return@withSession err("PATCH_TOO_LARGE", "Patch size ${patch.size} exceeds maxPatchBytes $maxPatch", "edits[$i]", patch.size)
             }
             val writeOffset = base + range.first
             val old = nextData.copyOfRange(writeOffset, writeOffset + patch.size)
@@ -207,7 +215,7 @@ internal fun EngineRuntime.editAsm(workspaceId: String, editSessionId: String, l
             System.arraycopy(patch, 0, nextData, writeOffset, patch.size)
         }
         if (dryRun) {
-            return@guarded ok(JSONObject()
+            return@withSession ok(JSONObject()
                 .put("dryRun", true)
                 .put("preview", previews)
                 .put("previewCount", previews.length())
@@ -226,9 +234,12 @@ internal fun EngineRuntime.editAsm(workspaceId: String, editSessionId: String, l
         if (nextPatches.isNotEmpty()) maybeAutoPersist(workspaceId, session, settings)?.let { resAsm.put("autoPersist", it) }
         ok(resAsm)
     }
+}
 
 internal fun EngineRuntime.editSymbol(workspaceId: String, editSessionId: String, locator: String, edits: JSONArray, dryRun: Boolean = false): JSONObject = guarded {
-        val session = workspaces[workspaceId]?.edits?.get(editSessionId) ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
+    withSession(workspaceId, editSessionId,
+        onMissingWorkspace = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") },
+        onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }) { session ->
         val settings = SettingsStore(context)
         val name = LocatorParser.target(locator, "so_symbol")
         val previews = JSONArray()
@@ -238,11 +249,11 @@ internal fun EngineRuntime.editSymbol(workspaceId: String, editSessionId: String
             val edit = edits.getJSONObject(i)
             if (edit.optString("op", "rename") == "rename") {
                 val newName = edit.optString("newName", name)
-                if (newName.length > name.length) return@guarded err("SYMTAB_OVERFLOW", "Rename to longer symbol is not supported in native Android build")
+                if (newName.length > name.length) return@withSession err("SYMTAB_OVERFLOW", "Rename to longer symbol is not supported in native Android build")
                 val oldBytes = name.toByteArray()
                 val newBytes = newName.toByteArray()
                 val pos = indexOf(nextData, oldBytes)
-                if (pos < 0) return@guarded err("SYMBOL_NOT_FOUND", "Symbol string not found in SO bytes")
+                if (pos < 0) return@withSession err("SYMBOL_NOT_FOUND", "Symbol string not found in SO bytes")
                 val replacement = ByteArray(oldBytes.size) { if (it < newBytes.size) newBytes[it] else 0 }
                 val preview = JSONObject()
                     .put("index", i)
@@ -258,11 +269,11 @@ internal fun EngineRuntime.editSymbol(workspaceId: String, editSessionId: String
                 nextPatches += PatchRecord(System.currentTimeMillis(), "symbol", locator, pos, PatchByteUtils.hexBytes(oldBytes), PatchByteUtils.hexBytes(replacement), "rename $name -> $newName")
                 for (j in oldBytes.indices) nextData[pos + j] = if (j < newBytes.size) newBytes[j] else 0
             } else {
-                return@guarded err("UNSUPPORTED_OPERATION", "Only same-or-shorter rename is supported")
+                return@withSession err("UNSUPPORTED_OPERATION", "Only same-or-shorter rename is supported")
             }
         }
         if (dryRun) {
-            return@guarded ok(JSONObject()
+            return@withSession ok(JSONObject()
                 .put("dryRun", true)
                 .put("preview", previews)
                 .put("previewCount", previews.length())
@@ -281,6 +292,7 @@ internal fun EngineRuntime.editSymbol(workspaceId: String, editSessionId: String
         if (nextPatches.isNotEmpty()) maybeAutoPersist(workspaceId, session, settings)?.let { resSym.put("autoPersist", it) }
         ok(resSym)
     }
+}
 
 private fun EngineRuntime.asmEditRange(edit: JSONObject, startVa: Long, thumb: Boolean, architecture: String, fallbackInsnSize: Int, maxBytes: Int): Pair<Int, Int> {
         val step = if (architecture == "arm32" && thumb) 2 else fallbackInsnSize.coerceAtLeast(1)

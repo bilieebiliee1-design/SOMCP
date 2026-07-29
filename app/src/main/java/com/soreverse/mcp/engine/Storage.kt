@@ -77,8 +77,7 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
                             )
                         }
                     } else {
-                        val apkBytes = readBytes(docUri)
-                        val entries = listApkSos(relativePath, docUri, apkBytes, modified)
+                        val entries = listApkSos(relativePath, docUri, modified)
                         runCatching { cache.putApkEntries(
                             treeKey,
                             relativePath,
@@ -107,8 +106,13 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
 
     fun readSource(source: SoSource): ByteArray {
         return if (source.source == "apk") {
-            val apkBytes = readBytes(source.treeDocumentUri ?: error("Missing APK document uri"))
-            extractZipEntry(apkBytes, source.apkEntry ?: error("Missing APK entry"))
+            val heapBudget = (Runtime.getRuntime().maxMemory() / 8L).coerceIn(8L * 1024L * 1024, 64L * 1024L * 1024)
+            val declaredLimit = source.size.takeIf { it > 0 }?.plus(1L) ?: heapBudget
+            extractZipEntry(
+                source.treeDocumentUri ?: error("Missing APK document uri"),
+                source.apkEntry ?: error("Missing APK entry"),
+                minOf(declaredLimit, heapBudget),
+            )
         } else {
             readBytes(source.treeDocumentUri ?: error("Missing document uri"))
         }
@@ -141,44 +145,63 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
         return DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
     }
 
+    fun rootAbsolutePath(): String = displayPath(treeUri)
+
     fun isAccessible(): Boolean = runCatching {
         val doc = documentUriForTree()
         resolver.query(doc, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null)?.use { it.count >= 0 } == true
     }.getOrDefault(false)
 
-    private fun listApkSos(apkPath: String, apkUri: Uri, apkBytes: ByteArray, modified: Long): List<SoSource> {
+    private fun listApkSos(apkPath: String, apkUri: Uri, modified: Long): List<SoSource> {
         val items = mutableListOf<SoSource>()
-        ZipInputStream(apkBytes.inputStream()).use { zis ->
-            while (true) {
-                val entry = zis.nextEntry ?: break
-                if (!entry.isDirectory && entry.name.matches(Regex("^lib/[^/]+/[^/]+\\.so$"))) {
-                    val abi = entry.name.split('/')[1]
-                    items += SoSource(
-                        path = "apk:$apkPath!${entry.name}",
-                        source = "apk",
-                        name = entry.name.substringAfterLast('/'),
-                        size = entry.size.takeIf { it >= 0 } ?: 0L,
-                        modified = modified,
-                        treeDocumentUri = apkUri,
-                        apkPath = apkPath,
-                        apkEntry = entry.name,
-                        abi = abi,
-                    )
+        resolver.openInputStream(apkUri).use { input ->
+            requireNotNull(input) { "Cannot open $apkUri" }
+            ZipInputStream(input).use { zis ->
+                while (true) {
+                    val entry = zis.nextEntry ?: break
+                    if (!entry.isDirectory && entry.name.matches(Regex("^lib/[^/]+/[^/]+\\.so$"))) {
+                        val abi = entry.name.split('/')[1]
+                        items += SoSource(
+                            path = "apk:$apkPath!${entry.name}",
+                            source = "apk",
+                            name = entry.name.substringAfterLast('/'),
+                            size = entry.size.takeIf { it >= 0 } ?: 0L,
+                            modified = modified,
+                            treeDocumentUri = apkUri,
+                            apkPath = apkPath,
+                            apkEntry = entry.name,
+                            abi = abi,
+                        )
+                    }
+                    zis.closeEntry()
                 }
-                zis.closeEntry()
             }
         }
         return items
     }
 
-    private fun extractZipEntry(zipBytes: ByteArray, entryName: String): ByteArray {
-        ZipInputStream(zipBytes.inputStream()).use { zis ->
-            while (true) {
-                val entry = zis.nextEntry ?: break
-                if (!entry.isDirectory && entry.name == entryName) {
-                    return zis.readBytes()
+    private fun extractZipEntry(apkUri: Uri, entryName: String, maxBytes: Long): ByteArray {
+        resolver.openInputStream(apkUri).use { input ->
+            requireNotNull(input) { "Cannot open $apkUri" }
+            ZipInputStream(input).use { zis ->
+                while (true) {
+                    val entry = zis.nextEntry ?: break
+                    if (!entry.isDirectory && entry.name == entryName) {
+                        if (entry.size > maxBytes) throw ApkAnalysisLimitException("APK entry exceeds $maxBytes byte heap budget")
+                        val out = ByteArrayOutputStream(32 * 1024)
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val count = zis.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > maxBytes) throw ApkAnalysisLimitException("APK entry exceeds $maxBytes byte limit")
+                            out.write(buffer, 0, count)
+                        }
+                        return out.toByteArray()
+                    }
+                    zis.closeEntry()
                 }
-                zis.closeEntry()
             }
         }
         error("Entry not found: $entryName")

@@ -58,17 +58,20 @@ internal class BlutterEmbeddedBackend(
             val job = active[jobId] ?: return
             job.runner = runner
             store.update(jobId, "running", "runner_execution")
-            val appFd = ParcelFileDescriptor.open(libapp, ParcelFileDescriptor.MODE_READ_ONLY)
-            val flutterFd = ParcelFileDescriptor.open(libflutter, ParcelFileDescriptor.MODE_READ_ONLY)
-            val resultFd = ParcelFileDescriptor.open(output, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE)
+            var appFd: ParcelFileDescriptor? = null
+            var flutterFd: ParcelFileDescriptor? = null
+            var resultFd: ParcelFileDescriptor? = null
             try {
+                appFd = ParcelFileDescriptor.open(libapp, ParcelFileDescriptor.MODE_READ_ONLY)
+                flutterFd = ParcelFileDescriptor.open(libflutter, ParcelFileDescriptor.MODE_READ_ONLY)
+                resultFd = ParcelFileDescriptor.open(output, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE)
                 runner.run(jobId, descriptor.libraryName, appFd, flutterFd, resultFd, options.toString(), callback)
             } catch (error: Exception) {
                 finishFailure("RUNNER_TRANSPORT_FAILED", error.message ?: "Runner transport failed", true)
             } finally {
-                runCatching { appFd.close() }
-                runCatching { flutterFd.close() }
-                runCatching { resultFd.close() }
+                runCatching { appFd?.close() }
+                runCatching { flutterFd?.close() }
+                runCatching { resultFd?.close() }
             }
         }
 
@@ -147,7 +150,18 @@ internal class BlutterEmbeddedBackend(
 
     private fun digest(libapp: File, libflutter: File, runnerSha256: String, options: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        listOf(libapp.readBytes(), libflutter.readBytes(), runnerSha256.toByteArray(), options.toByteArray()).forEach(digest::update)
+        listOf(libapp, libflutter).forEach { file ->
+            file.inputStream().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+        }
+        digest.update(runnerSha256.toByteArray())
+        digest.update(options.toByteArray())
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
