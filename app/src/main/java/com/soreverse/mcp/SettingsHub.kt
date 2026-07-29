@@ -250,6 +250,34 @@ internal fun SettingsHub(
                             PrimaryActionButton(t.joinQqGroup, { joinQqGroup(aboutContext, t.zh) }, modifier = Modifier.fillMaxWidth())
                         }
                     }
+                    GlassGroup(title = if (t.zh) "开源许可与来源" else "License & origin") {
+                        NavRow(
+                            "${com.soreverse.mcp.core.Provenance.PROJECT} · ${com.soreverse.mcp.core.Provenance.LICENSE}",
+                            com.soreverse.mcp.core.Provenance.COPYRIGHT,
+                            Icons.Default.Info,
+                            onClick = { copy(aboutContext, com.soreverse.mcp.core.Provenance.LICENSE, t.copied) },
+                        )
+                        GroupDivider()
+                        NavRow(
+                            if (t.zh) "上游开源仓库（唯一官方来源）" else "Upstream source (only official origin)",
+                            com.soreverse.mcp.core.Provenance.UPSTREAM,
+                            Icons.Default.Info,
+                            onClick = { copy(aboutContext, com.soreverse.mcp.core.Provenance.UPSTREAM, t.copied) },
+                        )
+                        GroupDivider()
+                        Text(
+                            if (t.zh) {
+                                "本软件为 GPL-3.0 自由软件，受《中华人民共和国著作权法》《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：保留本版权与许可声明、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码。\n\n" +
+                                    "闭源分发、抹除署名、改名冒充原创即构成侵权。依据《著作权法》第五十二条、第五十三条，权利人可要求停止侵害、消除影响、赔礼道歉并赔偿损失；情节严重的可按《著作权法》第五十四条主张惩罚性赔偿。GPL 作为授权合同在中国司法实践中已被确认有效并可强制执行（参见北京高院\u201c数字天堂诉柚子科技\u201d、\u201c罗盒诉风灵\u201d等 GPL/开源协议案）。\n\n" +
+                                    "侵权者将被记录（含运行时溯源指纹）并可能面临平台下架、公开通报及民事索赔。"
+                            } else {
+                                com.soreverse.mcp.core.Provenance.REDISTRIBUTION_NOTICE
+                            },
+                            modifier = Modifier.padding(14.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
             SettingsDest.Root -> Unit
