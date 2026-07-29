@@ -49,6 +49,7 @@ internal fun SettingsUpdatesPage(
     var downloadPhase by remember { mutableStateOf("") }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
+    var verifyNote by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
 
@@ -94,6 +95,67 @@ internal fun SettingsUpdatesPage(
         }
     }
 
+    fun startDownload(update: GitHubRelease, forced: String?) {
+        downloadJob?.cancel()
+        downloading = true
+        status = ""
+        progress = 0
+        if (forced == null) {
+            probeCompleted = 0
+            probeTotal = 0
+            probeAvailable = 0
+            probeResults = emptyList()
+        }
+        selectedSource = forced ?: ""
+        verifyNote = ""
+        downloadPhase = if (forced != null) "downloading" else "probing"
+        error = ""
+        downloadJob = scope.launch {
+            try {
+                manager.download(update, forced) { event ->
+                    when (event) {
+                        is UpdateDownloadEvent.Probing -> {
+                            downloadPhase = "probing"
+                            probeTotal = event.total
+                        }
+                        is UpdateDownloadEvent.ProbeResult -> {
+                            probeCompleted = event.completed
+                            if (event.reachable) probeAvailable++
+                            probeResults = probeResults + event
+                        }
+                        is UpdateDownloadEvent.Selected -> {
+                            downloadPhase = "downloading"
+                            selectedSource = event.source
+                            progress = 0
+                        }
+                        is UpdateDownloadEvent.Downloading -> {
+                            downloadPhase = "downloading"
+                            selectedSource = event.source
+                            progress = event.percent
+                        }
+                        UpdateDownloadEvent.Verifying -> downloadPhase = "verifying"
+                        is UpdateDownloadEvent.VerifySkipped -> {
+                            verifyNote = if (t.zh) "已跳过 SHA-256 校验（${event.reason}），文件为有效 APK，可安装。" else "SHA-256 check skipped (${event.reason}); file is a valid APK and installable."
+                        }
+                    }
+                }
+                    .onSuccess {
+                        downloadedFile = it
+                        status = if (verifyNote.isNotBlank()) {
+                            if (t.zh) "下载完成（未校验 SHA-256），可以安装。" else "Download complete (SHA-256 not verified). Ready to install."
+                        } else {
+                            if (t.zh) "下载并校验完成，可以安装。" else "Download and verification complete. Ready to install."
+                        }
+                    }
+                    .onFailure { error = it.message ?: if (t.zh) "下载失败" else "Download failed" }
+            } finally {
+                downloading = false
+                downloadPhase = ""
+                downloadJob = null
+            }
+        }
+    }
+
     PageScroll {
         GlassGroup {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -134,7 +196,13 @@ internal fun SettingsUpdatesPage(
                     Text(update.tag, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
                     if (update.notes.isNotBlank()) MarkdownMessageContent(update.notes, selectable = true)
                     if (downloading) {
-                        UpdateDownloadStatus(downloadPhase, progress, probeCompleted, probeTotal, probeAvailable, selectedSource, probeResults, t.zh)
+                        UpdateDownloadStatus(
+                            downloadPhase, progress, probeCompleted, probeTotal, probeAvailable, selectedSource, probeResults, t.zh,
+                            verifyNote = verifyNote,
+                            onPickSource = { source -> startDownload(update, source) },
+                        )
+                    } else if (verifyNote.isNotBlank() && downloadedFile != null) {
+                        Text(verifyNote, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     PrimaryActionButton(
                         text = when {
@@ -149,53 +217,7 @@ internal fun SettingsUpdatesPage(
                                     status = if (t.zh) "请允许 SOMCP 安装未知应用，返回后再次点击安装。" else "Allow SOMCP to install unknown apps, then return and tap Install again."
                                 }
                             } else if (!downloading) {
-                                downloading = true
-                                status = ""
-                                progress = 0
-                                probeCompleted = 0
-                                probeTotal = 0
-                                probeAvailable = 0
-                                probeResults = emptyList()
-                                selectedSource = ""
-                                downloadPhase = "probing"
-                                error = ""
-                                downloadJob = scope.launch {
-                                    try {
-                                        manager.download(update) { event ->
-                                            when (event) {
-                                                is UpdateDownloadEvent.Probing -> {
-                                                    downloadPhase = "probing"
-                                                    probeTotal = event.total
-                                                }
-                                                is UpdateDownloadEvent.ProbeResult -> {
-                                                    probeCompleted = event.completed
-                                                    if (event.reachable) probeAvailable++
-                                                    probeResults = probeResults + event
-                                                }
-                                                is UpdateDownloadEvent.Selected -> {
-                                                    downloadPhase = "downloading"
-                                                    selectedSource = event.source
-                                                    progress = 0
-                                                }
-                                                is UpdateDownloadEvent.Downloading -> {
-                                                    downloadPhase = "downloading"
-                                                    selectedSource = event.source
-                                                    progress = event.percent
-                                                }
-                                                UpdateDownloadEvent.Verifying -> downloadPhase = "verifying"
-                                            }
-                                        }
-                                            .onSuccess {
-                                                downloadedFile = it
-                                                status = if (t.zh) "下载并校验完成，可以安装。" else "Download and verification complete. Ready to install."
-                                            }
-                                            .onFailure { error = it.message ?: if (t.zh) "下载失败" else "Download failed" }
-                                    } finally {
-                                        downloading = false
-                                        downloadPhase = ""
-                                        downloadJob = null
-                                    }
-                                }
+                                startDownload(update, null)
                             } else {
                                 downloadJob?.cancel()
                                 downloadJob = null
