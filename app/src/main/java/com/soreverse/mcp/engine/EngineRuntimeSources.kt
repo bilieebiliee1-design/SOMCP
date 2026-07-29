@@ -171,10 +171,19 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     val archiveEntry = path.substringAfterLast('!', "")
     if (archiveEntry.isNotBlank() && !archiveEntry.endsWith(".so", ignoreCase = true)) error("NOT_ELF_INPUT: $path is an APK/JAR entry, not an ELF SO file. Use apk_analyze or an APK MCP tool.")
     val keyFallback = "local:$path"
-    val src = findSource(path) ?: resolveLocalSoSource(path) ?: run {
+    // An APK-embedded reference is never a plain filesystem file, so skip the
+    // resolveLocalSoSource() File().exists() probe for it (avoids treating
+    // "apk:...!..." / "content://apk/..." as a real path).
+    val isApkEmbedded = path.trim().let { it.contains('!') || it.startsWith("content://apk/") || it.startsWith("apk:") }
+    val src = findSource(path) ?: (if (isApkEmbedded) null else resolveLocalSoSource(path)) ?: run {
         val trimmed = path.trim()
+        // The work-directory boundary checks below do not apply to APK-embedded
+        // references — fall straight through to SO_NOT_FOUND with a hint.
         val absolute = trimmed.startsWith("/")
         val root = workDir?.rootAbsolutePath()
+        if (isApkEmbedded) {
+            error("SO path not found: $path. This looks like an APK-embedded SO; call so_open (action=list) first and open it with the returned path (apk:<relpath>!lib/<abi>/x.so).")
+        }
         if (workDir == null && absolute) {
             error("WORK_DIRECTORY_NOT_SELECTED: No work directory selected. Select the containing directory with the work-directory picker, then pass the path returned by so_open action=list or the same absolute path: $trimmed")
         }
@@ -233,11 +242,16 @@ internal fun EngineRuntime.findSource(rawPath: String): SoSource? {
     val trimmed = rawPath.trim()
     val path = trimmed.removePrefix("/")
     workDir?.let { ensureSources(it) }
-    val apkUri = trimmed.removePrefix("content://apk/")
-    if (apkUri != trimmed && apkUri.isNotBlank()) {
-        val separator = apkUri.indexOf('/')
-        if (separator > 0) sources.firstOrNull { it.source == "apk" && it.apkPath?.substringAfterLast('/') == apkUri.substring(0, separator) && it.apkEntry == apkUri.substring(separator + 1) }?.let { return it }
-    }
+    // APK-embedded SO resolution. A single SO inside an APK can be referenced
+    // in several equivalent forms and we must map every one of them back to the
+    // scanned source whose canonical path is `apk:<relpath>!<entry>`:
+    //   1. apk:<relpath>!lib/<abi>/x.so         (the form so_open list returns)
+    //   2. /abs/path/App.apk!lib/<abi>/x.so     (absolute APK path + entry)
+    //   3. content://apk/<apkName>/lib/<abi>/x.so
+    //   4. a bare entry like lib/<abi>/x.so when only one APK provides it
+    // Instead of matching the whole string we parse out (apkHint, entry) and
+    // match against the source's real apkPath/apkEntry fields.
+    resolveApkEmbeddedSource(trimmed)?.let { return it }
     val candidates = mutableListOf(trimmed, path)
     workDir?.rootAbsolutePath()?.let { root ->
         if (trimmed.isSameOrChildOf(root)) candidates += trimmed.drop(root.length).removePrefix("/")
@@ -249,6 +263,78 @@ internal fun EngineRuntime.findSource(rawPath: String): SoSource? {
 }
 
 private fun String.isSameOrChildOf(root: String): Boolean = this == root || this.startsWith(root.trimEnd('/') + "/")
+
+/**
+ * Parse an APK-embedded SO reference into (apkHint, entry) and match it against
+ * the scanned `source=="apk"` entries by their real apkPath/apkEntry, so any
+ * equivalent spelling of the same embedded SO resolves to the same source.
+ *
+ * Returns null when [raw] is not an APK-embedded reference or nothing matches.
+ */
+internal fun EngineRuntime.resolveApkEmbeddedSource(raw: String): SoSource? {
+    val apkSources = sources.filter { it.source == "apk" }
+    if (apkSources.isEmpty()) return null
+
+    val parsed = parseApkEmbeddedReference(raw) ?: return null
+    val normalizedEntry = parsed.entry
+    val apkBasename = parsed.apkBasename
+
+    // Prefer an exact apkPath basename + entry match; fall back to entry-only
+    // when the caller supplied no usable APK hint and the entry is unambiguous.
+    apkSources.firstOrNull { src ->
+        src.apkEntry == normalizedEntry &&
+            (apkBasename == null || src.apkPath?.substringAfterLast('/')?.equals(apkBasename, ignoreCase = true) == true)
+    }?.let { return it }
+
+    if (apkBasename == null) {
+        val entryMatches = apkSources.filter { it.apkEntry == normalizedEntry }
+        if (entryMatches.size == 1) return entryMatches.first()
+    }
+    return null
+}
+
+/** Normalized (apkBasename, entry) parsed from an APK-embedded SO reference. */
+internal data class ApkEmbeddedReference(val apkBasename: String?, val entry: String)
+
+/**
+ * Pure parser (no engine state) that turns the many equivalent spellings of an
+ * APK-embedded SO reference into a normalized (apkBasename, entry) pair. Kept
+ * separate from [resolveApkEmbeddedSource] so it is unit-testable on the JVM.
+ * Returns null when [raw] is not an APK-embedded reference or has no entry.
+ */
+internal fun parseApkEmbeddedReference(raw: String): ApkEmbeddedReference? {
+    val trimmed = raw.trim()
+    val (apkHint, entry) = when {
+        trimmed.startsWith("apk:") -> {
+            val body = trimmed.removePrefix("apk:")
+            val bang = body.indexOf('!')
+            if (bang <= 0) "" to body else body.substring(0, bang) to body.substring(bang + 1)
+        }
+        trimmed.startsWith("content://apk/") -> {
+            // The segment ending in .apk is the APK hint; everything after the
+            // first ".apk/" is the entry. Tolerates APK paths with separators.
+            val body = trimmed.removePrefix("content://apk/")
+            val marker = body.indexOf(".apk/", ignoreCase = true)
+            if (marker >= 0) body.substring(0, marker + 4) to body.substring(marker + 5) else "" to body
+        }
+        trimmed.contains('!') -> {
+            val bang = trimmed.lastIndexOf('!')
+            trimmed.substring(0, bang) to trimmed.substring(bang + 1)
+        }
+        trimmed.contains(".apk/", ignoreCase = true) -> {
+            val marker = trimmed.lastIndexOf(".apk/", ignoreCase = true)
+            trimmed.substring(0, marker + 4) to trimmed.substring(marker + 5)
+        }
+        // A bare entry only qualifies when it clearly looks like an in-APK SO.
+        trimmed.trimStart('/').startsWith("lib/") && trimmed.endsWith(".so", ignoreCase = true) -> "" to trimmed.trimStart('/')
+        else -> return null
+    }
+
+    val normalizedEntry = entry.trim().trimStart('/').removePrefix("./")
+    if (normalizedEntry.isBlank()) return null
+    val apkBasename = apkHint.trim().trimEnd('/').substringAfterLast('/').ifBlank { null }
+    return ApkEmbeddedReference(apkBasename, normalizedEntry)
+}
 
 internal fun EngineRuntime.ensureSources(dir: WorkDirectory): List<SoSource> {
     val settings = SettingsStore(context)
