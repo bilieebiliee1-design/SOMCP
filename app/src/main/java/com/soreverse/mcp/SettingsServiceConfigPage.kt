@@ -165,8 +165,14 @@ private fun displayEndpoint(endpoint: EndpointInfo, zh: Boolean): Pair<String, S
 }
 
 internal fun filteredEndpoints(context: Context, settings: SettingsStore, port: Int): List<EndpointInfo> {
-    val endpoints = NetworkInspector.endpoints(context, port)
-    return if (settings.bindHost == "127.0.0.1") endpoints.filter { it.url.contains("127.0.0.1") } else endpoints
+    // Always surface every reachable endpoint (loopback + LAN + routable), the
+    // same behaviour as 1.0.9. Earlier 1.0.10 hid all non-loopback URLs whenever
+    // bindHost defaulted to 127.0.0.1, which regressed the "show my LAN link"
+    // flow users relied on. The bind address only governs what the running
+    // server listens on; it must not silently drop informational endpoints from
+    // the UI. LAN reachability guidance is conveyed via the endpoint note and
+    // the access-control screen instead.
+    return NetworkInspector.endpoints(context, port)
 }
 
 private fun clientConfig(url: String, settings: SettingsStore): String {
