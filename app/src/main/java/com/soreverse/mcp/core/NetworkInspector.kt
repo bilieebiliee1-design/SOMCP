@@ -46,6 +46,28 @@ object NetworkInspector {
         return out.distinctBy { it.url }
     }
 
+    /**
+     * Best LAN IPv4 address (e.g. 192.168.x.x) for display, or null if none.
+     * Used to show a *reachable* address in the foreground notification instead
+     * of the bind wildcard 0.0.0.0, which users mistakenly typed as the host.
+     */
+    fun primaryLanIpv4(context: Context): String? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val lp: LinkProperties? = cm.getLinkProperties(cm.activeNetwork)
+        val addresses = linkedSetOf<InetAddress>()
+        lp?.linkAddresses?.map(LinkAddress::getAddress)?.forEach(addresses::add)
+        runCatching {
+            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.inetAddresses.toList() }
+                .forEach(addresses::add)
+        }
+        return addresses
+            .filterIsInstance<Inet4Address>()
+            .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress }
+            ?.hostAddress
+    }
+
     private fun isPublicCandidate(address: InetAddress): Boolean {
         if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress) return false
         if (address is Inet4Address) {
