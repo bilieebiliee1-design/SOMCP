@@ -14,6 +14,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -74,6 +76,16 @@ class GitHubUpdateManager(private val context: Context) {
         .followRedirects(true)
         .build()
 
+    // Serializes the whole download() body. When the user switches mirrors we
+    // cancel the previous download coroutine, but cancellation is cooperative and
+    // the old coroutine may still be mid-write when the new one starts. Without
+    // this lock two coroutines could race on the same .part file, and a
+    // late-finishing old mirror could overwrite/verify on top of the new one
+    // (exactly the "mirror A finishes then B downloads again" bug). Holding the
+    // mutex for the entire download makes a new attempt wait until the previous
+    // one has fully unwound.
+    private val downloadMutex = Mutex()
+
     suspend fun check(): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
@@ -125,14 +137,19 @@ class GitHubUpdateManager(private val context: Context) {
     ): Result<File> =
         withContext(Dispatchers.IO) {
             try {
+                downloadMutex.withLock {
                 suspend fun emit(event: UpdateDownloadEvent) {
                     withContext(Dispatchers.Main.immediate) { onEvent(event) }
                 }
+                // A previous (now-cancelled) attempt may have just completed and
+                // populated the cache; re-check inside the lock so a mirror switch
+                // that raced a finishing download reuses the verified file instead
+                // of downloading again.
+                cachedDownload(release)?.let { return@withLock Result.success(it) }
                 val directory = File(context.cacheDir, "updates").apply { mkdirs() }
                 val target = File(directory, release.apkName.substringAfterLast('/'))
                 val partial = File(directory, "${target.name}.part")
                 val verified = File(directory, "${target.name}.verified")
-                cachedDownload(release)?.let { return@withContext Result.success(it) }
                 directory.listFiles()?.filter { it !in setOf(target, verified) }?.forEach { it.delete() }
                 // When the user manually picks a mirror we honour it first and
                 // skip the speed probe entirely (their choice solves the
@@ -226,6 +243,7 @@ class GitHubUpdateManager(private val context: Context) {
                 // hash; otherwise the cached-download fast path must re-check.
                 if (verifiedHash != null) verified.writeText(verifiedHash) else verified.delete()
                 Result.success(target)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {

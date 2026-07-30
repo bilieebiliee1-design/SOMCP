@@ -42,61 +42,88 @@ class LiefEngine {
 
     fun loadStatus(): String = if (libLoaded) "loaded" else "failed: $loadError"
 
-    fun parse(data: ByteArray): ElfFile {
-        if (!available()) return ElfParser(data).parse()
-        return runCatching {
-            val json = nativeParse(data)
-            parseJson(json, data)
-        }.getOrElse {
-            ElfParser(data).parse()
+    // Like Rizin, the LIEF native layer builds/mutates C++ objects and uses
+    // process-global state (logging, parser singletons). Serialize every native
+    // LIEF entry point behind one lock so concurrent MCP coroutines can't corrupt
+    // shared native state and crash. Kept consistent with RizinNativeEngine.
+    private val nativeLock = java.util.concurrent.locks.ReentrantLock()
+
+    private inline fun <T> serial(block: () -> T): T {
+        nativeLock.lock()
+        try {
+            return block()
+        } finally {
+            nativeLock.unlock()
         }
     }
 
-    fun parseAny(data: ByteArray, format: String = "auto"): JSONObject = JSONObject(nativeParseAny(data, format))
+    fun parse(data: ByteArray): ElfFile {
+        if (!available()) return ElfParser(data).parse()
+        return serial {
+            runCatching {
+                val json = nativeParse(data)
+                parseJson(json, data)
+            }.getOrElse {
+                ElfParser(data).parse()
+            }
+        }
+    }
+
+    fun parseAny(data: ByteArray, format: String = "auto"): JSONObject = serial { JSONObject(nativeParseAny(data, format)) }
 
     fun fixSections(data: ByteArray): ByteArray {
         if (!available()) return data
-        return runCatching {
-            val fixed = nativeFixSections(data)
-            if (fixed.isNotEmpty()) fixed else data
-        }.getOrElse { data }
+        return serial {
+            runCatching {
+                val fixed = nativeFixSections(data)
+                if (fixed.isNotEmpty()) fixed else data
+            }.getOrElse { data }
+        }
     }
 
     fun patchAddress(data: ByteArray, va: Long, patch: ByteArray): ByteArray {
         if (!available()) return data
-        return runCatching {
-            val patched = nativePatchAddress(data, va, patch)
-            if (patched.isNotEmpty()) patched else data
-        }.getOrElse { data }
+        return serial {
+            runCatching {
+                val patched = nativePatchAddress(data, va, patch)
+                if (patched.isNotEmpty()) patched else data
+            }.getOrElse { data }
+        }
     }
 
     fun getSectionContent(data: ByteArray, sectionName: String): ByteArray {
         if (!available()) return ByteArray(0)
-        return runCatching { nativeGetSectionContent(data, sectionName) }.getOrDefault(ByteArray(0))
+        return serial { runCatching { nativeGetSectionContent(data, sectionName) }.getOrDefault(ByteArray(0)) }
     }
 
     fun setSectionContent(data: ByteArray, sectionName: String, content: ByteArray): ByteArray {
         if (!available()) return data
-        return runCatching {
-            val patched = nativeSetSectionContent(data, sectionName, content)
-            if (patched.isNotEmpty()) patched else data
-        }.getOrElse { data }
+        return serial {
+            runCatching {
+                val patched = nativeSetSectionContent(data, sectionName, content)
+                if (patched.isNotEmpty()) patched else data
+            }.getOrElse { data }
+        }
     }
 
     fun addExportedFunction(data: ByteArray, addr: Long, name: String): ByteArray {
         if (!available()) return data
-        return runCatching {
-            val patched = nativeAddExportedFunction(data, addr, name)
-            if (patched.isNotEmpty()) patched else data
-        }.getOrElse { data }
+        return serial {
+            runCatching {
+                val patched = nativeAddExportedFunction(data, addr, name)
+                if (patched.isNotEmpty()) patched else data
+            }.getOrElse { data }
+        }
     }
 
     fun removeSymbol(data: ByteArray, name: String): ByteArray {
         if (!available()) return data
-        return runCatching {
-            val patched = nativeRemoveSymbol(data, name)
-            if (patched.isNotEmpty()) patched else data
-        }.getOrElse { data }
+        return serial {
+            runCatching {
+                val patched = nativeRemoveSymbol(data, name)
+                if (patched.isNotEmpty()) patched else data
+            }.getOrElse { data }
+        }
     }
 
     private fun parseJson(json: String, data: ByteArray): ElfFile {
