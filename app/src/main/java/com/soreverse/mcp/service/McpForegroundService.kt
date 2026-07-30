@@ -25,6 +25,7 @@ import com.soreverse.mcp.MainActivity
 import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.EngineProvider
 import com.soreverse.mcp.core.IntegrityGuard
+import com.soreverse.mcp.core.NetworkInspector
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.mcp.McpHttpServer
 import java.util.Locale
@@ -145,7 +146,12 @@ class McpForegroundService : Service() {
         val settings = SettingsStore(this)
         val host = settings.bindHost
         createChannel()
-        startForeground(1001, notification("MCP server running on ${host}:${settings.port}"))
+        // Avoid showing the bind wildcard 0.0.0.0 in the notification: users kept
+        // typing 0.0.0.0:8000/mcp as the client URL and it never connects. When
+        // bound to all interfaces, surface a real reachable address (LAN IP if
+        // available, otherwise 127.0.0.1) plus the required /mcp path.
+        val displayText = buildNotificationText(host, settings.port)
+        startForeground(1001, notification(displayText))
         updateWakeLock(settings.wakeLockEnabled)
         EngineProvider.restoreWorkDirectory(applicationContext)
         if (server != null && activePort == settings.port && activeHost == host) {
@@ -422,6 +428,21 @@ class McpForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "SOMCP", NotificationManager.IMPORTANCE_LOW))
+        }
+    }
+
+    private fun buildNotificationText(host: String, port: Int): String {
+        // The full MCP endpoint always requires the /mcp path. Show a concrete,
+        // usable URL rather than the bind host so users don't type 0.0.0.0.
+        return if (host == "0.0.0.0") {
+            val lan = runCatching { NetworkInspector.primaryLanIpv4(applicationContext) }.getOrNull()
+            if (lan != null) {
+                "MCP 运行中 · 客户端填 http://$lan:$port/mcp（局域网）"
+            } else {
+                "MCP 运行中 · 客户端填 http://<本机IP>:$port/mcp（勿填 0.0.0.0）"
+            }
+        } else {
+            "MCP 运行中 · 客户端填 http://127.0.0.1:$port/mcp（仅本机/ADB）"
         }
     }
 
