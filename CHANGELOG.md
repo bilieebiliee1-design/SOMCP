@@ -1,5 +1,15 @@
 # 更新日志
 
+## 1.0.13
+
+本节仅记录 `1.0.12` 发布后到 `1.0.13` 发布之间的变化。
+
+- 修复 Rizin 原生分析并发导致的闪退：`rzFunctions` 等在多协程并发调用时，Rizin `RzCore` 非线程安全会在 `rz_core_free` 处 double-free 崩溃（Native SIGSEGV）。现将所有 `rz*` 原生入口统一串行化，同一时刻只允许一个 RzCore 存活。
+- 举一反三：为 LIEF 原生层（parse/fixSections/patchAddress/getSectionContent/setSectionContent/addExportedFunction/removeSymbol 等）加入相同的进程级串行锁，消除同类并发崩溃风险。
+- 修复更新下载切换加速源时的竞态：切源时旧下载协程可能仍在写同一临时文件并触发校验/回调，导致“镜像 A 下载中途变成 B”“A 下载校验完又用 B 重新下载”等异常。现对整个下载过程加互斥，切源会等待上一次下载完全结束后再开始，并在锁内复用已完成的校验结果，避免重复下载。
+- 精简单元测试，仅保留守护关键逻辑（APK 内 SO 解析、下载源策略、Token 比较、签名摘要）的最小集合。
+- 说明：fastjson 依赖仅由 unidbg 原生 MCP 工具在运行期通过反射使用，且不经过不可信 JSON 的 autoType 反序列化路径，不触发已知漏洞面；`org.json` 仍为项目主 JSON 库。
+
 ## 1.0.12（紧急补丁）
 
 本节仅记录 `1.0.11` 发布后到 `1.0.12` 发布之间的变化。
