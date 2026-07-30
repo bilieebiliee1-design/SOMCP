@@ -174,6 +174,14 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             return
         }
         val response = dispatchBody(body)
+        // Notifications produce no response body: reply 202 Accepted with an
+        // empty body per the MCP streamable-HTTP spec. Sending a JSON-RPC
+        // response (or an id=null result) for a notification breaks strict
+        // clients such as rmcp.
+        if (response === NoResponse) {
+            call.respondText("", ContentType.Application.Json, status = HttpStatusCode.Accepted)
+            return
+        }
         val accept = call.request.header("Accept").orEmpty()
         if (accept.contains("text/event-stream")) {
             call.respondText("event: message\ndata: $response\n\n", ContentType.Text.EventStream)
@@ -210,9 +218,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             if (arr.length() == 0) return jsonRpcError(JSONObject.NULL, -32600, "Invalid Request")
             for (i in 0 until arr.length()) {
                 val req = arr.optJSONObject(i)
-                out.put(if (req == null) jsonRpcError(JSONObject.NULL, -32600, "Invalid Request") else dispatch(req))
+                val res = if (req == null) jsonRpcError(JSONObject.NULL, -32600, "Invalid Request") else dispatch(req)
+                // Skip notifications (NoResponse) — a batch of only notifications
+                // yields an empty array, which the caller turns into 202 No body.
+                if (res !== NoResponse) out.put(res)
             }
-            return out
+            return if (out.length() == 0) NoResponse else out
         }
         val req = try {
             JSONObject(trimmed)
@@ -228,6 +239,14 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         if (!req.has("jsonrpc") || req.optString("jsonrpc") != "2.0" || method.isBlank()) {
             return jsonRpcError(id ?: JSONObject.NULL, -32600, "Invalid Request")
         }
+        // JSON-RPC notifications (no "id") MUST NOT receive a response. This
+        // covers notifications/initialized and any other notifications/* the
+        // client sends after the handshake. Returning a response object here
+        // (previously an id=null result) makes strict clients such as rmcp
+        // reject the stream with an "initialized notification" protocol error.
+        // We signal "no response" with NoResponse and let the caller answer 202.
+        val isNotification = !req.has("id") || method.startsWith("notifications/")
+        if (isNotification) return NoResponse
         val params = req.optJSONObject("params") ?: JSONObject()
         val result = when (method) {
             "initialize" -> JSONObject()
@@ -241,7 +260,6 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     .put("provenance", com.soreverse.mcp.core.Provenance.json())
                     .put("toolUsageGuide", toolUsageGuide())
                     .put("hint", "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to so_open + analyze_* + edit_*, NOT mt_apk_*."))
-            "notifications/initialized" -> JSONObject()
             "ping" -> JSONObject().put("ok", true)
             "resources/list" -> JSONObject().put("resources", JSONArray())
             "prompts/list" -> JSONObject().put("prompts", JSONArray())
@@ -266,6 +284,10 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         .put("jsonrpc", "2.0")
         .put("id", id ?: JSONObject.NULL)
         .put("error", JSONObject().put("code", code).put("message", message))
+
+    // Sentinel meaning "this request was a notification; emit no JSON-RPC
+    // response". Compared by identity (===). Never serialized to a client.
+    private val NoResponse: JSONObject = JSONObject().put("__noResponse", true)
 
     private fun toolUsageGuide(): JSONObject = JSONObject()
         .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use mt_apk_* for SO tasks.")
