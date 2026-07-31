@@ -14,6 +14,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -52,7 +54,15 @@ sealed interface UpdateDownloadEvent {
     data class Selected(val source: String) : UpdateDownloadEvent
     data class Downloading(val source: String, val percent: Int) : UpdateDownloadEvent
     data object Verifying : UpdateDownloadEvent
+    /** Emitted when checksum verification is skipped (asset missing/unreachable). */
+    data class VerifySkipped(val reason: String) : UpdateDownloadEvent
 }
+
+/** The checksum asset could not be fetched; verification is skipped (soft). */
+class ChecksumUnavailableException(message: String) : Exception(message)
+
+/** A checksum was fetched but did not match the download; hard failure. */
+class ChecksumMismatchException(message: String) : Exception(message)
 
 class GitHubUpdateManager(private val context: Context) {
     private val client = OkHttpClient.Builder()
@@ -65,6 +75,16 @@ class GitHubUpdateManager(private val context: Context) {
         .callTimeout(5, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
+
+    // Serializes the whole download() body. When the user switches mirrors we
+    // cancel the previous download coroutine, but cancellation is cooperative and
+    // the old coroutine may still be mid-write when the new one starts. Without
+    // this lock two coroutines could race on the same .part file, and a
+    // late-finishing old mirror could overwrite/verify on top of the new one
+    // (exactly the "mirror A finishes then B downloads again" bug). Holding the
+    // mutex for the entire download makes a new attempt wait until the previous
+    // one has fully unwound.
+    private val downloadMutex = Mutex()
 
     suspend fun check(): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         try {
@@ -110,19 +130,38 @@ class GitHubUpdateManager(private val context: Context) {
         }
     }
 
-    suspend fun download(release: GitHubRelease, onEvent: (UpdateDownloadEvent) -> Unit): Result<File> =
+    suspend fun download(
+        release: GitHubRelease,
+        forcedSource: String? = null,
+        onEvent: (UpdateDownloadEvent) -> Unit,
+    ): Result<File> =
         withContext(Dispatchers.IO) {
             try {
+                downloadMutex.withLock {
                 suspend fun emit(event: UpdateDownloadEvent) {
                     withContext(Dispatchers.Main.immediate) { onEvent(event) }
                 }
+                // A previous (now-cancelled) attempt may have just completed and
+                // populated the cache; re-check inside the lock so a mirror switch
+                // that raced a finishing download reuses the verified file instead
+                // of downloading again.
+                cachedDownload(release)?.let { return@withLock Result.success(it) }
                 val directory = File(context.cacheDir, "updates").apply { mkdirs() }
                 val target = File(directory, release.apkName.substringAfterLast('/'))
                 val partial = File(directory, "${target.name}.part")
                 val verified = File(directory, "${target.name}.verified")
-                cachedDownload(release)?.let { return@withContext Result.success(it) }
                 directory.listFiles()?.filter { it !in setOf(target, verified) }?.forEach { it.delete() }
-                val candidates = rankedDownloadUrls(release.apkUrl, ::emit)
+                // When the user manually picks a mirror we honour it first and
+                // skip the speed probe entirely (their choice solves the
+                // "fast to probe but slow to download" case); the remaining
+                // mirrors stay as automatic fallbacks after it.
+                val candidates = if (forcedSource != null) {
+                    val all = DownloadMirrorPolicy.candidates(release.apkUrl)
+                    val preferred = all.filter { sourceName(it) == forcedSource }
+                    (preferred + all.filterNot { it in preferred }).ifEmpty { all }
+                } else {
+                    rankedDownloadUrls(release.apkUrl, ::emit)
+                }
                 var lastFailure: Throwable? = null
                 var downloaded = false
                 for (url in candidates) {
@@ -177,15 +216,34 @@ class GitHubUpdateManager(private val context: Context) {
                 }
                 require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
                 emit(UpdateDownloadEvent.Verifying)
-                val checksumUrl = requireNotNull(release.checksumUrl) { "Release checksum is required" }
-                verifyChecksum(partial, checksumUrl, target.name)
+                // Checksum verification is best-effort: the payload has already
+                // been validated as a well-formed APK/ZIP above. If the checksum
+                // asset cannot be fetched in time (mirror down / slow / missing),
+                // we must NOT hang or hard-fail the whole update — we downgrade to
+                // an unverified-but-installable result instead of dying on one
+                // tree. A checksum that is fetched AND mismatches is still a hard
+                // failure (that means tampering / corruption).
+                val verifiedHash = release.checksumUrl?.let { url ->
+                    runCatching { verifyChecksum(partial, url, target.name) }
+                        .onFailure { emit(UpdateDownloadEvent.VerifySkipped(it.message ?: "checksum unavailable")) }
+                        .getOrElse { failure ->
+                            if (failure is ChecksumMismatchException) throw failure
+                            null
+                        }
+                } ?: run {
+                    emit(UpdateDownloadEvent.VerifySkipped("no checksum published"))
+                    null
+                }
                 runCatching {
                     Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
                 }.getOrElse {
                     Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
                 }
-                verified.writeText(verificationMarker(release))
+                // Only persist the .verified marker when we actually verified the
+                // hash; otherwise the cached-download fast path must re-check.
+                if (verifiedHash != null) verified.writeText(verifiedHash) else verified.delete()
                 Result.success(target)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -198,14 +256,25 @@ class GitHubUpdateManager(private val context: Context) {
         val file = File(File(context.cacheDir, "updates"), release.apkName.substringAfterLast('/'))
         val verified = File(file.parentFile, "${file.name}.verified")
         if (!file.isFile || file.length() <= 4) return null
-        val valid = runCatching { file.inputStream().use { input ->
-            val header = ByteArray(4)
-            input.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
-        } }.getOrDefault(false)
-        return file.takeIf {
-            valid && verified.readTextOrNull() == verificationMarker(release) &&
-                (release.apkSize <= 0 || it.length() == release.apkSize)
+        val sizeOk = release.apkSize <= 0 || file.length() == release.apkSize
+        if (!sizeOk) return null
+        val expectedHash = verified.readTextOrNull()?.trim()?.lowercase()?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
+        if (expectedHash != null) {
+            // Re-hash the actual bytes: a predictable marker alone must never be trusted.
+            val actualHash = runCatching { fileSha256(file) }.getOrNull() ?: return null
+            return file.takeIf { actualHash == expectedHash }
         }
+        // No verified marker (checksum was unavailable at download time). Fall back
+        // to a structural check so a previously downloaded APK is still reusable
+        // instead of forcing a slow re-download that would likely be unverifiable
+        // again anyway.
+        val looksLikeApk = runCatching {
+            file.inputStream().use {
+                val header = ByteArray(4)
+                it.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+            }
+        }.getOrDefault(false)
+        return file.takeIf { looksLikeApk }
     }
 
     private suspend fun rankedDownloadUrls(
@@ -252,6 +321,10 @@ class GitHubUpdateManager(private val context: Context) {
     private fun sourceName(url: String): String = runCatching { Uri.parse(url).host.orEmpty() }
         .getOrDefault(url.substringBefore('/'))
 
+    /** Distinct, user-selectable mirror host names for [release], in policy order. */
+    fun mirrorSources(release: GitHubRelease): List<String> =
+        DownloadMirrorPolicy.candidates(release.apkUrl).map(::sourceName).filter { it.isNotBlank() }.distinct()
+
 
     fun install(file: File): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
@@ -290,10 +363,14 @@ class GitHubUpdateManager(private val context: Context) {
         return false
     }
 
-    private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name) {
+    private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
         var expected: String? = null
         var lastFailure: Throwable? = null
-        for (candidate in rankedDownloadUrls(url) {}) {
+        // Bound the total time spent chasing checksum mirrors so a slow/hanging
+        // mirror cannot make the whole update appear stuck. Try a limited number
+        // of ranked candidates, each already under probeClient/client timeouts.
+        val candidates = rankedDownloadUrls(url) {}.take(CHECKSUM_MIRROR_ATTEMPTS)
+        for (candidate in candidates) {
             try {
                 val request = Request.Builder().url(candidate).header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}").build()
                 expected = client.newCall(request).await().use { response ->
@@ -311,28 +388,33 @@ class GitHubUpdateManager(private val context: Context) {
                 lastFailure = error
             }
         }
-        requireNotNull(expected) { lastFailure?.message ?: "All checksum mirrors failed" }
+        // Could not obtain a checksum -> signal "unavailable" (soft failure that
+        // the caller downgrades to an unverified install), NOT a mismatch.
+        val expectedHash = expected ?: throw ChecksumUnavailableException(lastFailure?.message ?: "All checksum mirrors failed")
+        val actual = fileSha256(file)
+        // Obtained a checksum but it does not match -> hard failure (tampering).
+        if (!actual.equals(expectedHash, true)) throw ChecksumMismatchException("APK SHA-256 verification failed")
+        return actual.lowercase()
+    }
+
+    private fun fileSha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             while (true) {
-                currentCoroutineContext().ensureActive()
                 val count = input.read(buffer)
                 if (count < 0) break
                 digest.update(buffer, 0, count)
             }
         }
-        val actual = digest.digest().joinToString("") { "%02x".format(it) }
-        require(actual.equals(expected, true)) { "APK SHA-256 verification failed" }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
-
-    private fun verificationMarker(release: GitHubRelease): String =
-        listOf(release.tag, release.apkName.substringAfterLast('/'), release.apkSize, release.checksumUrl.orEmpty()).joinToString("\n")
 
     private fun File.readTextOrNull(): String? = runCatching { takeIf(File::isFile)?.readText() }.getOrNull()
 
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
         private const val LATEST_RELEASE_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases/latest"
+        private const val CHECKSUM_MIRROR_ATTEMPTS = 4
     }
 }
