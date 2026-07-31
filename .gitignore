@@ -13,11 +13,14 @@ __pycache__/
 local.properties
 
 # Signing secrets
-release/
 release-assets/
+release/
 *.jks
 *.keystore
 keystore.properties
+# Allow committed CI keystore for reproducible builds
+!release/so-reverse-mcp-release.jks
+!release/keystore.properties
 
 # Generated binaries and native build outputs
 *.apk
