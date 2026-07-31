@@ -1,7 +1,6 @@
 name: Test v2
 
 on:
-  pull_request:
   push:
     branches:
       - main
