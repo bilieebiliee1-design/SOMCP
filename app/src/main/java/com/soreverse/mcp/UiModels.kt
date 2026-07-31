@@ -11,7 +11,7 @@ import org.json.JSONObject
 internal enum class MainTab { Service, Analyze, Logs, Settings }
 internal enum class SetupTarget { Directory, ApkMcp, KeepAlive }
 internal enum class SettingsDest {
-    Root, ServiceConfig, Appearance, KeepAlive, Access, Limits, Export, Audit, Blutter, Tunnel, ApkBridge, AiDeep, Updates, Probe, ToolStats, TunnelStats, Instructions, Credits, Disclaimer, About
+    Root, ServiceConfig, Appearance, KeepAlive, Access, Limits, Export, Audit, Blutter, Tunnel, ApkBridge, AiDeep, Updates, Probe, ToolStats, TunnelStats, Instructions, Credits, Disclaimer, About, BackupRestore
 }
 
 internal data class WorkspaceUi(
@@ -128,4 +128,29 @@ internal data class UiText(
     val decline: String,
     val firstRunDisclaimerTitle: String,
     val externalProbeExample: String,
+    val backupRestore: String,
+    val backupRestoreSubtitle: String,
+    val backupLocal: String,
+    val backupExport: String,
+    val backupImport: String,
+    val backupIncludeSecrets: String,
+    val backupExportSuccess: String,
+    val backupImportSuccess: String,
+    val backupImportError: String,
+    val backupRemote: String,
+    val backupProvider: String,
+    val backupWebdavUrl: String,
+    val backupWebdavUsername: String,
+    val backupWebdavPassword: String,
+    val backupS3Endpoint: String,
+    val backupS3Bucket: String,
+    val backupS3Region: String,
+    val backupS3AccessKey: String,
+    val backupS3SecretKey: String,
+    val backupRemoteTest: String,
+    val backupRemoteUpload: String,
+    val backupRemoteDownload: String,
+    val backupRemoteSuccess: String,
+    val backupRemoteError: String,
+    val backupSecretsMasked: String,
 )
