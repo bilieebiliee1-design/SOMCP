@@ -85,6 +85,11 @@ endif()
 add_library(rz_native SHARED ${RZ_SOURCES})
 target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
+add_library(integrity_check SHARED integrity_check.cpp)
+target_link_libraries(integrity_check PRIVATE dl log)
+target_compile_options(integrity_check PRIVATE -O2 -ffunction-sections -fdata-sections -fvisibility=hidden)
+target_link_options(integrity_check PRIVATE -Wl,--gc-sections -Wl,--icf=safe)
+
 add_library(blutter_bridge SHARED blutter_bridge.cpp)
 target_link_libraries(blutter_bridge PRIVATE dl log)
 
