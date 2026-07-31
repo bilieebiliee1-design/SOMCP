@@ -167,6 +167,7 @@ internal fun ServiceTab(
         settings.useDefaultWorkDir = treeUri == null
         runCatching { McpForegroundService.start(context) }
             .onSuccess {
+                running = true
                 portStatus = if (t.zh) "正在启动服务…" else "Starting service…"
                 endpoints = filteredEndpoints(context, settings, settings.port)
             }
