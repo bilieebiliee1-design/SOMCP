@@ -89,10 +89,23 @@ add_library(blutter_bridge SHARED blutter_bridge.cpp)
 target_link_libraries(blutter_bridge PRIVATE dl log)
 
 set(XANSO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/xAnSo-src")
+
+# Compatibility header for Windows-specific includes in xAnSo.
+set(XANSO_COMPAT_DIR "${CMAKE_CURRENT_BINARY_DIR}/xanso_compat")
+file(WRITE "${XANSO_COMPAT_DIR}/strsafe.h" "#include <stdio.h>\n")
+
+# Patch util.cpp: replace Windows-only ::_itoa_s() with standard snprintf.
+set(XANSO_PATCHED_DIR "${CMAKE_CURRENT_BINARY_DIR}/xanso_patched")
+file(READ "${XANSO_ROOT}/util/util.cpp" XANSO_UTIL_SRC)
+string(REPLACE "::_itoa_s(i, _rs, rdx)"
+       "snprintf(_rs, sizeof(_rs), (rdx==16)?\"%x\":(rdx==8)?\"%o\":\"%d\", i)"
+       XANSO_UTIL_SRC_PATCHED "${XANSO_UTIL_SRC}")
+file(WRITE "${XANSO_PATCHED_DIR}/util.cpp" "${XANSO_UTIL_SRC_PATCHED}")
+
 add_library(xanso_native SHARED
     xanso_jni.cpp
     ${XANSO_ROOT}/log.cpp
-    ${XANSO_ROOT}/util/util.cpp
+    ${XANSO_PATCHED_DIR}/util.cpp
     ${XANSO_ROOT}/Core/dyn_item.cpp
     ${XANSO_ROOT}/Core/dyn_section.cpp
     ${XANSO_ROOT}/Core/elf_header.cpp
@@ -100,6 +113,7 @@ add_library(xanso_native SHARED
     ${XANSO_ROOT}/Core/elf_segment.cpp
     ${XANSO_ROOT}/fix/section_fix.cpp
 )
+target_include_directories(xanso_native PRIVATE "${XANSO_COMPAT_DIR}")
 target_compile_options(xanso_native PRIVATE "-iquote${XANSO_ROOT}")
 target_link_libraries(xanso_native PRIVATE log)
 
