@@ -68,6 +68,7 @@ private fun settingsTitle(t: UiText, dest: SettingsDest): String = when (dest) {
     SettingsDest.Credits -> if (t.zh) "开源致谢" else "Credits"
     SettingsDest.Disclaimer -> t.disclaimer
     SettingsDest.About -> t.about
+    SettingsDest.BackupRestore -> t.backupRestore
 }
 
 @Composable
@@ -180,6 +181,8 @@ internal fun SettingsHub(
                 SurfacePanel {
                     NavRow(if (t.zh) "版本更新" else "Software update", if (t.zh) "GitHub Releases / 自动检查" else "GitHub Releases / automatic checks", Icons.Default.Info, trailing = availableRelease?.tag.orEmpty(), onClick = { onDest(SettingsDest.Updates) })
                     GroupDivider()
+                    NavRow(t.backupRestore, t.backupRestoreSubtitle, Icons.Default.Cloud, onClick = { onDest(SettingsDest.BackupRestore) })
+                    GroupDivider()
                     NavRow(if (t.zh) "工具调用审计" else "Tool audit", if (t.zh) "调用统计与失败率" else "Stats and failures", Icons.Default.Analytics, onClick = { onDest(SettingsDest.ToolStats) })
                     GroupDivider()
                     NavRow(if (t.zh) "隧道稳定性" else "Tunnel stability", if (t.zh) "重启与探查" else "Restart and probe", Icons.Default.Cloud, onClick = { onDest(SettingsDest.TunnelStats) })
@@ -223,6 +226,7 @@ internal fun SettingsHub(
             SettingsDest.AiDeep -> SettingsAiDeepPage(t, settings)
             SettingsDest.Updates -> SettingsUpdatesPage(t, settings, updateManager, availableRelease, onRelease)
             SettingsDest.Probe -> SettingsProbePage(t, settings)
+            SettingsDest.BackupRestore -> SettingsBackupRestorePage(t, settings)
             SettingsDest.ToolStats -> PageScroll { GlassGroup { Column(Modifier.padding(12.dp)) { ToolStatsSection(t, settings) } } }
             SettingsDest.TunnelStats -> PageScroll { GlassGroup { Column(Modifier.padding(12.dp)) { TunnelStatsSection(t) } } }
             SettingsDest.Instructions -> PageScroll {
