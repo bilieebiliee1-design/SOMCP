@@ -24,8 +24,15 @@ import java.io.File
  *    the backend is selected as active.
  *
  * Backend: [RizinNativeEngine] — Rizin (librz_asm/librz_analysis/librz_bin)
- * via JNI, statically linked into librz_native.so. Capstone/Keystone have been
- * fully removed from the project.
+ * via JNI, statically linked into librz_native.so, powers this interface's
+ * disassemble/assemble path.
+ *
+ * NOTE: Capstone and Keystone are NOT part of this NativeEngine backend, but
+ * they are still shipped and REQUIRED by the Unidbg emulation path
+ * ([com.soreverse.mcp.engine.UnidbgEmulator], which loads and self-tests
+ * libcapstone.so / libkeystone.so / libunicorn.so). Do not remove those
+ * native libraries on the assumption that "the engine dropped Capstone" —
+ * the emulator still hard-depends on them.
  */
 interface NativeEngine {
     val backendName: String
@@ -97,8 +104,9 @@ interface NativeEngine {
 
 /**
  * Rizin backend (librz_arch/librz_analysis/librz_asm/librz_bin) exposed through
- * a dedicated JNI surface in librz_native.so. This is the sole native backend
- * now that Capstone/Keystone have been removed.
+ * a dedicated JNI surface in librz_native.so. This is the sole NativeEngine
+ * disasm/asm backend; Capstone/Keystone are not used here (though they remain
+ * shipped for the Unidbg emulation path).
  *
  * librz_native.so is built by CMake from rizin_core.cpp and statically links
  * the Rizin archives produced by the meson cross-compile (see
@@ -162,67 +170,88 @@ object RizinNativeEngine : NativeEngine {
 
     override fun loadStatus(): String = if (loaded) "loaded" else "failed: $loadError"
 
+    // Rizin's RzCore and its global subsystems (rz_util buffers, egg, debug,
+    // analysis/bin registries) are NOT thread-safe. Every rz* entry point below
+    // spins up and tears down a fresh RzCore in native code; running two of them
+    // concurrently from different MCP coroutines corrupts Rizin's global state
+    // and crashes in rz_core_free / rz_buf_free (observed SIGSEGV). Serialize ALL
+    // native Rizin calls behind one process-wide lock so only a single RzCore is
+    // ever alive/mutated at a time. This is the minimal, safe fix and applies to
+    // every rz* method, not just the one that happened to crash.
+    private val nativeLock = java.util.concurrent.locks.ReentrantLock()
+
+    private inline fun <T> serial(block: () -> T): T {
+        nativeLock.lock()
+        try {
+            return block()
+        } finally {
+            nativeLock.unlock()
+        }
+    }
+
     override fun disassemble(bytes: ByteArray, arch: String, address: Long, thumb: Boolean, limit: Int): String {
         if (!available()) return ""
-        return runCatching { rzDisassemble(bytes, arch, address, thumb, limit) }.getOrDefault("")
+        return serial { runCatching { rzDisassemble(bytes, arch, address, thumb, limit) }.getOrDefault("") }
     }
 
     override fun assemble(asm: String, arch: String, address: Long, thumb: Boolean): ByteArray {
         if (!available()) return ByteArray(0)
-        return runCatching { rzAssemble(asm, arch, address, thumb) }.getOrDefault(ByteArray(0))
+        return serial { runCatching { rzAssemble(asm, arch, address, thumb) }.getOrDefault(ByteArray(0)) }
     }
 
     override fun xrefs(bytes: ByteArray, arch: String, atVa: Long, direction: String): String {
         if (!available()) return "{\"xrefs\":[]}"
-        return runCatching { rzXrefs(bytes, arch, atVa, direction) }.getOrDefault("{\"xrefs\":[]}")
+        return serial { runCatching { rzXrefs(bytes, arch, atVa, direction) }.getOrDefault("{\"xrefs\":[]}") }
     }
 
     override fun analyze(bytes: ByteArray, arch: String): String {
         if (!available()) return "{\"error\":\"unavailable\"}"
-        return runCatching { rzAnalyze(bytes, arch) }.getOrDefault("{\"error\":\"failed\"}")
+        return serial { runCatching { rzAnalyze(bytes, arch) }.getOrDefault("{\"error\":\"failed\"}") }
     }
 
     override fun functions(bytes: ByteArray, arch: String): String {
         if (!available()) return "[]"
-        return runCatching { rzFunctions(bytes, arch) }.getOrDefault("[]")
+        return serial { runCatching { rzFunctions(bytes, arch) }.getOrDefault("[]") }
     }
 
     override fun cfg(bytes: ByteArray, arch: String, funcVa: Long): String {
         if (!available()) return "{\"error\":\"unavailable\"}"
-        return runCatching { rzCfg(bytes, arch, funcVa) }.getOrDefault("{\"error\":\"failed\"}")
+        return serial { runCatching { rzCfg(bytes, arch, funcVa) }.getOrDefault("{\"error\":\"failed\"}") }
     }
 
     override fun searchBytes(bytes: ByteArray, arch: String, pattern: String, fromVa: Long, toVa: Long): String {
         if (!available()) return "{\"hits\":[]}"
-        return runCatching { rzSearchBytes(bytes, arch, pattern, fromVa, toVa) }.getOrDefault("{\"hits\":[]}")
+        return serial { runCatching { rzSearchBytes(bytes, arch, pattern, fromVa, toVa) }.getOrDefault("{\"hits\":[]}") }
     }
 
     override fun scanCrypto(bytes: ByteArray, arch: String): String {
         if (!available()) return "{\"hits\":[]}"
-        return runCatching { rzScanCrypto(bytes, arch) }.getOrDefault("{\"hits\":[]}")
+        return serial { runCatching { rzScanCrypto(bytes, arch) }.getOrDefault("{\"hits\":[]}") }
     }
 
     override fun esilStep(bytes: ByteArray, arch: String, startVa: Long, stepCount: Int): String {
         if (!available()) return "{\"error\":\"unavailable\"}"
-        return runCatching { rzEsilStep(bytes, arch, startVa, stepCount) }.getOrDefault("{\"error\":\"failed\"}")
+        return serial { runCatching { rzEsilStep(bytes, arch, startVa, stepCount) }.getOrDefault("{\"error\":\"failed\"}") }
     }
 
     override fun diff(bytesA: ByteArray, bytesB: ByteArray): String {
         if (!available()) return "{\"error\":\"unavailable\"}"
-        return runCatching { rzDiff(bytesA, bytesB) }.getOrDefault("{\"error\":\"failed\"}")
+        return serial { runCatching { rzDiff(bytesA, bytesB) }.getOrDefault("{\"error\":\"failed\"}") }
     }
 
     override fun command(bytes: ByteArray, arch: String, command: String, unsafe: Boolean): String {
         if (!available()) return "{\"error\":\"unavailable\"}"
-        return runCatching { rzCommand(bytes, arch, command, unsafe) }.getOrDefault("{\"error\":\"failed\"}")
+        return serial { runCatching { rzCommand(bytes, arch, command, unsafe) }.getOrDefault("{\"error\":\"failed\"}") }
     }
 
     override fun decompile(bytes: ByteArray, arch: String, funcVa: Long): String {
         if (!available()) return "{\"error\":\"unavailable\"}"
-        return runCatching { rzDecompile(bytes, arch, funcVa) }
-            .onSuccess { AppLog.i("RizinNativeEngine: rzDecompile returned ${it.take(160)}") }
-            .onFailure { AppLog.e("RizinNativeEngine: rzDecompile failed", it) }
-            .getOrDefault("{\"error\":\"failed\"}")
+        return serial {
+            runCatching { rzDecompile(bytes, arch, funcVa) }
+                .onSuccess { AppLog.i("RizinNativeEngine: rzDecompile returned ${it.take(160)}") }
+                .onFailure { AppLog.e("RizinNativeEngine: rzDecompile failed", it) }
+                .getOrDefault("{\"error\":\"failed\"}")
+        }
     }
 }
 

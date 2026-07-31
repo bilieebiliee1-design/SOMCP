@@ -136,6 +136,18 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         if (stopRequested) {
             return _status.get()
         }
+        // A tunnel exposes the MCP service to the public internet. Authentication
+        // is NOT forced by default (per the 1.0.12 UX change): if the user has
+        // enabled auth we require a non-blank token so a credentialed surface is
+        // never published tokenless; if the user has deliberately left auth off,
+        // we honour that choice and start the tunnel, logging a clear warning
+        // about the exposure instead of refusing.
+        if (settings.authEnabled && settings.accessToken.isBlank()) {
+            return fail(mode, targetPort, "Authentication is enabled but no access token is set. Set an access token or disable authentication before starting the tunnel.")
+        }
+        if (!settings.authEnabled) {
+            AppLog.w("Starting Cloudflare tunnel WITHOUT authentication: the MCP service will be reachable publicly with no token. Enable authentication in settings if this is not intended.")
+        }
         // Already running on the same target with the same mode and a live
         // process — nothing to do. Avoids costly stop/restart churn from
         // keepalive or client retries when the tunnel is healthy.
@@ -280,6 +292,10 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             }
         }
         transitionTo(State.STOPPED, mode = Mode.OFF, publicUrl = null, message = "stopped")
+        // Remove plaintext tunnel credentials from cacheDir once the tunnel is
+        // down so a long-running tunnel secret does not linger across sessions.
+        runCatching { File(context.cacheDir, "tunnel_creds.json").delete() }
+        runCatching { File(context.cacheDir, "tunnel_config.yml").delete() }
         publish()
     }
 
@@ -361,6 +377,10 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             "--loglevel", settings.tunnelLogLevel,
             "run", "--token", token,
         )
+        if (settings.tunnelProtocol != "auto") {
+            val insertAt = cmd.indexOf("run")
+            cmd.addAll(insertAt, listOf("--protocol", settings.tunnelProtocol))
+        }
         val edges = edgeIps()
         if (edges.isNotEmpty()) {
             val insertAt = cmd.indexOf("run")
@@ -534,14 +554,19 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         if (connPattern.matcher(line).find()) {
             val s = _status.get()
             if (s.state == State.STARTING) {
-                transitionTo(State.RUNNING, mode, message = "registered")
+                val message = if (mode == Mode.NAMED && s.publicUrl.isNullOrBlank()) {
+                    "registered; set the named tunnel public hostname/URL in settings to display the public MCP address"
+                } else {
+                    "registered"
+                }
+                transitionTo(State.RUNNING, mode, message = message)
                 publish()
             }
         }
-        if (mode == Mode.NAMED && (line.contains("Unauthorized", true) || line.contains("Tunnel not found", true))) {
+        if (mode == Mode.NAMED && isTerminalNamedTunnelError(line)) {
             terminalFailure = true
             stopRequested = true
-            transitionTo(State.FAILED, mode, message = "permanent tunnel authorization failed; update the tunnel token")
+            transitionTo(State.FAILED, mode, message = "permanent tunnel authorization failed; update the tunnel token and Cloudflare published application route")
             publish()
             runCatching { owner.destroy() }
         } else if (line.contains("ERR", true) && (line.contains("tunnel") || line.contains("connect"))) {
@@ -549,6 +574,15 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         }
         return null
     }
+
+    private fun isTerminalNamedTunnelError(line: String): Boolean =
+        line.contains("Unauthorized", true) ||
+            line.contains("Tunnel not found", true) ||
+            line.contains("invalid token", true) ||
+            line.contains("token is invalid", true) ||
+            line.contains("failed to authenticate", true) ||
+            line.contains("authentication failed", true) ||
+            line.contains("forbidden", true)
 
     private fun normalizePublicUrl(value: String): String? {
         val raw = value.trim()

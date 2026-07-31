@@ -2,13 +2,15 @@
 
 SOMCP 是一个运行在 Android 手机上的本地 SO 逆向 MCP 服务器。它通过 Streamable HTTP 暴露 MCP 工具，让客户端可以在手机上完成 ELF 结构分析、Rizin 反汇编/分析、LIEF ELF 修复/重写、补丁会话、构建导出、Cloudflare Tunnel 暴露和可选 APK MCP 桥接。
 
-当前版本：`1.0.9`
+当前版本：`1.0.14`
 
 包名：`com.soreverse.mcp`
 
 最低系统：Android 8.0 / API 26
 
 许可证：`GPL-3.0-only`。SOMCP 主项目依据 [GNU General Public License v3.0](LICENSE) 发布。仓库中的第三方依赖、submodule、生成资源和补丁仍分别遵循各自上游许可证，GPL-3.0 声明不会替代其原有许可条款。
+
+> **再分发义务（重要）**：本软件受《中华人民共和国著作权法》与《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：保留版权与许可声明及 [NOTICE](NOTICE)、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码、并标注所做修改。闭源分发、抹除署名或改名冒充原创即构成侵权——依 GPL-3.0 第 8 条授权自动终止，权利人可要求停止侵害、下架、公开更正并索赔（GPL 在中国司法实践中已被确认有效可强制执行，参见"数字天堂诉柚子科技""罗盒诉风灵"等案）。维权模板见 [docs/legal](docs/legal)。本软件在 MCP `initialize`/健康检查返回与"关于"页固定输出许可证、上游仓库与版权，作为运行时溯源证据。
 
 ## APK 位置
 
@@ -37,11 +39,11 @@ app/build/outputs/apk/release/app-universal-release.apk
 推荐 Release tag 使用 `v<versionName>`，并上传按 ABI 命名的 APK：
 
 ```text
-SOMCP-1.0.9-arm64-v8a.apk
-SOMCP-1.0.9-armeabi-v7a.apk
-SOMCP-1.0.9-x86.apk
-SOMCP-1.0.9-x86_64.apk
-SOMCP-1.0.9-universal.apk
+SOMCP-1.0.14-arm64-v8a.apk
+SOMCP-1.0.14-armeabi-v7a.apk
+SOMCP-1.0.14-x86.apk
+SOMCP-1.0.14-x86_64.apk
+SOMCP-1.0.14-universal.apk
 ```
 
 可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI，存在校验资产时会在安装前强制验证 SHA-256。
