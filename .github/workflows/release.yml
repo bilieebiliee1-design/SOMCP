@@ -1,0 +1,52 @@
+name: Build Release APKs
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
+      - uses: android-actions/setup-android@v3
+      - run: |
+          sdkmanager "platforms;android-36" \
+                     "build-tools;36.0.0" \
+                     "ndk;29.0.14206865"
+      - name: Setup keystore
+        run: |
+          mkdir -p release
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release/so-reverse-mcp-release.jks
+            cat > release/keystore.properties <<PROPS
+          storePassword=${{ secrets.KEYSTORE_STORE_PASSWORD }}
+          keyAlias=${{ secrets.KEYSTORE_KEY_ALIAS }}
+          keyPassword=${{ secrets.KEYSTORE_KEY_PASSWORD }}
+          PROPS
+          fi
+      - name: Build release APKs
+        run: gradle :app:assembleRelease --stacktrace
+      - name: Generate SHA256 checksums
+        run: |
+          cd app/build/outputs/apk/release
+          sha256sum *.apk > SHA256SUMS
+      - name: Upload APKs to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/SHA256SUMS
