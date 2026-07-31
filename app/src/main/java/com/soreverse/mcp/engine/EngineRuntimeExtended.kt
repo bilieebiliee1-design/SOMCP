@@ -2,8 +2,10 @@ package com.soreverse.mcp.engine
 
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
+import com.soreverse.mcp.nativecore.NativeEngine
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 // ── 1. 调用图可视化导出 ──
 
@@ -45,10 +47,10 @@ internal fun EngineRuntime.rzCallgraph(
 private fun tryConvertDotToMermaid(dot: String): String {
     if (dot.isBlank()) return ""
     val sb = StringBuilder().appendLine("graph TD")
-    Regex("""(\w+)\s*\[label="([^"]*)"""").findAll(dot).forEach {
-        sb.appendLine("    ${it.groupValues[1]}[\"${it.groupValues[2].take(30)}\"]")
+    Regex("""(\\w+)\\s*\\[label=\"([^\"]*)\"""").findAll(dot).forEach {
+        sb.appendLine("    ${it.groupValues[1]}[\\"${it.groupValues[2].take(30)}\\"]")
     }
-    Regex("""(\w+)\s*->\s*(\w+)""").findAll(dot).forEach {
+    Regex("""(\\w+)\\s*->\\s*(\\w+)""").findAll(dot).forEach {
         sb.appendLine("    ${it.groupValues[1]} --> ${it.groupValues[2]}")
     }
     return sb.toString()
@@ -123,46 +125,58 @@ private fun buildHtmlReport(data: JSONObject, sourceName: String): String {
     val crypto = data.optJSONArray("crypto") ?: JSONArray()
     val recommendations = data.optJSONArray("recommendations") ?: JSONArray()
 
-    return """
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-        <meta charset="UTF-8">
-        <title>SOMCP 分析报告 - $sourceName</title>
-        <style>
-            body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:20px}
-            .container{max-width:1200px;margin:0 auto}
-            h1{color:#58a6ff}h2{color:#79c0ff;border-bottom:1px solid #21262d;padding-bottom:5px;margin-top:20px}
-            .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px;margin:20px 0}
-            .stat{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:15px;text-align:center}
-            .stat-val{font-size:24px;font-weight:bold;color:#58a6ff}
-            table{width:100%;border-collapse:collapse;margin-top:10px}
-            th,td{padding:10px;text-align:left;border-bottom:1px solid #21262d;font-size:13px}
-            th{background:#161b22;color:#79c0ff}
-            .addr{color:#d2a8ff;font-family:monospace}
-            .rec{background:#161b22;border-left:3px solid #58a6ff;padding:10px 15px;margin:5px 0;border-radius:0 4px 4px 0}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🔍 SOMCP 逆向分析报告</h1>
-            <p style="color:#8b949e">目标: $sourceName | 架构: ${data.optString("architecture","?")} | ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}</p>
-            <div class="stats">
-                <div class="stat"><div class="stat-val">${functions.length()}</div><div>函数</div></div>
-                <div class="stat"><div class="stat-val">${sections.length()}</div><div>节区</div></div>
-                <div class="stat"><div class="stat-val">${crypto.length()}</div><div>加密特征</div></div>
-            </div>
-            <h2>📋 节区列表</h2>
-            <table><tr><th>名称</th><th>地址</th><th>大小</th></tr>
-                ${(0 until sections.length()).map{val s=sections.optJSONObject(it)?@return@map"";<tr><td class='addr'>${s.optString("name","")}</td><td class='addr'>${s.optString("addr",s.optString("vaddr","0"))}</td><td>${s.optLong("size",0)}</td></tr>"}.joinToString("")}
-            </table>
-            <h2>🔧 函数列表（前50）</h2>
-            <table><tr><th>名称</th><th>地址</th><th>大小</th></tr>
-                ${(0 until min(functions.length(),50)).map{val f=functions.optJSONObject(it)?@return@map"";<tr><td class='addr'>${f.optString("name","")}</td><td class='addr'>${f.optString("addr",f.optString("startAddr","0"))}</td><td>${f.optLong("size",0)}</td></tr>"}.joinToString("")}
-            </table>
-            ${if(recommendations.length()>0){"<h2>💡 建议</h2>"+(0 until recommendations.length()).map{"<div class='rec'>${recommendations.optString(it,"")}</div>"}.joinToString("")}else""}
-        </div>
-    </body>
-    </html>
-    """.trimIndent()
+    val html = StringBuilder()
+    html.appendLine("<!DOCTYPE html>")
+    html.appendLine("<html lang=\"zh-CN\">")
+    html.appendLine("<head>")
+    html.appendLine("    <meta charset=\"UTF-8\">")
+    html.appendLine("    <title>SOMCP 分析报告 - $sourceName</title>")
+    html.appendLine("    <style>")
+    html.appendLine("        body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:20px}")
+    html.appendLine("        .container{max-width:1200px;margin:0 auto}")
+    html.appendLine("        h1{color:#58a6ff}h2{color:#79c0ff;border-bottom:1px solid #21262d;padding-bottom:5px;margin-top:20px}")
+    html.appendLine("        .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px;margin:20px 0}")
+    html.appendLine("        .stat{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:15px;text-align:center}")
+    html.appendLine("        .stat-val{font-size:24px;font-weight:bold;color:#58a6ff}")
+    html.appendLine("        table{width:100%;border-collapse:collapse;margin-top:10px}")
+    html.appendLine("        th,td{padding:10px;text-align:left;border-bottom:1px solid #21262d;font-size:13px}")
+    html.appendLine("        th{background:#161b22;color:#79c0ff}")
+    html.appendLine("        .addr{color:#d2a8ff;font-family:monospace}")
+    html.appendLine("        .rec{background:#161b22;border-left:3px solid #58a6ff;padding:10px 15px;margin:5px 0;border-radius:0 4px 4px 0}")
+    html.appendLine("    </style>")
+    html.appendLine("</head>")
+    html.appendLine("<body>")
+    html.appendLine("    <div class=\"container\">")
+    html.appendLine("        <h1>🔍 SOMCP 逆向分析报告</h1>")
+    html.appendLine("        <p style=\"color:#8b949e\">目标: $sourceName | 架构: ${data.optString("architecture","?")} | ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}</p>")
+    html.appendLine("        <div class=\"stats\">")
+    html.appendLine("            <div class=\"stat\"><div class=\"stat-val\">${functions.length()}</div><div>函数</div></div>")
+    html.appendLine("            <div class=\"stat\"><div class=\"stat-val\">${sections.length()}</div><div>节区</div></div>")
+    html.appendLine("            <div class=\"stat\"><div class=\"stat-val\">${crypto.length()}</div><div>加密特征</div></div>")
+    html.appendLine("        </div>")
+    html.appendLine("        <h2>📋 节区列表</h2>")
+    html.appendLine("        <table><tr><th>名称</th><th>地址</th><th>大小</th></tr>")
+    for (i in 0 until sections.length()) {
+        val s = sections.optJSONObject(i) ?: continue
+        html.appendLine("            <tr><td class='addr'>${s.optString("name","")}</td><td class='addr'>${s.optString("addr",s.optString("vaddr","0"))}</td><td>${s.optLong("size",0)}</td></tr>")
+    }
+    html.appendLine("        </table>")
+    html.appendLine("        <h2>🔧 函数列表（前50）</h2>")
+    html.appendLine("        <table><tr><th>名称</th><th>地址</th><th>大小</th></tr>")
+    val maxFuncs = minOf(functions.length(), 50)
+    for (i in 0 until maxFuncs) {
+        val f = functions.optJSONObject(i) ?: continue
+        html.appendLine("            <tr><td class='addr'>${f.optString("name","")}</td><td class='addr'>${f.optString("addr",f.optString("startAddr","0"))}</td><td>${f.optLong("size",0)}</td></tr>")
+    }
+    html.appendLine("        </table>")
+    if (recommendations.length() > 0) {
+        html.appendLine("        <h2>💡 建议</h2>")
+        for (i in 0 until recommendations.length()) {
+            html.appendLine("        <div class='rec'>${recommendations.optString(i,"")}</div>")
+        }
+    }
+    html.appendLine("    </div>")
+    html.appendLine("</body>")
+    html.appendLine("</html>")
+    return html.toString()
 }
