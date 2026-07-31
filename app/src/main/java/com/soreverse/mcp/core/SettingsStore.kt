@@ -517,6 +517,43 @@ class SettingsStore(context: Context) {
             value.ifBlank { DEFAULT_AI_SYSTEM_PROMPT },
         ).apply()
 
+    // ---- Remote backup (WebDAV / S3) ----
+    var remoteBackupProvider: String
+        get() = prefs.getString("remoteBackupProvider", "webdav") ?: "webdav"
+        set(value) = prefs.edit().putString("remoteBackupProvider", if (value in setOf("webdav", "s3")) value else "webdav").apply()
+
+    var webdavUrl: String
+        get() = prefs.getString("webdavUrl", "") ?: ""
+        set(value) = prefs.edit().putString("webdavUrl", value.trim()).apply()
+
+    var webdavUsername: String
+        get() = prefs.getString("webdavUsername", "") ?: ""
+        set(value) = prefs.edit().putString("webdavUsername", value.trim()).apply()
+
+    var webdavPassword: String
+        get() = sanitizeCredential(prefs.getString("webdavPassword", "").orEmpty())
+        set(value) = prefs.edit().putString("webdavPassword", sanitizeCredential(value)).apply()
+
+    var s3Endpoint: String
+        get() = prefs.getString("s3Endpoint", "") ?: ""
+        set(value) = prefs.edit().putString("s3Endpoint", value.trim()).apply()
+
+    var s3Bucket: String
+        get() = prefs.getString("s3Bucket", "") ?: ""
+        set(value) = prefs.edit().putString("s3Bucket", value.trim()).apply()
+
+    var s3Region: String
+        get() = prefs.getString("s3Region", "") ?: ""
+        set(value) = prefs.edit().putString("s3Region", value.trim()).apply()
+
+    var s3AccessKey: String
+        get() = sanitizeCredential(prefs.getString("s3AccessKey", "").orEmpty())
+        set(value) = prefs.edit().putString("s3AccessKey", sanitizeCredential(value)).apply()
+
+    var s3SecretKey: String
+        get() = sanitizeCredential(prefs.getString("s3SecretKey", "").orEmpty())
+        set(value) = prefs.edit().putString("s3SecretKey", sanitizeCredential(value)).apply()
+
     fun resetAccessToken(): String {
         val bytes = ByteArray(18)
         SecureRandom().nextBytes(bytes)
@@ -819,6 +856,14 @@ class SettingsStore(context: Context) {
                 .put("textScale", enums("normal", "large", "xlarge"))
                 .put("language", enums("system", "zh", "en")))
             .put("notes", "Use app_config action=get|set|schema|reset_token. Nested groups or flat keys both work. Secret fields are masked on get.")
+    }
+
+    /** Export all settings as a formatted JSON string. */
+    fun toJsonString(maskSecrets: Boolean = true): String = snapshot(maskSecrets).toString(2)
+
+    /** Import settings from a JSON string. Returns the applyPatch result. */
+    fun fromJsonString(json: String, allowSecrets: Boolean = false): org.json.JSONObject {
+        return applyPatch(org.json.JSONObject(json), allowSecrets = allowSecrets, allowSecurityFields = allowSecrets)
     }
 
     companion object {
