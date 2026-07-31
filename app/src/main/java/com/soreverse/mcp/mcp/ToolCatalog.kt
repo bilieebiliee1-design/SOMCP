@@ -78,6 +78,86 @@ object ToolCatalog {
         }) }
     ) { e, a, _ -> e.exportHtmlReport(a.str("workspaceId"), a.str("editSessionId")) }
 
+    // ── WORKSPACE ──
+
+    private val soOpen = EngineToolHandler(
+        ToolMeta("so_open",
+            "【SO 分析入口】打开 SO 文件并创建工作区（action=list 列出可用 SO）。所有 .so/.ELF 文件操作必须从 so_open 开始，不要使用 mt_apk_*。",
+            "【PRIMARY SO ENTRY POINT】Open a SO file and create a workspace. Use action=list to discover available SO files. Use action=open_url to download a http(s) SO into the selected work directory, then open and analyze it. All .so/ELF tasks MUST start from so_open — do NOT use mt_apk_* for SO files.",
+            "workspace", ToolClass.CORE, heavy = true,
+        ) { objectSchema(props {
+            "action".oneOf("open (default) | list | open_url", "open", "list", "open_url")
+            "path" str "Absolute path or content:// URI (action=open)"
+            "filePath" str "Alias of path"
+            "url" str "http(s) URL pointing directly to a .so/ELF file (action=open_url). A work directory must be selected first."
+            "outputName" str "Optional file name to save the downloaded SO in the work directory"
+            "prefix" str "Path or file prefix filter (action=list)"
+            "limit" int "Maximum items (action=list)"
+            "cursor" str "Pagination cursor (action=list)"
+            "temporary" bool "If true, workspace won't persist across restarts"
+        }) }
+    ) { e, a, s ->
+        when (a.str("action", "open")) {
+            "list" -> e.listAvailableSos(a.str("prefix"), a.intValue("limit", s.defaultLimit), a.str("cursor"))
+            "open_url" -> e.openUrl(a.str("url"), a.str("outputName"), a.bool("temporary", false))
+            else -> e.open(a.pathArg(), a.bool("temporary", true))
+        }
+    }
+
+    private val soClose = EngineToolHandler(
+        ToolMeta("so_close",
+            "关闭工作区（action=list 列出已打开工作区）",
+            "Close an open workspace. Use action=list to see open workspaces.",
+            "workspace", ToolClass.CORE,
+        ) { objectSchema(props {
+            "action".oneOf("close (default) | list", "close", "list")
+            "workspaceId" str "Workspace id (action=close)"
+        }) }
+    ) { e, a, _ ->
+        when (a.str("action", "close")) {
+            "list" -> e.listWorkspaces()
+            else -> e.close(a.str("workspaceId"))
+        }
+    }
+
+    private val apkAnalyze = EngineToolHandler(
+        ToolMeta(
+            "apk_analyze",
+            "独立解析本地 APK：ZIP 条目、Manifest 格式、DEX 头、ABI/SO、资源与 v1 签名文件；不依赖外部 APK MCP。",
+            "Standalone local APK parser for ZIP entries, manifest format, DEX headers, ABI/SO inventory, resources, and v1 signature files; no external APK MCP required.",
+            "workspace",
+            ToolClass.CORE,
+        ) {
+            objectSchema(props {
+                "path" str "Local APK path or path relative to the selected work directory."
+                "entryLimit" int "Maximum ZIP entries returned, 1..5000 (default 500)."
+            })
+        },
+    ) { engine, args, _ -> engine.analyzeApk(args.str("path").ifBlank { args.str("filePath") }, args.intValue("entryLimit", 500)) }
+
+    private val flutterBlutter = EngineToolHandler(
+        ToolMeta(
+            "flutter_blutter",
+            "Flutter AOT/Blutter 聚合工具：识别 Flutter APK、提取版本指纹，并使用内置 Flutter 3.44.x / Dart 3.12.2 arm64 Runner 完成本地分析。其他版本会明确返回不支持。",
+            "Aggregated Flutter AOT and Blutter tool using the embedded Flutter 3.44.x / Dart 3.12.2 arm64 runner. Other versions return an explicit unsupported-version result.",
+            "analyze",
+            ToolClass.CORE,
+            heavy = true,
+        ) {
+            objectSchema(props {
+                "action".oneOf("inspect | analyze | status | result | cancel | packages | prune", "inspect", "analyze", "status", "result", "cancel", "packages", "prune")
+                "path" str "APK path or directory containing libapp.so and libflutter.so."
+                "jobId" str "Persistent Blutter job id for status, result, or cancel."
+                "abi".oneOf("Target ABI", "auto", "arm64-v8a", "x86_64", "armeabi-v7a", "x86")
+                "backend".oneOf("Execution backend", "auto", "embedded")
+                "limit" int "Maximum result entities, 1..1000."
+                "kind".oneOf("Paged result collection", "libraries", "classes", "functions", "objects")
+                "cursor" str "Opaque cursor returned by a previous result page."
+                "olderThanMillis" int "Prune cached results older than this duration."
+            })
+        },
+    ) { engine, args, _ -> engine.flutterBlutter(args) }
+
     // ── Registry ──
 
     val ALL: List<ToolHandler> = listOf(
