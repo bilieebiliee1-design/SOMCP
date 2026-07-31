@@ -29,12 +29,24 @@ jobs:
                      "ndk;29.0.14206865"
       - name: Setup keystore
         run: |
+          mkdir -p release
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release/so-reverse-mcp-release.jks
             cat > release/keystore.properties <<PROPS
           storePassword=${{ secrets.KEYSTORE_STORE_PASSWORD }}
           keyAlias=${{ secrets.KEYSTORE_KEY_ALIAS }}
           keyPassword=${{ secrets.KEYSTORE_KEY_PASSWORD }}
+          PROPS
+          else
+            # Generate a self-signed keystore for CI builds
+            keytool -genkey -v -keystore release/so-reverse-mcp-release.jks \
+              -alias release -keyalg RSA -keysize 2048 -validity 3650 \
+              -storepass ci-build -keypass ci-build \
+              -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=CN"
+            cat > release/keystore.properties <<PROPS
+          storePassword=ci-build
+          keyAlias=release
+          keyPassword=ci-build
           PROPS
           fi
       - name: Build release APKs
