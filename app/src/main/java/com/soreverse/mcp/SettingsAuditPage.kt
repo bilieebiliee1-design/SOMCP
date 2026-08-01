@@ -1,26 +1,34 @@
 package com.soreverse.mcp
 
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.mcp.ToolCatalog
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
     var autoSnapshotBeforeEdit by remember { mutableStateOf(settings.autoSnapshotBeforeEdit) }
@@ -81,31 +89,53 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
         }
         GlassGroup {
             Text(if (t.zh) "禁用工具" else "Disabled tools", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(horizontal = 14.dp)) {
-                val disabled = disabledTools.split(',').map(String::trim).filter(String::isNotBlank).toSet()
-                ToolCatalog.names.forEach { name ->
-                    FilterChip(selected = name in disabled, onClick = {
-                        val next = disabled.toMutableSet().apply { if (!add(name)) remove(name) }
-                        disabledTools = next.sorted().joinToString(",")
-                        settings.disabledTools = disabledTools
-                    }, label = { Text(name) })
+            var expanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+            ) {
+                OutlinedTextField(
+                    value = disabledTools,
+                    onValueChange = { disabledTools = it; settings.disabledTools = it },
+                    label = { Text(if (t.zh) "禁用工具(逗号分隔)" else "Disabled tools (comma-separated)") },
+                    placeholder = { Text(if (t.zh) "从下拉列表选择或直接输入" else "Select from dropdown or type directly") },
+                    singleLine = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    modifier = Modifier.fillMaxWidth().menuAnchor(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    ),
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    val disabledSet = disabledTools.split(',').map(String::trim).filter(String::isNotBlank).toMutableSet()
+                    ToolCatalog.names.forEach { name ->
+                        val selected = name in disabledSet
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = selected, onCheckedChange = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(name)
+                                }
+                            },
+                            onClick = {
+                                val next = disabledSet.toMutableSet().apply { if (!add(name)) remove(name) }
+                                disabledTools = next.sorted().joinToString(",")
+                                settings.disabledTools = disabledTools
+                            },
+                        )
+                    }
                 }
             }
-            OutlinedTextField(
-                value = disabledTools,
-                onValueChange = { disabledTools = it; settings.disabledTools = it },
-                label = { Text(if (t.zh) "禁用工具列表(逗号分隔)" else "Disabled tools (comma-separated)") },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                ),
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
-            )
-            Text(if (t.zh) "勾选结果会同步到原始逗号分隔配置；高级用户仍可直接编辑。" else "Selections sync to the raw comma-separated configuration, which remains editable.", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (t.zh) "从下拉菜单勾选或直接输入工具名称，逗号分隔。" else "Check tools in the dropdown or type names directly, comma-separated.", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -195,6 +195,13 @@ internal fun SettingsHub(
                     GroupDivider()
                     NavRow(t.about, icon = Icons.Default.Info, onClick = { onDest(SettingsDest.About) })
                 }
+                // License footer
+                Text(
+                    "${com.soreverse.mcp.core.Provenance.PROJECT} · ${com.soreverse.mcp.core.Provenance.LICENSE}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp).align(Alignment.CenterHorizontally),
+                )
             }
         }
         if (dest != SettingsDest.Root) {
@@ -244,7 +251,23 @@ internal fun SettingsHub(
                 }
             }
             SettingsDest.Credits -> SettingsCreditsPage(t)
-            SettingsDest.Disclaimer -> PageScroll { GlassGroup { Text(t.disclaimerBody, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium) } }
+            SettingsDest.Disclaimer -> PageScroll {
+                GlassGroup {
+                    Text(t.disclaimerBody, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+                GlassGroup(title = if (t.zh) "开源许可" else "License") {
+                    Text(
+                        if (t.zh) {
+                            "${com.soreverse.mcp.core.Provenance.PROJECT} 是 GPL-3.0-only 自由软件。任何再分发（含修改、改名、二次打包版本）必须保留本版权与许可声明、继续以 GPL-3.0-only 授权，并向每一位接收者提供完整对应源代码。"
+                        } else {
+                            "${com.soreverse.mcp.core.Provenance.PROJECT} is GPL-3.0-only free software. Any redistribution must retain this notice, remain under GPL-3.0-only, and provide complete corresponding source code."
+                        },
+                        modifier = Modifier.padding(14.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             SettingsDest.About -> {
                 val aboutContext = LocalContext.current
                 PageScroll {
