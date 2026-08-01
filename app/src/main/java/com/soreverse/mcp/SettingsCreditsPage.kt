@@ -17,6 +17,17 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun SettingsCreditsPage(t: UiText) {
     PageScroll {
+        GlassGroup(
+            title = "${com.soreverse.mcp.core.Provenance.PROJECT} · ${com.soreverse.mcp.core.Provenance.LICENSE}",
+            footer = com.soreverse.mcp.core.Provenance.COPYRIGHT,
+        ) {
+            Text(
+                if (t.zh) "本软件为 GPL-3.0-only 自由软件。再分发（含修改、改名、二次打包版本）必须保留版权与许可声明、继续以 GPL-3.0-only 授权、提供完整对应源代码。上游唯一官方来源：" else "SOMCP is GPL-3.0-only free software. Redistribution must retain notices, remian under GPL-3.0-only, and provide complete corresponding source. Upstream: ",
+                modifier = Modifier.padding(14.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         GlassGroup(footer = if (t.zh) "排名不分先后。点击条目可打开项目主页。" else "Listed in no particular order. Tap an item to open its homepage.") {
             Text(
                 if (t.zh) "以下项目和工具提供了直接依赖、运行基础、工程参考或工作流参考。" else "These projects provide dependencies, runtime foundations, or workflow references.",
