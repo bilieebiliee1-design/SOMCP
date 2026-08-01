@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   checks:
@@ -66,5 +67,11 @@ jobs:
         run: gradle :app:lintDebug --stacktrace
       - name: Debug build
         run: gradle :app:assembleDebug --stacktrace
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: somcp-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
       - name: Unit tests (strict)
         run: gradle :app:testDebugUnitTest --stacktrace -Pkotlin.compiler.allWarningsAsErrors=true
