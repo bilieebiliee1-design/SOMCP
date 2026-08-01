@@ -177,6 +177,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                 Mode.OFF -> {}
             }
         } catch (e: Exception) {
+            if (stopRequested || generation.get() != runGeneration) {
+                return transitionTo(State.STOPPED, mode = Mode.OFF, publicUrl = null, message = "stopped")
+            }
             return fail(mode, targetPort, e.message ?: e.javaClass.simpleName)
         }
         return _status.get()
@@ -241,59 +244,29 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     fun requestStop() {
         stopRequested = true
         generation.incrementAndGet()
+        runCatching { client.dispatcher.cancelAll() }
     }
 
-    @Synchronized
     fun stop() {
-        // Flip the gate FIRST so any concurrent start() (e.g. a keepalive
-        // restart cycle) bails out before re-launching cloudflared. Combined
-        // with the early-return guard in start(), this is what breaks the
-        // stop/start interleaving that crashed the app when the user toggled
-        // the MCP master switch off while the tunnel was auto-started.
         stopRequested = true
-        healthThread?.interrupt()
+        generation.incrementAndGet()
+        runCatching { client.dispatcher.cancelAll() }
+        val h = healthThread
         healthThread = null
-        watchThread?.interrupt()
+        h?.interrupt()
+        val w = watchThread
         watchThread = null
-        // NULL-OUT process BEFORE signalling the child so the watch thread,
-        // which terminates on inputStream EOF (not on the `process` field),
-        // never sees a stale ProcessHandle once we mark it torn-down. We do
-        // NOT call watchThread.join here, because the watch thread's finally
-        // block emits publish() (= context.sendBroadcast), and joining it
-        // from inside this @Synchronized method would block a Service-host
-        // thread on cross-thread IPC for up to the broadcast's dispatch
-        // window — which on a Service mid-teardown manifested as Android's
-        // ActivityManagerService killing the entire host process. The watch
-        // thread will run-to-completion on its own shortly after the child
-        // dies; the `runCatching` around publish() tolerates an unregistered
-        // receiver. The only thing we must guarantee synchronously here is
-        // that the cloudflared child is dead and that `process = null` so
-        // no later code can touch a half-destroyed Process object.
+        w?.interrupt()
         val p = process
         process = null
         if (p != null) {
-            // Two-stage shutdown so libcloudflared.so gets a chance to do its
-            // clean teardown (HTTP/2 RST_STREAM, control-plane deregister,
-            // edge quic drain) before we hit it with SIGKILL. The bare
-            // `destroyForcibly()` we used before skipped that, which on
-            // several Android devices allowed the unhandled SIGCHLD that
-            // cloudflared emits while aborting an in-flight native cleanup to
-            // be mis-handled by the Zygote watcher, manifesting as the
-            // foreground Service host process getting killed when the user
-            // toggled the MCP master switch off while a tunnel was running.
-            // First, give the native cleanup a short window; on Android,
-            // Process.destroy() is already SIGKILL, so use a tight 200ms
-            // wait — past that the child cannot recover and we move on.
-            runCatching { p.destroy() }
-            val exited = runCatching { p.waitFor(200, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrDefault(false)
-            if (!exited) {
-                runCatching { p.destroyForcibly() }
-                runCatching { p.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS) }
-            }
+            Thread({
+                runCatching { p.destroy() }
+                val exited = runCatching { p.waitFor(800, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrDefault(false)
+                if (!exited) runCatching { p.destroyForcibly() }
+            }, "cloudflared-stop").apply { isDaemon = true }.start()
         }
         transitionTo(State.STOPPED, mode = Mode.OFF, publicUrl = null, message = "stopped")
-        // Remove plaintext tunnel credentials from cacheDir once the tunnel is
-        // down so a long-running tunnel secret does not linger across sessions.
         runCatching { File(context.cacheDir, "tunnel_creds.json").delete() }
         runCatching { File(context.cacheDir, "tunnel_config.yml").delete() }
         publish()
@@ -331,6 +304,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     private fun startQuick(bin: File, targetPort: Int, runGeneration: Int) {
         AppLog.i("cloudflare tunnel: registering quick tunnel…")
         val tunnel = registerQuickTunnel()
+        if (stopRequested || generation.get() != runGeneration) return
         val credsFile = File(context.cacheDir, "tunnel_creds.json")
         credsFile.writeText(
             JSONObject().apply {
@@ -359,6 +333,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             "--no-autoupdate", "run", tunnel.tunnelId,
         )
         val edges = edgeIps()
+        if (stopRequested || generation.get() != runGeneration) return
         if (edges.isNotEmpty()) {
             val insertAt = cmd.indexOf("run")
             edges.forEachIndexed { i, ip -> cmd.addAll(insertAt + i * 2, listOf("--edge", ip)) }
@@ -382,6 +357,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             cmd.addAll(insertAt, listOf("--protocol", settings.tunnelProtocol))
         }
         val edges = edgeIps()
+        if (stopRequested || generation.get() != runGeneration) return
         if (edges.isNotEmpty()) {
             val insertAt = cmd.indexOf("run")
             edges.forEachIndexed { i, ip -> cmd.addAll(insertAt + i * 2, listOf("--edge", ip)) }
@@ -612,7 +588,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                     .post("".toRequestBody("application/json".toMediaType()))
                     .build()
                 client.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
+                    val body = resp.body.string()
                     if (!resp.isSuccessful) throw IllegalStateException("trycloudflare ${resp.code}: ${body.take(200)}")
                     val result = JSONObject(body).getJSONObject("result")
                     return QuickTunnel(
@@ -623,9 +599,10 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                     )
                 }
             } catch (e: Exception) {
+                if (stopRequested) throw e
                 lastErr = e
                 AppLog.w("tunnel register attempt ${attempt + 1} failed: ${e.message}")
-                if (attempt < 1) Thread.sleep(800)
+                if (attempt < 1 && !stopRequested) Thread.sleep(800)
             }
         }
         throw lastErr ?: IllegalStateException("failed to register quick tunnel")

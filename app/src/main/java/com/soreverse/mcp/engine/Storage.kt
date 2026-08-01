@@ -214,7 +214,7 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
      * section header table, and section name string table instead of the full file.
      * Returns null if the URI doesn't support file descriptors or parsing fails.
      */
-    fun readElfSummary(uri: Uri): SourceSummary? {
+    internal fun readElfSummary(uri: Uri): SourceSummary? {
         // Read ELF header (64 bytes max — covers both 32-bit and 64-bit)
         val header = readByteRange(uri, 0L, 64) ?: return null
         if (header.size < 52 || header[0] != 0x7f.toByte() || header[1] != 'E'.code.toByte() || header[2] != 'L'.code.toByte() || header[3] != 'F'.code.toByte()) return null
