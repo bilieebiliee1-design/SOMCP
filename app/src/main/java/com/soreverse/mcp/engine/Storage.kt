@@ -37,6 +37,9 @@ data class ScanOptions(
     val skipFilesLargerThanBytes: Long = 512L * 1024L * 1024L,
 )
 
+/** Files >= this size (10 MiB) use the fast channel-based read path. */
+private const val LARGE_FILE_THRESHOLD = 10L * 1024L * 1024L
+
 data class FileFingerprint(
     val path: String,
     val size: Long,
@@ -141,7 +144,12 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
                 minOf(declaredLimit, heapBudget),
             )
         } else {
-            readBytes(source.treeDocumentUri ?: error("Missing document uri"))
+            val uri = source.treeDocumentUri ?: error("Missing document uri")
+            if (source.size >= LARGE_FILE_THRESHOLD) {
+                readBytesChannel(uri, source.size) ?: readBytes(uri)
+            } else {
+                readBytes(uri)
+            }
         }
     }
 
@@ -156,6 +164,34 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
                     fis.channel.use { channel ->
                         val buf = ByteBuffer.allocate(size)
                         channel.position(offset)
+                        while (buf.hasRemaining()) {
+                            val n = channel.read(buf)
+                            if (n < 0) break
+                        }
+                        buf.flip()
+                        val result = ByteArray(buf.remaining())
+                        buf.get(result)
+                        result
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Fast path for reading large files: uses ParcelFileDescriptor + FileChannel
+     * with direct buffers for better I/O throughput compared to the ContentResolver stream.
+     * Returns null if the URI doesn't support file descriptors.
+     */
+    private fun readBytesChannel(uri: Uri, size: Long): ByteArray? {
+        if (size > 256L * 1024L * 1024L) return null // cap at 256 MiB
+        return try {
+            resolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).use { fis ->
+                    fis.channel.use { channel ->
+                        val buf = ByteBuffer.allocateDirect(size.toInt())
                         while (buf.hasRemaining()) {
                             val n = channel.read(buf)
                             if (n < 0) break

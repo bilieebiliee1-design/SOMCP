@@ -50,7 +50,7 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                 modifier = Modifier.fillMaxWidth().padding(14.dp),
             )
             Text(
-                if (t.zh) "例如 MT 管理器侧边栏 APK MCP：http://192.168.x.x:8787/mcp" else "e.g. MT Manager APK MCP: http://192.168.x.x:8787/mcp",
+                if (t.zh) "例如 MT 管理器侧边栏 APK MCP：http://192.168.x.x:8787/mcp；NP 管理器：http://192.168.x.x:8788/mcp" else "e.g. MT Manager APK MCP: http://192.168.x.x:8787/mcp, NP Manager: http://192.168.x.x:8788/mcp",
                 modifier = Modifier.padding(horizontal = 14.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -103,9 +103,9 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
             }
             Text(
                 if (t.zh)
-                    "MT 管理器负责 APK 主流程；本应用补充 SO 分析与远程 MCP。离线时桥接工具会自动隐藏。"
+                    "MT 管理器或 NP 管理器负责 APK 主流程；本应用补充 SO 分析与远程 MCP。离线时桥接工具会自动隐藏。"
                 else
-                    "MT Manager owns the APK workflow; this app assists with SO analysis. Bridged tools hide when offline.",
+                    "MT Manager or NP Manager owns the APK workflow; this app assists with SO analysis. Bridged tools hide when offline.",
                 modifier = Modifier.padding(14.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
