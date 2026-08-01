@@ -106,7 +106,7 @@ internal fun ServiceTab(
         apkConnected = withContext(Dispatchers.IO) {
             val bridge = activeBridge(context)
             when {
-                settings.apkMcpUrl.isNotBlank() -> bridge.probe().online
+                settings.apkMcpConfigs.isNotEmpty() -> bridge.probe().online
                 settings.apkMcpAutoProbe -> bridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT).online
                 else -> false
             }
@@ -121,17 +121,17 @@ internal fun ServiceTab(
             val url = ts?.publicUrl?.takeIf { it.isNotBlank() && ts.state == CloudflareTunnelManager.State.RUNNING }
             if (url != quickPublicUrl) quickPublicUrl = url
             val liveBridge = activeServer(context)?.apkBridge
-            val bridgeState = liveBridge?.state()
-            apkToolNames = bridgeState?.tools?.map { it.name }.orEmpty()
-            if (bridgeState?.online == true) {
+            apkToolNames = liveBridge?.mergedTools()?.map { it.name }.orEmpty()
+            val anyOnline = liveBridge?.allPrefixes()?.isNotEmpty() == true
+            if (anyOnline) {
                 apkConnected = true
             } else if (settings.apkMcpAutoProbe) {
                 apkConnected = withContext(Dispatchers.IO) {
                     val bridge = activeBridge(context)
-                    val result = if (settings.apkMcpUrl.isNotBlank()) bridge.probe() else bridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT)
+                    val result = if (settings.apkMcpConfigs.isNotEmpty()) bridge.probe() else bridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT)
                     result.online
                 }
-            } else if (liveBridge != null || settings.apkMcpUrl.isBlank()) {
+            } else if (liveBridge != null || settings.apkMcpConfigs.isEmpty()) {
                 apkConnected = false
             }
             keepAliveReady = isKeepAliveReady(context, settings)
