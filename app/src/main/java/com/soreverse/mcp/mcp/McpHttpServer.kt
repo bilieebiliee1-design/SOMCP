@@ -259,7 +259,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     .put("fullToolCount", ToolCatalog.ALL.size)
                     .put("provenance", com.soreverse.mcp.core.Provenance.json())
                     .put("toolUsageGuide", toolUsageGuide())
-                    .put("hint", "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to so_open + analyze_* + edit_*, NOT mt_apk_*."))
+                    .put("hint", "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to built-in tools (so_open + analyze_* + edit_*), NOT bridged APK tools."))
             "ping" -> JSONObject().put("ok", true)
             "resources/list" -> JSONObject().put("resources", JSONArray())
             "prompts/list" -> JSONObject().put("prompts", JSONArray())
@@ -272,7 +272,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     .put("returnedCount", advertised.length())
                     .put("totalCatalogCount", ToolCatalog.ALL.size)
                     .put("toolUsageGuide", toolUsageGuide())
-                    .put("hint", "IMPORTANT: so_open + analyze_* + edit_* + build_so are the built-in SO reverse engineering tools. mt_apk_* are APK-layer tools only. Always route SO tasks to built-in tools."))
+                    .put("hint", "IMPORTANT: so_open + analyze_* + edit_* + build_so are the built-in SO reverse engineering tools. Bridged APK tools are for APK-layer tasks only. Always route SO tasks to built-in tools."))
             }
             "tools/call" -> callTool(params)
             else -> return jsonRpcError(id ?: JSONObject.NULL, -32601, "Method not found")
@@ -290,10 +290,10 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     private val NoResponse: JSONObject = JSONObject().put("__noResponse", true)
 
     private fun toolUsageGuide(): JSONObject = JSONObject()
-        .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use mt_apk_* for SO tasks.")
-        .put("apk_tasks", "mt_apk_* tools are only for APK-level operations such as APK opening, signing, smali, and AXML editing.")
-        .put("workflow", "so_open (action=list) -> session_open -> analyze_*/edit_* -> build_so. Use mt_apk_* only for the outer APK layer.")
-        .put("common_mistake", "Do not call mt_apk_open or mt_apk_list for SO analysis; use so_open.")
+        .put("so_analysis", "For SO/native library reverse engineering, use built-in tools: so_open -> analyze_* / edit_* -> build_so. Do NOT use bridged APK tools for SO tasks.")
+        .put("apk_tasks", "Bridged APK tools (mt_apk_* or np_*) are only for APK-level operations such as APK opening, signing, smali, and AXML editing.")
+        .put("workflow", "so_open (action=list) -> session_open -> analyze_*/edit_* -> build_so. Use bridged APK tools only for the outer APK layer.")
+        .put("common_mistake", "Do not call bridged APK tools for SO analysis; use so_open.")
 
     private fun callTool(params: JSONObject): JSONObject {
         val name = params.str("name")
@@ -342,7 +342,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put("total", ToolCatalog.ALL.count { it.meta.category == cat })
                 .put("advertised", advertisedCountOf(advertised, cat)))
         }
-        val apkBridged = (0 until advertised.length()).count { advertised.getJSONObject(it).optString("name").startsWith("mt_apk_") }
+        val apkBridged = (0 until advertised.length()).count { advertised.getJSONObject(it).optString("name").startsWith(apkBridge.bridgedPrefix()) }
         return ok(JSONObject()
             .put("totalCatalogCount", total)
             .put("advertisedCount", advertisedCount)
@@ -356,7 +356,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     private fun advertisedCountOf(arr: JSONArray, category: String): Int {
         var count = 0
         for (i in 0 until arr.length()) {
-            if (ToolCatalog.categoryOf(arr.getJSONObject(i).optString("name")) == category || (category == "apk-bridge" && arr.getJSONObject(i).optString("name").startsWith("mt_apk_"))) count++
+            if (ToolCatalog.categoryOf(arr.getJSONObject(i).optString("name")) == category || (category == "apk-bridge" && arr.getJSONObject(i).optString("name").startsWith(apkBridge.bridgedPrefix()))) count++
         }
         return count
     }
@@ -448,8 +448,8 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val handler = ToolCatalog.byName[name]
         val payload = if (handler != null) {
             handler.handle(ctx, args)
-        } else if (name.startsWith("mt_apk_")) {
-            if (apkBridge.isBridgedTool(name)) apkBridge.callTool(name, args) else err("APK_MCP_OFFLINE", "APK MCP bridge is offline. Run system_control (action=apk_probe) after starting MT Manager's APK MCP.", "tool", name)
+        } else if (name.startsWith(apkBridge.bridgedPrefix())) {
+            if (apkBridge.isBridgedTool(name)) apkBridge.callTool(name, args) else err("APK_MCP_OFFLINE", "APK MCP bridge is offline. Run system_control (action=apk_probe) after starting an APK MCP server.", "tool", name)
         } else {
             JSONObject().put("ok", false).put("error", JSONObject().put("code", "TOOL_NOT_FOUND").put("message", name))
         }
@@ -512,7 +512,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         if (settings.apkMcpMergeTools) {
             val state = apkBridge.state()
             val toolsToShow = if (state.online) state.tools else if (settings.apkMcpAutoProbe) apkBridge.probe().tools else emptyList()
-            toolsToShow.filter { it.name.startsWith("mt_apk_") }.forEach { td ->
+            toolsToShow.filter { it.name.startsWith(apkBridge.bridgedPrefix()) }.forEach { td ->
                 val schema = td.inputSchema ?: JSONObject().put("type", "object").put("properties", JSONObject())
                 val obj = JSONObject()
                     .put("name", td.name)
@@ -562,7 +562,13 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             .put("integration", JSONObject()
                 .put("online", apkBridge.state().online)
                 .put("apkMcpUrl", s.apkMcpUrl)
-                .put("hint", if (apkBridge.state().online) "MT Manager APK MCP is online. Use MT Manager's mt_apk_* capabilities for APK open / smali+axml edit / signed APK build, and use this app as the SO assistant for so_open/analyze_*/edit_* on embedded lib/*/*.so. Workflow: mt_apk_open -> mt_apk_list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so." else "APK MCP is offline. Install MT Manager, enable the APK MCP feature from its sidebar, keep MT Manager running in background, then set its /mcp URL in settings and call system_control (action=apk_probe)."))
+                .put("hint", if (apkBridge.state().online) {
+                    val prefix = apkBridge.bridgedPrefix()
+                    if (prefix == ApkMcpBridge.MT_PREFIX)
+                        "MT Manager APK MCP is online. Use MT Manager's mt_apk_* capabilities for APK open / smali+axml edit / signed APK build, and use this app as the SO assistant for so_open/analyze_*/edit_* on embedded lib/*/*.so. Workflow: mt_apk_open -> mt_apk_list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so."
+                    else
+                        "NP Manager APK MCP is online. Use NP Manager's np_* capabilities for APK open / smali+axml edit / signed APK build, and use this app as the SO assistant for so_open/analyze_*/edit_* on embedded lib/*/*.so. Workflow: np_open -> np_list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so."
+                } else "APK MCP is offline. Install MT Manager or NP Manager, enable the APK MCP feature, keep it running in background, then set its /mcp URL in settings and call system_control (action=apk_probe)."))
             .put("cloudflaredAvailable", tunnel.binary()?.exists() == true)
         )
     }
@@ -621,21 +627,21 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         }
         if (settings.apkMcpMergeTools && apkBridge.state().online) {
             val apkNames = JSONArray()
-            apkBridge.state().tools.filter { it.name.startsWith("mt_apk_") }.forEach {
+            apkBridge.state().tools.filter { it.name.startsWith(apkBridge.bridgedPrefix()) }.forEach {
                 apkNames.put(JSONObject().put("name", it.name).put("cls", "apk").put("advertised", true))
             }
             catMap.put("apk-bridge", JSONObject()
-                .put("description", "Bridged APK MCP tools (MT Manager) — ONLY for APK-layer tasks, NOT for SO/native files")
+                .put("description", "Bridged APK MCP tools (${bridgeLabel()}) — ONLY for APK-layer tasks, NOT for SO/native files")
                 .put("tools", apkNames))
         }
         return JSONObject()
             .put("usage", "Use so_open (action=list to discover), then read/analyze tools with the returned workspaceId. Pass pagination.nextCursor to meta_info (action=continue) when hasMore=true.")
             .put("toolRouting", JSONObject()
-                .put("rule", "IMPORTANT: Route SO/native library tasks to built-in tools. ONLY route APK-layer tasks to mt_apk_* tools.")
+                .put("rule", "IMPORTANT: Route SO/native library tasks to built-in tools. ONLY route APK-layer tasks to bridged tools.")
                 .put("use_so_open_for", JSONArray(listOf("Open SO files", "List available SO files", "Download SO from URL", "Any .so/ELF file task")))
-                .put("use_mt_apk_only_for", JSONArray(listOf("Open APK packages", "List lib/ directories inside APK", "Smali/AXML editing", "Signed APK build")))
-                .put("never_do", JSONArray(listOf("Use mt_apk_open to open SO files", "Use mt_apk_list to list SO files", "Use mt_apk_* for anything related to .so/.elf files")))
-                .put("workflow", "so_open (action=list) -> analyze_*/edit_* -> build_so [for SO tasks]\nsystem_control (action=apk_probe) -> mt_apk_open -> mt_apk_list -> ... -> mt_apk_build [for APK tasks]"))
+                .put("use_bridged_tools_only_for", JSONArray(listOf("Open APK packages", "List lib/ directories inside APK", "Smali/AXML editing", "Signed APK build")))
+                .put("never_do", JSONArray(listOf("Use bridged APK tools to open SO files", "Use bridged tools to list SO files", "Use bridged APK tools for anything related to .so/.elf files")))
+                .put("workflow", "so_open (action=list) -> analyze_*/edit_* -> build_so [for SO tasks]\nsystem_control (action=apk_probe) -> ${apkBridge.bridgedPrefix()}open -> ${apkBridge.bridgedPrefix()}list -> ... -> ${apkBridge.bridgedPrefix()}build [for APK tasks]"))
             .put("auth", "If token auth is enabled, send Authorization: Bearer <token> or append ?token=<token> to the MCP URL.")
             .put("exposure", JSONObject()
                 .put("builtInToolsAlwaysAdvertised", true)
@@ -649,7 +655,18 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put(JSONObject().put("name", "triage").put("steps", listOf("so_open", "analyze_elf (view=stats)", "analyze_functions")))
                 .put(JSONObject().put("name", "deep analysis").put("steps", listOf("so_open", "analyze_functions", "analyze_cfg", "analyze_xrefs", "analyze_crypto")))
                 .put(JSONObject().put("name", "audit recovery").put("steps", listOf("session_audit (action=persist)", "<process restart>", "session_audit (action=list)", "session_audit (action=load)")))
-                .put(JSONObject().put("name", "APK+SO bridge (needs APK MCP bridge online)").put("steps", listOf("system_control (action=apk_probe)", "mt_apk_open", "mt_apk_list view=lib/<abi>", "so_open (path from apk list)", "analyze_functions", "edit_asm (dryRun first)", "session_history (action=check)", "build_so", "mt_apk_edit_open", "mt_apk_build")))
+                .put(JSONObject().put("name", "APK+SO bridge (needs APK MCP bridge online)").put("steps", listOf(
+                    "system_control (action=apk_probe)",
+                    "${apkBridge.bridgedPrefix()}open",
+                    "${apkBridge.bridgedPrefix()}list view=lib/<abi>",
+                    "so_open (path from apk list)",
+                    "analyze_functions",
+                    "edit_asm (dryRun first)",
+                    "session_history (action=check)",
+                    "build_so",
+                    "${apkBridge.bridgedPrefix()}edit_open",
+                    "${apkBridge.bridgedPrefix()}build",
+                )))
                 .put(JSONObject().put("name", "emulation verify").put("steps", listOf("so_open", "session_open", "edit_asm", "emulate_call (symbolName=JNI_OnLoad)", "emulate_dump (addr=0x...)")))
                 .put(JSONObject().put("name", "section rebuild (xAnSo)").put("steps", listOf("so_open", "edit_fix_sections", "analyze_elf")))
                 .put(JSONObject().put("name", "public expose").put("steps", listOf("system_control (action=tunnel_start, mode=quick)", "read publicUrl from result", "client connects to publicUrl/mcp"))))
@@ -731,7 +748,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         }
         if (settings.apkMcpMergeTools && (category.isBlank() || category == "apk-bridge") && apkBridge.state().online) {
             val qLower = q
-            apkBridge.state().tools.filter { it.name.startsWith("mt_apk_") }
+            apkBridge.state().tools.filter { it.name.startsWith(apkBridge.bridgedPrefix()) }
                 .filter { !hasQuery || (it.name + "\n" + (it.description ?: "")).lowercase().contains(qLower) }
                 .forEach { td ->
                     if (!grouped.has("apk-bridge")) grouped.put("apk-bridge", JSONArray())
@@ -770,6 +787,9 @@ class McpHttpServer(private val context: Context, private val port: Int, private
      * dynamic APK-bridge tools are added, or if operators explicitly disable
      * tools through policy.
      */
+    /** Returns a human-readable label for the current APK MCP bridge (MT Manager or NP Manager). */
+    private fun bridgeLabel(): String = if (apkBridge.bridgedPrefix() == ApkMcpBridge.NP_PREFIX) "NP Manager" else "MT Manager"
+
     private fun advertisedTools(): JSONArray {
         val full = tools()
         if (full.length() <= ToolCatalog.ALL.size + 64) return full
@@ -777,7 +797,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         for (i in 0 until full.length()) {
             val t = full.getJSONObject(i)
             val name = t.optString("name")
-            if (!name.startsWith("mt_apk_") || out.length() < ToolCatalog.ALL.size + 64) out.put(t)
+            if (!name.startsWith(apkBridge.bridgedPrefix()) || out.length() < ToolCatalog.ALL.size + 64) out.put(t)
         }
         return out
     }
