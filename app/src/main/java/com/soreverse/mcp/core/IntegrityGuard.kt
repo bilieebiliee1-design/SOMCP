@@ -11,7 +11,6 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
-import java.util.jar.JarFile
 import kotlin.system.exitProcess
 
 object IntegrityGuard {
@@ -25,19 +24,6 @@ object IntegrityGuard {
 
     @Volatile private var cached: Pair<Long, Result>? = null
 
-    // Native library for hardened integrity checks
-    private var nativeLoaded = false
-
-    init {
-        nativeLoaded = runCatching {
-            System.loadLibrary("integrity_check")
-            true
-        }.getOrDefault(false)
-    }
-
-    private external fun nativeVerifyIntegrity(expectedHex: String): Boolean
-    private external fun nativeTerminate()
-
     fun verify(context: Context): Result {
         cached?.let { (time, result) ->
             if (System.currentTimeMillis() - time < 2_000L) return result
@@ -45,7 +31,7 @@ object IntegrityGuard {
         val result = runCatching {
             val expected = BuildConfig.EXPECTED_SIGNER_SHA256.normalizeDigest()
             val threats = runtimeThreats()
-            val signerResult = if (expected.isBlank()) {
+            if (expected.isBlank()) {
                 Result(threats.isEmpty(), if (threats.isEmpty()) "no release signer pin configured" else "runtime instrumentation detected", expected, emptyList(), threats)
             } else {
                 val actual = signingCertificateDigests(context).map { it.normalizeDigest() }
@@ -59,32 +45,6 @@ object IntegrityGuard {
                     threats = allThreats,
                 )
             }
-
-            // Native integrity check — cross-validates with the native layer
-            if (signerResult.trusted && nativeLoaded) {
-                val nativeOk = runCatching { nativeVerifyIntegrity(expected) }.getOrDefault(false)
-                if (!nativeOk) {
-                    return@runCatching signerResult.copy(
-                        trusted = false,
-                        reason = "native integrity check failed",
-                        threats = signerResult.threats + "native integrity check failed",
-                    )
-                }
-            }
-
-            // APK content integrity — verify checksums of critical files
-            if (signerResult.trusted) {
-                val apkThreats = apkIntegrityCheck(context)
-                if (apkThreats.isNotEmpty()) {
-                    return@runCatching signerResult.copy(
-                        trusted = false,
-                        reason = apkThreats.joinToString("; "),
-                        threats = signerResult.threats + apkThreats,
-                    )
-                }
-            }
-
-            signerResult
         }.getOrElse {
             Result(false, it.message ?: it.javaClass.simpleName, BuildConfig.EXPECTED_SIGNER_SHA256.normalizeDigest(), emptyList())
         }
@@ -94,25 +54,8 @@ object IntegrityGuard {
 
     fun isTrusted(context: Context): Boolean = verify(context).trusted
 
-    /**
-     * Terminate the app immediately. Uses native termination when available
-     * (harder to intercept), falls back to Java/Kotlin exit.
-     */
     fun terminate(activity: Activity) {
         runCatching { activity.finishAffinity() }
-        if (nativeLoaded) {
-            runCatching { nativeTerminate() }
-        }
-        exitProcess(173)
-    }
-
-    /**
-     * Terminate without an Activity reference (e.g. from Application.onCreate).
-     */
-    fun terminateProcess() {
-        if (nativeLoaded) {
-            runCatching { nativeTerminate() }
-        }
         exitProcess(173)
     }
 
@@ -129,42 +72,6 @@ object IntegrityGuard {
         return certs.map { bytes ->
             MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02X".format(it) }
         }
-    }
-
-    /**
-     * Verify the integrity of critical APK-internal files against their
-     * expected checksums. This detects tampering with classes.dex,
-     * AndroidManifest.xml, and other critical entries.
-     */
-    private fun apkIntegrityCheck(context: Context): List<String> {
-        val threats = linkedSetOf<String>()
-        try {
-            val apkFile = context.packageManager
-                .getApplicationInfo(context.packageName, 0)
-                .sourceDir?.let { File(it) } ?: return threats.toList()
-
-            if (!apkFile.isFile) return threats.toList()
-
-            JarFile(apkFile).use { jar ->
-                // Check that critical entries exist and have reasonable sizes
-                val criticalEntries = listOf(
-                    "classes.dex",
-                    "AndroidManifest.xml",
-                    "META-INF/MANIFEST.MF",
-                )
-                for (entryName in criticalEntries) {
-                    val entry = jar.getJarEntry(entryName)
-                    if (entry == null) {
-                        threats += "missing critical APK entry: $entryName"
-                    } else if (entry.size <= 0) {
-                        threats += "zero-size critical APK entry: $entryName"
-                    }
-                }
-            }
-        } catch (_: Exception) {
-            threats += "APK integrity check failed"
-        }
-        return threats.toList()
     }
 
     private fun runtimeThreats(): List<String> {
