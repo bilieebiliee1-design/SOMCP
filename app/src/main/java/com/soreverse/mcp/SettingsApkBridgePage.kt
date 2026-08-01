@@ -1,23 +1,12 @@
 package com.soreverse.mcp
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -29,13 +18,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.ApkBridgeConfig
 import com.soreverse.mcp.core.ApkBridgeInstance
+import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.SettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -46,66 +35,84 @@ import java.util.UUID
 internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var configs by remember { mutableStateOf(settings.apkBridgeConfigs) }
+    var bridgeConfigs by remember { mutableStateOf(settings.apkBridgeConfigs) }
     var apkAutoProbe by remember { mutableStateOf(settings.apkMcpAutoProbe) }
     var apkMerge by remember { mutableStateOf(settings.apkMcpMergeTools) }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingConfig by remember { mutableStateOf<ApkBridgeConfig?>(null) }
     var probeStates by remember { mutableStateOf<Map<String, ApkBridgeInstance.State>>(emptyMap()) }
 
-    fun saveConfigs(newConfigs: List<ApkBridgeConfig>) {
-        configs = newConfigs
-        settings.apkBridgeConfigs = newConfigs
+    fun saveConfigs(configs: List<ApkBridgeConfig>) {
+        bridgeConfigs = configs
+        settings.apkBridgeConfigs = configs
     }
 
     fun probeBridge(config: ApkBridgeConfig) {
         scope.launch {
-            val instance = ApkBridgeConfig.newInstance(config)
+            val instance = ApkBridgeConfig(config, settings)
             val state = withContext(Dispatchers.IO) { instance.probe() }
             probeStates = probeStates + (config.id to state)
         }
     }
 
-    fun probeAll() {
-        configs.forEach { probeBridge(it) }
+    fun probeAllBridges() {
+        bridgeConfigs.forEach { config -> probeBridge(config) }
+    }
+
+    fun addBridge(label: String, url: String, token: String) {
+        val config = ApkBridgeConfig(
+            id = UUID.randomUUID().toString(),
+            label = label,
+            url = url,
+            token = token,
+            enabled = true
+        )
+        saveConfigs(bridgeConfigs + config)
+    }
+
+    fun updateBridge(config: ApkBridgeConfig) {
+        saveConfigs(bridgeConfigs.map { if (it.id == config.id) config else it })
+    }
+
+    fun removeBridge(id: String) {
+        saveConfigs(bridgeConfigs.filter { it.id != id })
+        probeStates = probeStates - id
     }
 
     PageScroll {
         // Bridge list
         GlassGroup {
-            Row(
-                Modifier.fillMaxWidth().padding(14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Text(
+                if (t.zh) "桥接列表" else "Bridge List",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+            )
+            if (bridgeConfigs.isEmpty()) {
                 Text(
-                    if (t.zh) "桥接列表" else "Bridge List",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                IconButton(onClick = { showAddDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = if (t.zh) "添加" else "Add")
-                }
-            }
-            if (configs.isEmpty()) {
-                Text(
-                    if (t.zh) "暂无桥接配置，点击右上角添加" else "No bridge configs. Tap + to add.",
+                    if (t.zh) "暂无桥接配置，点击下方按钮添加" else "No bridges configured. Tap below to add.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                 )
             } else {
-                configs.forEach { config ->
-                    BridgeConfigItem(
+                bridgeConfigs.forEach { config ->
+                    val probeState = probeStates[config.id]
+                    BridgeConfigRow(
                         t = t,
                         config = config,
-                        probeState = probeStates[config.id],
+                        probeState = probeState,
+                        onProbe = { probeBridge(config) },
                         onEdit = { editingConfig = config },
-                        onDelete = {
-                            saveConfigs(configs.filter { it.id != config.id })
-                        },
-                        onProbe = { probeBridge(config) }
+                        onRemove = { removeBridge(config.id) },
+                        onToggle = { updateBridge(config.copy(enabled = !config.enabled)) }
                     )
                 }
+            }
+            TextButton(
+                onClick = { showAddDialog = true },
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+            ) {
+                Text(if (t.zh) "+ 添加桥接" else "+ Add Bridge")
             }
         }
 
@@ -122,41 +129,31 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
             }
         }
 
-        // Probe all button
-        if (configs.isNotEmpty()) {
-            GlassGroup {
-                Row(Modifier.padding(14.dp)) {
-                    PrimaryActionButton(
-                        if (t.zh) "探测全部" else "Probe All",
-                        { probeAll() },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+        // Probe all
+        GlassGroup {
+            Row(Modifier.padding(14.dp).fillMaxWidth()) {
+                PrimaryActionButton(
+                    if (t.zh) "探测全部" else "Probe All",
+                    { probeAllBridges() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
-
-        // Info text
-        Text(
-            if (t.zh)
-                "MT 管理器或 NP 管理器负责 APK 主流程；本应用补充 SO 分析与远程 MCP。离线时桥接工具会自动隐藏。"
-            else
-                "MT Manager or NP Manager owns the APK workflow; this app assists with SO analysis. Bridged tools hide when offline.",
-            modifier = Modifier.padding(14.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 
     // Add dialog
     if (showAddDialog) {
         BridgeConfigDialog(
             t = t,
-            config = null,
-            onDismiss = { showAddDialog = false },
-            onSave = { newConfig ->
-                saveConfigs(configs + newConfig)
+            title = if (t.zh) "添加桥接" else "Add Bridge",
+            initialLabel = "",
+            initialUrl = "http://192.168.x.x:8788/mcp",
+            initialToken = "",
+            onConfirm = { label, url, token ->
+                addBridge(label, url, token)
                 showAddDialog = false
-            }
+            },
+            onDismiss = { showAddDialog = false }
         )
     }
 
@@ -164,41 +161,50 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
     editingConfig?.let { config ->
         BridgeConfigDialog(
             t = t,
-            config = config,
-            onDismiss = { editingConfig = null },
-            onSave = { updated ->
-                saveConfigs(configs.map { if (it.id == config.id) updated else it })
+            title = if (t.zh) "编辑桥接" else "Edit Bridge",
+            initialLabel = config.label,
+            initialUrl = config.url,
+            initialToken = config.token,
+            onConfirm = { label, url, token ->
+                updateBridge(config.copy(label = label, url = url, token = token))
                 editingConfig = null
-            }
+            },
+            onDismiss = { editingConfig = null }
         )
     }
 }
 
 @Composable
-private fun BridgeConfigItem(
+private fun BridgeConfigRow(
     t: UiText,
     config: ApkBridgeConfig,
     probeState: ApkBridgeInstance.State?,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
     onProbe: () -> Unit,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+    onToggle: () -> Unit,
 ) {
-    val color = when {
+    val statusColor = when {
+        !config.enabled -> MaterialTheme.colorScheme.onSurfaceVariant
         probeState == null -> MaterialTheme.colorScheme.onSurfaceVariant
         probeState.online -> AppleColors.systemGreen
         else -> AppleColors.systemRed
     }
+    val statusText = when {
+        !config.enabled -> if (t.zh) "已禁用" else "Disabled"
+        probeState == null -> if (t.zh) "未探测" else "Not probed"
+        probeState.online -> "${if (t.zh) "在线" else "Online"} · ${probeState.tools.size} tools"
+        else -> if (t.zh) "离线" else "Offline"
+    }
+
     Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)
     ) {
         Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     config.label,
                     style = MaterialTheme.typography.bodyMedium,
@@ -209,27 +215,18 @@ private fun BridgeConfigItem(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (probeState != null) {
-                    Text(
-                        "${if (t.zh) "状态" else "State"}: ${if (probeState.online) (if (t.zh) "在线" else "online") else (if (t.zh) "离线" else "offline")}   ${if (t.zh) "工具" else "tools"}: ${probeState.tools.size}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = color
-                    )
-                }
+                Text(
+                    statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = statusColor
+                )
             }
-            Row {
-                IconButton(onClick = onProbe) {
-                    Box(
-                        Modifier.size(8.dp).background(color, CircleShape)
-                    )
-                }
-                IconButton(onClick = onEdit) {
-                    Icon(Icons.Default.Edit, contentDescription = if (t.zh) "编辑" else "Edit", modifier = Modifier.size(18.dp))
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = if (t.zh) "删除" else "Delete", modifier = Modifier.size(18.dp))
-                }
-            }
+        }
+        Row {
+            TextButton(onClick = onProbe) { Text(if (t.zh) "探测" else "Probe") }
+            TextButton(onClick = onEdit) { Text(if (t.zh) "编辑" else "Edit") }
+            TextButton(onClick = onToggle) { Text(if (config.enabled) (if (t.zh) "禁用" else "Disable") else (if (t.zh) "启用" else "Enable")) }
+            TextButton(onClick = onRemove) { Text(if (t.zh) "删除" else "Delete") }
         }
         GroupDivider()
     }
@@ -238,83 +235,57 @@ private fun BridgeConfigItem(
 @Composable
 private fun BridgeConfigDialog(
     t: UiText,
-    config: ApkBridgeConfig?,
+    title: String,
+    initialLabel: String,
+    initialUrl: String,
+    initialToken: String,
+    onConfirm: (label: String, url: String, token: String) -> Unit,
     onDismiss: () -> Unit,
-    onSave: (ApkBridgeConfig) -> Unit,
 ) {
-    var label by remember { mutableStateOf(config?.label ?: "") }
-    var url by remember { mutableStateOf(config?.url ?: "") }
-    var token by remember { mutableStateOf(config?.token ?: "") }
+    var label by remember { mutableStateOf(initialLabel) }
+    var url by remember { mutableStateOf(initialUrl) }
+    var token by remember { mutableStateOf(initialToken) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (config == null) (if (t.zh) "添加桥接" else "Add Bridge") else (if (t.zh) "编辑桥接" else "Edit Bridge")) },
+        title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column {
                 OutlinedTextField(
                     value = label,
                     onValueChange = { label = it },
                     label = { Text(if (t.zh) "名称" else "Label") },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 )
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text(if (t.zh) "URL" else "URL") },
+                    label = { Text("MCP URL") },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 )
                 OutlinedTextField(
                     value = token,
                     onValueChange = { token = it },
                     label = { Text(if (t.zh) "Token（可选）" else "Token (optional)") },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = {
-                    if (url.isNotBlank()) {
-                        onSave(
-                            ApkBridgeConfig(
-                                id = config?.id ?: UUID.randomUUID().toString(),
-                                label = label.ifBlank { url },
-                                url = url.trim(),
-                                token = token,
-                                enabled = true
-                            )
-                        )
-                    }
-                },
-                enabled = url.isNotBlank()
+                onClick = { onConfirm(label, url, token) },
+                enabled = label.isNotBlank() && url.isNotBlank()
             ) { Text(if (t.zh) "保存" else "Save") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(if (t.zh) "取消" else "Cancel") }
         }
     )
+}
+
+private fun AppLog.w(message: String) {
+    android.util.Log.w("ApkBridgeConfig", message)
 }
