@@ -56,6 +56,54 @@ class SettingsStore(context: Context) {
         }
         set(value) = prefs.edit().putString("accessToken", sanitizeCredential(value)).apply()
 
+    var floatingEnabled: Boolean
+        get() = prefs.getBoolean("floatingEnabled", false)
+        set(value) = prefs.edit().putBoolean("floatingEnabled", value).apply()
+
+    var wakeLockEnabled: Boolean
+        get() = prefs.getBoolean("wakeLockEnabled", true)
+        set(value) = prefs.edit().putBoolean("wakeLockEnabled", value).apply()
+
+    var language: String
+        get() = prefs.getString("language", "system") ?: "system"
+        set(value) = prefs.edit().putString("language", value).apply()
+
+    var themeMode: String
+        get() = prefs.getString("themeMode", "system") ?: "system"
+        set(value) = prefs.edit().putString("themeMode", if (value in setOf("system", "light", "dark")) value else "system").apply()
+
+    var accentColor: String
+        get() = prefs.getString("accentColor", "teal") ?: "teal"
+        set(value) = prefs.edit().putString("accentColor", if (value in setOf("blue", "teal", "indigo", "purple", "green", "orange", "red", "mono")) value else "teal").apply()
+
+    var pureBlackDark: Boolean
+        get() = prefs.getBoolean("pureBlackDark", true)
+        set(value) = prefs.edit().putBoolean("pureBlackDark", value).apply()
+
+    var uiDensity: String
+        get() = prefs.getString("uiDensity", "comfortable") ?: "comfortable"
+        set(value) = prefs.edit().putString("uiDensity", if (value in setOf("compact", "comfortable", "spacious")) value else "comfortable").apply()
+
+    var cornerStyle: String
+        get() = prefs.getString("cornerStyle", "medium") ?: "medium"
+        set(value) = prefs.edit().putString("cornerStyle", if (value in setOf("small", "medium", "large", "xlarge")) value else "medium").apply()
+
+    var motionMode: String
+        get() = prefs.getString("motionMode", "system") ?: "system"
+        set(value) = prefs.edit().putString("motionMode", if (value in setOf("system", "reduced", "full")) value else "system").apply()
+
+    var showAdvancedHome: Boolean
+        get() = prefs.getBoolean("showAdvancedHome", false)
+        set(value) = prefs.edit().putBoolean("showAdvancedHome", value).apply()
+
+    var highContrast: Boolean
+        get() = prefs.getBoolean("highContrast", false)
+        set(value) = prefs.edit().putBoolean("highContrast", value).apply()
+
+    var textScale: String
+        get() = prefs.getString("textScale", "normal") ?: "normal"
+        set(value) = prefs.edit().putString("textScale", if (value in setOf("normal", "large", "xlarge")) value else "normal").apply()
+
     var apkMcpUrl: String
         get() = prefs.getString("apkMcpUrl", "") ?: ""
         set(value) = prefs.edit().putString("apkMcpUrl", value.trim()).apply()
@@ -91,68 +139,4 @@ class SettingsStore(context: Context) {
     var apkMcpProbeTimeoutMs: Int
         get() = prefs.getInt("apkMcpProbeTimeoutMs", 8000)
         set(value) = prefs.edit().putInt("apkMcpProbeTimeoutMs", value.coerceIn(2000, 30000)).apply()
-
-    fun snapshot(maskSecrets: Boolean = true): org.json.JSONObject {
-        fun mask(value: String): String {
-            if (!maskSecrets || value.isBlank()) return value
-            if (value.length <= 8) return "****"
-            return value.take(4) + "…" + value.takeLast(4)
-        }
-        return org.json.JSONObject()
-            .put("apkBridge", org.json.JSONObject()
-                .put("apkMcpUrl", apkMcpUrl)
-                .put("apkMcpToken", mask(apkMcpToken))
-                .put("apkMcpAutoProbe", apkMcpAutoProbe)
-                .put("apkMcpMergeTools", apkMcpMergeTools)
-                .put("apkMcpProbeTimeoutMs", apkMcpProbeTimeoutMs)
-                .put("bridgeConfigs", org.json.JSONArray().apply {
-                    apkBridgeConfigs.forEach { put(it.toJson()) }
-                })
-                .put("bridgeCount", apkBridgeConfigs.size))
-    }
-
-    fun applyPatch(patch: org.json.JSONObject, allowSecrets: Boolean = true, allowSecurityFields: Boolean = false): org.json.JSONObject {
-        val changed = org.json.JSONArray()
-        fun touch(key: String) { changed.put(key) }
-        fun obj(name: String): org.json.JSONObject? = patch.optJSONObject(name)
-        fun applyStr(source: org.json.JSONObject?, key: String, apply: (String) -> Unit) {
-            if (source != null && source.has(key) && !source.isNull(key)) {
-                apply(source.optString(key))
-                touch(key)
-            }
-        }
-        val apk = obj("apkBridge") ?: patch
-        applyStr(apk, "apkMcpUrl") { apkMcpUrl = it }
-        if (allowSecrets) applyStr(apk, "apkMcpToken") { apkMcpToken = it }
-        applyBool(apk, "apkMcpAutoProbe") { apkMcpAutoProbe = it }
-        applyBool(apk, "apkMcpMergeTools") { apkMcpMergeTools = it }
-        applyInt(apk, "apkMcpProbeTimeoutMs") { apkMcpProbeTimeoutMs = it }
-        if (apk.has("bridgeConfigs") && !apk.isNull("bridgeConfigs")) {
-            val arr = apk.getJSONArray("bridgeConfigs")
-            apkBridgeConfigs = (0 until arr.length()).map { ApkBridgeConfig.fromJson(arr.getJSONObject(it)) }
-            touch("bridgeConfigs")
-        }
-        return org.json.JSONObject()
-            .put("ok", true)
-            .put("changed", changed)
-            .put("changedCount", changed.length())
-            .put("config", snapshot(maskSecrets = true))
-    }
-
-    fun schema(): org.json.JSONObject {
-        return org.json.JSONObject()
-            .put("notes", "Multi-bridge support. Use app_config to manage bridge configs.")
-    }
-
-    fun resetAccessToken(): String {
-        val bytes = ByteArray(18)
-        SecureRandom().nextBytes(bytes)
-        val token = bytes.joinToString("") { "%02x".format(it) }
-        prefs.edit().putString("accessToken", token).apply()
-        return token
-    }
-
-    companion object {
-        const val DEFAULT_AI_SYSTEM_PROMPT = "You are SOMCP Deep Reverse Agent."
-    }
 }
