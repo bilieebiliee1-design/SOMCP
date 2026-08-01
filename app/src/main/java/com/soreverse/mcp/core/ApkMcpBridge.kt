@@ -11,11 +11,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Bridge to an external "APK MCP" server (MT Manager's APK MCP).
+ * Bridge to an external "APK MCP" server (MT Manager or NP Manager).
  *
  * Acts as an MCP gateway: discovers the remote server's tools via tools/list,
- * merges them under the mt_apk_* namespace into our own tools/list responses,
- * and transparently forwards tools/call invocations back to the remote server.
+ * merges them under their native prefix (mt_apk_* or np_*) into our own
+ * tools/list responses, and transparently forwards tools/call invocations
+ * back to the remote server.
  *
  * When the remote is unreachable, tools are hidden so the local server behaves
  * as a standalone SO-only MCP. When reachable, the client gets a combined
@@ -37,6 +38,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         val online: Boolean = false,
         val lastError: String = "",
         val tools: List<ToolDef> = emptyList(),
+        val toolPrefix: String = MT_PREFIX,
         val lastCheckedAt: Long = 0,
         val lastLatencyMs: Long = 0,
         val probes: Long = 0,
@@ -62,26 +64,31 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
     @Synchronized
     fun autoDiscover(port: Int = DEFAULT_PORT): State {
-        val candidates = listOf(
-            "http://127.0.0.1:$port/mcp",
-            "http://localhost:$port/mcp",
-        )
-        for (url in candidates) {
-            try {
-                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
-                val resp = post(req)
-                val parsed = parseTools(resp)
-                if (parsed.any { it.name.startsWith("mt_apk_") }) {
+        val allPorts = if (port == DEFAULT_PORT) listOf(port, NP_PORT) else listOf(port)
+        for (p in allPorts) {
+            val candidates = listOf(
+                "http://127.0.0.1:$p/mcp",
+                "http://localhost:$p/mcp",
+            )
+            for (url in candidates) {
+                try {
+                    val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
+                    val resp = post(req)
+                    val parsed = parseTools(resp)
+                    val prefix = parsed.firstOrNull { it.name.startsWith(MT_PREFIX) }?.let { MT_PREFIX }
+                        ?: parsed.firstOrNull { it.name.startsWith(NP_PREFIX) }?.let { NP_PREFIX }
+                        ?: continue
                     settings.apkMcpUrl = url
-                    val s = State(url = url, online = true, lastError = "", tools = parsed, lastCheckedAt = System.currentTimeMillis())
+                    val s = State(url = url, online = true, lastError = "", tools = parsed, toolPrefix = prefix, lastCheckedAt = System.currentTimeMillis())
                     _state.set(s)
-                    AppLog.i("apk-mcp auto-discovered APK MCP at $url (${parsed.size} tools)")
+                    val label = if (prefix == MT_PREFIX) "MT Manager" else "NP Manager"
+                    AppLog.i("apk-mcp auto-discovered $label at $url (${parsed.size} tools, prefix=$prefix)")
                     return s
+                } catch (_: Exception) {
                 }
-            } catch (_: Exception) {
             }
         }
-        AppLog.i("apk-mcp auto-discovery: no APK MCP found on :$port")
+        AppLog.i("apk-mcp auto-discovery: no APK MCP found on ports $allPorts")
         return _state.get()
     }
 
@@ -99,12 +106,16 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             val resp = post(req)
             val latencyMs = (System.nanoTime() - start) / 1_000_000
             val parsed = parseTools(resp)
+            val prefix = parsed.firstOrNull { it.name.startsWith(MT_PREFIX) }?.let { MT_PREFIX }
+                ?: parsed.firstOrNull { it.name.startsWith(NP_PREFIX) }?.let { NP_PREFIX }
+                ?: _state.get().toolPrefix
             val prev = _state.get()
             val s = State(
                 url = url,
                 online = true,
                 lastError = "",
                 tools = parsed,
+                toolPrefix = prefix,
                 lastCheckedAt = System.currentTimeMillis(),
                 lastLatencyMs = latencyMs,
                 probes = prev.probes + 1,
@@ -113,7 +124,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs),
             )
             _state.set(s)
-            AppLog.i("apk-mcp bridge online: ${parsed.size} tools from $url (${latencyMs}ms)")
+            val label = if (prefix == MT_PREFIX) "MT Manager" else "NP Manager"
+            AppLog.i("apk-mcp bridge online: ${parsed.size} tools from $url ($label, ${latencyMs}ms)")
             return s
         } catch (e: Exception) {
             val prev = _state.get()
@@ -160,10 +172,17 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
     fun mergedTools(): List<ToolDef> {
         val st = _state.get()
-        return if (st.online) st.tools.filter { it.name.startsWith("mt_apk_") } else emptyList()
+        val prefix = st.toolPrefix
+        return if (st.online) st.tools.filter { it.name.startsWith(prefix) } else emptyList()
     }
 
-    fun isBridgedTool(name: String): Boolean = name.startsWith("mt_apk_") && _state.get().online
+    fun isBridgedTool(name: String): Boolean {
+        val prefix = _state.get().toolPrefix
+        return name.startsWith(prefix) && _state.get().online
+    }
+
+    /** Returns the current tool prefix (mt_apk_ or np_). */
+    fun bridgedPrefix(): String = _state.get().toolPrefix
 
     @Synchronized
     fun callTool(name: String, arguments: JSONObject): JSONObject {
@@ -202,10 +221,12 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                     val req = buildJsonRpc(url, "tools/list", JSONObject(), id = 1)
                     val resp = post(req)
                     val parsed = parseTools(resp)
-                    if (parsed.any { it.name.startsWith("mt_apk_") }) {
+                    val prefix = parsed.firstOrNull { it.name.startsWith(MT_PREFIX) }?.let { MT_PREFIX }
+                        ?: parsed.firstOrNull { it.name.startsWith(NP_PREFIX) }?.let { NP_PREFIX }
+                    if (prefix != null) {
                         val cur = _state.get()
-                        _state.set(State(url = url, online = true, lastError = "", tools = parsed, lastCheckedAt = System.currentTimeMillis()))
-                        if (!cur.online) AppLog.i("apk-mcp health: back online (${parsed.size} tools)")
+                        _state.set(State(url = url, online = true, lastError = "", tools = parsed, toolPrefix = prefix, lastCheckedAt = System.currentTimeMillis()))
+                        if (!cur.online) AppLog.i("apk-mcp health: back online (${parsed.size} tools, prefix=$prefix)")
                     }
                 } catch (e: Exception) {
                     val cur = _state.get()
@@ -230,6 +251,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             put("configured", st.url.isNotBlank())
             put("url", st.url)
             put("online", st.online)
+            put("toolPrefix", st.toolPrefix)
             put("toolCount", st.tools.size)
             put("lastError", st.lastError)
             put("lastCheckedAt", st.lastCheckedAt)
@@ -299,6 +321,10 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
     companion object {
         const val DEFAULT_PORT = 8787
+        const val NP_PORT = 8788
+        const val MT_PREFIX = "mt_apk_"
+        const val NP_PREFIX = "np_"
+        val KNOWN_PREFIXES = listOf(MT_PREFIX, NP_PREFIX)
         private var idCounter = 100
     }
 }
