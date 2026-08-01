@@ -112,6 +112,7 @@ class SettingsStore(context: Context) {
         get() = sanitizeCredential(prefs.getString("apkMcpToken", "").orEmpty())
         set(value) = prefs.edit().putString("apkMcpToken", sanitizeCredential(value)).apply()
 
+    // ---- Multi-bridge support ----
     var apkBridgeConfigs: List<ApkBridgeConfig>
         get() {
             val json = prefs.getString("apkBridgeConfigs", null) ?: return emptyList()
