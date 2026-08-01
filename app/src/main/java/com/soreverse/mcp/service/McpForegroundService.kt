@@ -84,44 +84,21 @@ class McpForegroundService : Service() {
         running = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         val sv = server
+        server = null
         currentServer = null
-        // SYNCHRONOUS teardown — DO NOT spawn a background thread.
-        //
-        // The previous implementation spawned a daemon "mcp-teardown" thread
-        // that called `sv?.tunnel?.stop()` (which then called
-        // `p.destroy()`/`destroyForcibly()` on the cloudflared child) and
-        // `sv?.stop()` (which called `engine?.stop(400, 1500)`). When a
-        // tunnel was actually running, by the time that daemon thread got
-        // scheduled the main thread had already returned from onDestroy(),
-        // super.onDestroy() had completed, and Android had begun tearing the
-        // Service down — the daemon thread was still holding a reference to
-        // a process whose child (libcloudflared.so) was being SIGKILLed
-        // against a Context that the OS was already reclaiming, and the
-        // SIGCHLD/SIGKILL propagated through that mid-teardown surface is
-        // exactly what surfaced as the host process dying the instant the
-        // user toggled the MCP master switch off while a tunnel was live
-        // (the report: "只要我开了隧道 ... 点击停止mcp服务器后应用还会立即闪退").
-        //
-        // Calling tunnel.stop() and server.stop() synchronously on the main
-        // thread keeps the entire teardown on the same thread that Android
-        // is using to drive onDestroy; the cloudflared child dies before the
-        // Service object is released. We deliberately keep stop()'s
-        // waitFor windows tight (200ms initial + 500ms fallback) so the main
-        // thread is not blocked long enough to trip an ANR (5s budget), but
-        // long enough that the child is observed-dead before we move on.
-        // The watch thread (a daemon) will drain its input stream and emit
-        // its final publish(); the runCatching around publish() tolerates an
-        // unregistered receiver so no IllegalStateException escapes.
-        try {
-            sv?.tunnel?.stop()
-        } catch (e: Throwable) {
-            AppLog.e("tunnel.stop() failed during destroy", e)
-        }
-        try {
-            sv?.stop()
-        } catch (e: Throwable) {
-            AppLog.e("server.stop() failed during destroy", e)
-        }
+        runCatching { sv?.tunnel?.requestStop() }
+        Thread({
+            try {
+                sv?.tunnel?.stop()
+            } catch (e: Throwable) {
+                AppLog.e("tunnel.stop() failed during destroy", e)
+            }
+            try {
+                sv?.stop()
+            } catch (e: Throwable) {
+                AppLog.e("server.stop() failed during destroy", e)
+            }
+        }, "mcp-teardown").apply { isDaemon = true }.start()
         wakeLock?.takeIf { it.isHeld }?.release()
         removeFloating()
         AppLog.i("Foreground service destroyed")
