@@ -90,8 +90,10 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     fun ensureBridgeProbed() {
         val s = SettingsStore(context)
         if (!s.apkMcpAutoProbe) return
-        if (s.apkMcpUrl.isNotBlank()) {
-            if (!apkBridge.state().online) Thread { apkBridge.probe() }.start()
+        val configs = s.apkMcpConfigs
+        if (configs.isNotEmpty()) {
+            val st = apkBridge.state()
+            if (!st.online) Thread { apkBridge.probe() }.start()
         } else {
             Thread { apkBridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT) }.start()
         }
@@ -342,7 +344,11 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put("total", ToolCatalog.ALL.count { it.meta.category == cat })
                 .put("advertised", advertisedCountOf(advertised, cat)))
         }
-        val apkBridged = (0 until advertised.length()).count { advertised.getJSONObject(it).optString("name").startsWith(apkBridge.bridgedPrefix()) }
+        val apkPrefixes = apkBridge.allPrefixes().toSet()
+        val apkBridged = (0 until advertised.length()).count {
+            val name = advertised.getJSONObject(it).optString("name")
+            apkPrefixes.any { name.startsWith(it) }
+        }
         return ok(JSONObject()
             .put("totalCatalogCount", total)
             .put("advertisedCount", advertisedCount)
@@ -355,8 +361,10 @@ class McpHttpServer(private val context: Context, private val port: Int, private
 
     private fun advertisedCountOf(arr: JSONArray, category: String): Int {
         var count = 0
+        val apkPrefixes = apkBridge.allPrefixes()
         for (i in 0 until arr.length()) {
-            if (ToolCatalog.categoryOf(arr.getJSONObject(i).optString("name")) == category || (category == "apk-bridge" && arr.getJSONObject(i).optString("name").startsWith(apkBridge.bridgedPrefix()))) count++
+            val name = arr.getJSONObject(i).optString("name")
+            if (ToolCatalog.categoryOf(name) == category || (category == "apk-bridge" && apkPrefixes.any { name.startsWith(it) })) count++
         }
         return count
     }
@@ -448,7 +456,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val handler = ToolCatalog.byName[name]
         val payload = if (handler != null) {
             handler.handle(ctx, args)
-        } else if (name.startsWith(apkBridge.bridgedPrefix())) {
+        } else if (apkBridge.isBridgedTool(name)) {
             if (apkBridge.isBridgedTool(name)) apkBridge.callTool(name, args) else err("APK_MCP_OFFLINE", "APK MCP bridge is offline. Run system_control (action=apk_probe) after starting an APK MCP server.", "tool", name)
         } else {
             JSONObject().put("ok", false).put("error", JSONObject().put("code", "TOOL_NOT_FOUND").put("message", name))
@@ -510,9 +518,12 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val out = JSONArray()
         ToolCatalog.ALL.forEach { handler -> out.put(ToolCatalog.toolDescriptor(handler, includeCategory)) }
         if (settings.apkMcpMergeTools) {
-            val state = apkBridge.state()
-            val toolsToShow = if (state.online) state.tools else if (settings.apkMcpAutoProbe) apkBridge.probe().tools else emptyList()
-            toolsToShow.filter { it.name.startsWith(apkBridge.bridgedPrefix()) }.forEach { td ->
+            val merged = apkBridge.mergedTools()
+            // If no cached tools, try probing
+            val toolsToShow = if (merged.isNotEmpty()) merged
+                else if (settings.apkMcpAutoProbe) apkBridge.probe().let { apkBridge.mergedTools() }
+                else emptyList()
+            toolsToShow.forEach { td ->
                 val schema = td.inputSchema ?: JSONObject().put("type", "object").put("properties", JSONObject())
                 val obj = JSONObject()
                     .put("name", td.name)
@@ -553,22 +564,43 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     private fun sysStatus(probe: Boolean): JSONObject {
         if (probe) apkBridge.probe()
         val s = SettingsStore(context)
+        val snapshot = apkBridge.snapshotJson()
+        val onlineBridges = snapshot.optJSONArray("bridges")
+        val onlineBridgeCount = snapshot.optInt("onlineCount")
+        val onlinePrefixes = apkBridge.allPrefixes()
+        val integrationOnline = onlinePrefixes.isNotEmpty()
+        val integrationHint = when {
+            onlineBridgeCount == 0 -> "APK MCP is offline. Install MT Manager or NP Manager, enable the APK MCP feature, keep it running in background, then set its /mcp URL in settings and call system_control (action=apk_probe)."
+            onlineBridgeCount == 1 -> {
+                val prefix = apkBridge.bridgedPrefix()
+                val label = ApkMcpBridge.prefixLabel(prefix)
+                if (prefix == ApkMcpBridge.MT_PREFIX)
+                    "MT Manager APK MCP is online. Use MT Manager's mt_apk_* capabilities for APK open / smali+axml edit / signed APK build, and use this app as the SO assistant for so_open/analyze_*/edit_* on embedded lib/*/*.so. Workflow: mt_apk_open -> mt_apk_list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so."
+                else
+                    "$label APK MCP is online. Use ${prefix}* capabilities for APK open / smali+axml edit / signed APK build, and use this app as the SO assistant for so_open/analyze_*/edit_* on embedded lib/*/*.so. Workflow: ${prefix}open -> ${prefix}list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so."
+            }
+            else -> {
+                val labels = onlinePrefixes.joinToString(" + ") { ApkMcpBridge.prefixLabel(it) }
+                val workflowLines = onlinePrefixes.map { p ->
+                    val label = ApkMcpBridge.prefixLabel(p)
+                    "  $label (${p}*): ${p}open -> ${p}list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so"
+                }.joinToString("\n")
+                "$onlineBridgeCount APK MCP bridges online ($labels). Each bridge exposes its own tool prefix and routes independently. Use the right tool prefix for each APK. Workflows:\n$workflowLines"
+            }
+        }
         return ok(JSONObject()
             .put("soMcp", JSONObject().put("running", engine != null).put("host", host).put("port", port))
             .put("runtime", runtimeInfo())
             .put("nativeBackends", nativeBackendStatus())
-            .put("apkMcp", apkBridge.snapshotJson())
+            .put("apkMcp", snapshot)
             .put("tunnel", tunnel.snapshotJson())
             .put("integration", JSONObject()
-                .put("online", apkBridge.state().online)
+                .put("online", integrationOnline)
+                .put("onlineCount", onlineBridgeCount)
+                .put("prefixes", JSONArray(onlinePrefixes))
+                .put("labels", JSONArray(onlinePrefixes.map { ApkMcpBridge.prefixLabel(it) }))
                 .put("apkMcpUrl", s.apkMcpUrl)
-                .put("hint", if (apkBridge.state().online) {
-                    val prefix = apkBridge.bridgedPrefix()
-                    if (prefix == ApkMcpBridge.MT_PREFIX)
-                        "MT Manager APK MCP is online. Use MT Manager's mt_apk_* capabilities for APK open / smali+axml edit / signed APK build, and use this app as the SO assistant for so_open/analyze_*/edit_* on embedded lib/*/*.so. Workflow: mt_apk_open -> mt_apk_list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so."
-                    else
-                        "NP Manager APK MCP is online. Use NP Manager's np_* capabilities for APK open / smali+axml edit / signed APK build, and use this app as the SO assistant for so_open/analyze_*/edit_* on embedded lib/*/*.so. Workflow: np_open -> np_list (lib/<abi>) -> so_open -> analyze_*/edit_* -> build_so."
-                } else "APK MCP is offline. Install MT Manager or NP Manager, enable the APK MCP feature, keep it running in background, then set its /mcp URL in settings and call system_control (action=apk_probe)."))
+                .put("hint", integrationHint))
             .put("cloudflaredAvailable", tunnel.binary()?.exists() == true)
         )
     }
@@ -627,7 +659,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         }
         if (settings.apkMcpMergeTools && apkBridge.state().online) {
             val apkNames = JSONArray()
-            apkBridge.state().tools.filter { it.name.startsWith(apkBridge.bridgedPrefix()) }.forEach {
+            apkBridge.mergedTools().forEach {
                 apkNames.put(JSONObject().put("name", it.name).put("cls", "apk").put("advertised", true))
             }
             catMap.put("apk-bridge", JSONObject()
@@ -748,7 +780,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         }
         if (settings.apkMcpMergeTools && (category.isBlank() || category == "apk-bridge") && apkBridge.state().online) {
             val qLower = q
-            apkBridge.state().tools.filter { it.name.startsWith(apkBridge.bridgedPrefix()) }
+            apkBridge.mergedTools()
                 .filter { !hasQuery || (it.name + "\n" + (it.description ?: "")).lowercase().contains(qLower) }
                 .forEach { td ->
                     if (!grouped.has("apk-bridge")) grouped.put("apk-bridge", JSONArray())
@@ -787,17 +819,24 @@ class McpHttpServer(private val context: Context, private val port: Int, private
      * dynamic APK-bridge tools are added, or if operators explicitly disable
      * tools through policy.
      */
-    /** Returns a human-readable label for the current APK MCP bridge (MT Manager or NP Manager). */
-    private fun bridgeLabel(): String = if (apkBridge.bridgedPrefix() == ApkMcpBridge.NP_PREFIX) "NP Manager" else "MT Manager"
+    /** Returns a human-readable label for all online APK MCP bridges. */
+    private fun bridgeLabel(): String {
+        val prefixes = apkBridge.allPrefixes()
+        if (prefixes.isEmpty()) return "MT/NP Manager"
+        return prefixes.joinToString(" + ") {
+            ApkMcpBridge.prefixLabel(it)
+        }
+    }
 
     private fun advertisedTools(): JSONArray {
         val full = tools()
         if (full.length() <= ToolCatalog.ALL.size + 64) return full
         val out = JSONArray()
+        val apkPrefixes = apkBridge.allPrefixes()
         for (i in 0 until full.length()) {
             val t = full.getJSONObject(i)
             val name = t.optString("name")
-            if (!name.startsWith(apkBridge.bridgedPrefix()) || out.length() < ToolCatalog.ALL.size + 64) out.put(t)
+            if (!apkPrefixes.any { name.startsWith(it) } || out.length() < ToolCatalog.ALL.size + 64) out.put(t)
         }
         return out
     }
