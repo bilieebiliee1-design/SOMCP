@@ -197,25 +197,32 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     val original = when (src.source) { "build_output", "local_file" -> runCatching { File(src.path).readBytes() }.getOrElse { error("SO path not found: $path") }; else -> (workDir ?: error("No work directory selected")).readSource(src) }
     require(original.size >= 4 && original[0] == 0x7f.toByte() && original[1] == 'E'.code.toByte() && original[2] == 'L'.code.toByte() && original[3] == 'F'.code.toByte()) { "NOT_ELF_INPUT: ${src.path} is not an ELF SO file. Use apk_analyze or an APK MCP tool." }
     val prepared = prepareAnalysisInput(original)
-    val ws = Workspace("so-ws-${UUID.randomUUID()}", src, prepared.first, lief.parse(prepared.first), temporary, sha256(original), prepared.second, prepared.third)
+    val ws = Workspace("so-ws-${UUID.randomUUID()}", src, prepared.data, prepared.elf, temporary, sha256(original), prepared.source, prepared.facts)
     workspaces[ws.id] = ws
     workspaceBySourceKey[key] = ws.id
     AppLog.i("Opened ${src.path} as ${ws.id}")
     return ws
 }
 
-internal fun EngineRuntime.prepareAnalysisInput(original: ByteArray): Triple<ByteArray, String, JSONObject> {
+internal data class AnalysisInput(
+    val data: ByteArray,
+    val source: String,
+    val facts: JSONObject,
+    val elf: ElfFile,
+)
+
+internal fun EngineRuntime.prepareAnalysisInput(original: ByteArray): AnalysisInput {
     val before = lief.parse(original)
     val facts = JSONObject().put("attempted", false).put("changed", false).put("sectionsBefore", before.sections.size).put("programHeadersBefore", before.programHeaders.size).put("symbolsBefore", before.symbols.size).put("dynSymbolsBefore", before.dynSymbols.size).put("functionSymbolsRecovered", false)
-    if (before.sections.isNotEmpty()) return Triple(original, "original", facts.put("reason", "section_table_present"))
-    if (original.size < 5 || !xanso.available()) return Triple(original, "original", facts.put("reason", if (original.size < 5) "invalid_elf_ident" else "xanso_unavailable"))
+    if (before.sections.isNotEmpty()) return AnalysisInput(original, "original", facts.put("reason", "section_table_present"), before)
+    if (original.size < 5 || !xanso.available()) return AnalysisInput(original, "original", facts.put("reason", if (original.size < 5) "invalid_elf_ident" else "xanso_unavailable"), before)
     facts.put("attempted", true)
     val recovered = when (original[4].toInt() and 0xff) { 1 -> xanso.buildSections(original); 2 -> xanso.recoverElf64Sections(original)?.let { lief.fixSections(it) }; else -> null }
-    if (recovered == null || recovered.isEmpty()) return Triple(original, "original", facts.put("reason", "xanso_recovery_failed"))
+    if (recovered == null || recovered.isEmpty()) return AnalysisInput(original, "original", facts.put("reason", "xanso_recovery_failed"), before)
     val after = lief.parse(recovered)
-    if (after.sections.isEmpty()) return Triple(original, "original", facts.put("reason", "recovered_section_table_not_parseable"))
+    if (after.sections.isEmpty()) return AnalysisInput(original, "original", facts.put("reason", "recovered_section_table_not_parseable"), before)
     facts.put("changed", !recovered.contentEquals(original)).put("reason", "missing_section_table").put("recoveryMode", if ((original[4].toInt() and 0xff) == 1) "xanso32_section_fix" else "xanso64_section_recovery_lief_finalize").put("sectionsAfter", after.sections.size).put("programHeadersAfter", after.programHeaders.size).put("symbolsAfter", after.symbols.size).put("dynSymbolsAfter", after.dynSymbols.size).put("functionSymbolsRecovered", after.symbols.count { it.type == "FUNC" } > before.symbols.count { it.type == "FUNC" })
-    return Triple(recovered, "xanso_recovered_sections", facts)
+    return AnalysisInput(recovered, "xanso_recovered_sections", facts, after)
 }
 
 internal fun EngineRuntime.isAllowedLocalInput(file: File): Boolean {
