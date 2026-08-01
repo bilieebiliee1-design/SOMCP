@@ -339,11 +339,16 @@ internal fun parseApkEmbeddedReference(raw: String): ApkEmbeddedReference? {
 internal fun EngineRuntime.ensureSources(dir: WorkDirectory): List<SoSource> {
     val settings = SettingsStore(context)
     val options = scanOptions(settings)
-    if (!settings.indexCacheEnabled) { sources = dir.listSos(options); sourceFingerprint = sources.map { FileFingerprint(it.path, it.size, it.modified) }; return sources }
-    val nextFingerprint = dir.fingerprint(options)
-    if (sources.isNotEmpty() && nextFingerprint == sourceFingerprint) return sources
-    sources = dir.listSos(options)
-    sourceFingerprint = nextFingerprint
+    if (!settings.indexCacheEnabled) {
+        sources = dir.listSos(options)
+        sourceFingerprint = sources.map { FileFingerprint(it.path, it.size, it.modified) }
+        return sources
+    }
+    // Single-pass scan: get sources AND fingerprint in one directory walk
+    val (scanned, fingerprint) = dir.listSosWithFingerprint(options)
+    if (sources.isNotEmpty() && fingerprint == sourceFingerprint) return sources
+    sources = scanned
+    sourceFingerprint = fingerprint
     pageStore.clear()
     AppLog.i("Scanned ${sources.size} SO entries")
     return sources
@@ -355,6 +360,19 @@ internal fun EngineRuntime.sourceSummary(dir: WorkDirectory, src: SoSource): Sou
     if (!SettingsStore(context).parseMetadataInList) return SourceSummary("unknown", 0, "little", false, false)
     return sourceSummaryCache.getOrPut(sourceKey(src)) {
         dir.cachedSummary(src)?.let { return@getOrPut SourceSummary(it.architecture, it.bits, it.endian, it.hasDebugInfo, it.stripped) }
+
+        // Fast path: for filesystem SOs, parse ELF header via seeking (reads only ~few KB
+        // instead of the full SO file, which can be tens of MB for libapp.so)
+        if (src.source == "filesystem" && src.treeDocumentUri != null) {
+            dir.readElfSummary(src.treeDocumentUri)?.let { summary ->
+                if (summary.architecture != "unknown") {
+                    dir.putCachedSummary(src, CachedSourceSummary(summary.architecture, summary.bits, summary.endian, summary.hasDebugInfo, summary.stripped))
+                    return@getOrPut summary
+                }
+            }
+        }
+
+        // Fallback: read full file and parse with LIEF
         runCatching { lief.parse(dir.readSource(src)).let { elf -> SourceSummary(elf.architecture, elf.bits, elf.endian, elf.sections.any { it.name.startsWith(".debug") }, elf.symbols.isEmpty()).also { dir.putCachedSummary(src, CachedSourceSummary(it.architecture, it.bits, it.endian, it.hasDebugInfo, it.stripped)) } } }.getOrElse { SourceSummary("unknown", 0, "little", false, true) }
     }
 }
