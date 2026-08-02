@@ -452,13 +452,78 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putString("tunnelLogLevel", if (value in setOf("debug", "info", "warn", "error", "fatal")) value else "info").apply()
 
     // ---- APK MCP bridge ----
+    /** Single bridge URL (legacy, maps to first entry in [apkMcpConfigs]). */
     var apkMcpUrl: String
-        get() = prefs.getString("apkMcpUrl", "") ?: ""
-        set(value) = prefs.edit().putString("apkMcpUrl", value.trim()).apply()
+        get() {
+            val configs = apkMcpConfigs
+            return configs.firstOrNull()?.url ?: ""
+        }
+        set(value) {
+            val configs = apkMcpConfigs.toMutableList()
+            if (configs.isEmpty()) {
+                configs.add(BridgeConfig(value.trim(), apkMcpToken))
+            } else {
+                configs[0] = configs[0].copy(url = value.trim())
+            }
+            apkMcpConfigs = configs
+        }
 
+    /** Single bridge token (legacy, maps to first entry in [apkMcpConfigs]). */
     var apkMcpToken: String
-        get() = sanitizeCredential(prefs.getString("apkMcpToken", "").orEmpty())
-        set(value) = prefs.edit().putString("apkMcpToken", sanitizeCredential(value)).apply()
+        get() {
+            val configs = apkMcpConfigs
+            return configs.firstOrNull()?.token ?: ""
+        }
+        set(value) {
+            val configs = apkMcpConfigs.toMutableList()
+            if (configs.isEmpty()) {
+                configs.add(BridgeConfig(apkMcpUrl, sanitizeCredential(value)))
+            } else {
+                configs[0] = configs[0].copy(token = sanitizeCredential(value))
+            }
+            apkMcpConfigs = configs
+        }
+
+    data class BridgeConfig(val url: String, val token: String = "")
+
+    /** Multiple bridge configurations as a JSON array of {"url","token"} objects. */
+    var apkMcpConfigs: List<BridgeConfig>
+        get() {
+            val raw = prefs.getString("apkMcpConfigs", "") ?: ""
+            if (raw.isBlank()) {
+                // Migration: read legacy single URL+token
+                val legacyUrl = prefs.getString("apkMcpUrl", "") ?: ""
+                return if (legacyUrl.isNotBlank()) {
+                    val legacyToken = sanitizeCredential(prefs.getString("apkMcpToken", "").orEmpty())
+                    listOf(BridgeConfig(legacyUrl, legacyToken))
+                } else emptyList()
+            }
+            return try {
+                val arr = org.json.JSONArray(raw)
+                (0 until arr.length()).map { i ->
+                    val obj = arr.getJSONObject(i)
+                    BridgeConfig(
+                        url = obj.optString("url", ""),
+                        token = sanitizeCredential(obj.optString("token", "")),
+                    )
+                }.filter { it.url.isNotBlank() }
+            } catch (_: Exception) { emptyList() }
+        }
+        set(value) {
+            val arr = org.json.JSONArray()
+            value.forEach { config ->
+                arr.put(org.json.JSONObject()
+                    .put("url", config.url.trim())
+                    .put("token", config.token))
+            }
+            prefs.edit().putString("apkMcpConfigs", arr.toString()).apply()
+            // Keep legacy fields in sync for backward compatibility
+            val first = value.firstOrNull()
+            prefs.edit()
+                .putString("apkMcpUrl", first?.url?.trim() ?: "")
+                .putString("apkMcpToken", first?.token?.let { sanitizeCredential(it) } ?: "")
+                .apply()
+        }
 
     var apkMcpAutoProbe: Boolean
         get() = prefs.getBoolean("apkMcpAutoProbe", false)
@@ -615,6 +680,11 @@ class SettingsStore(context: Context) {
             .put("apkBridge", org.json.JSONObject()
                 .put("apkMcpUrl", apkMcpUrl)
                 .put("apkMcpToken", mask(apkMcpToken))
+                .put("apkMcpConfigs", org.json.JSONArray().apply {
+                    apkMcpConfigs.forEach { c ->
+                        put(org.json.JSONObject().put("url", c.url).put("token", mask(c.token)))
+                    }
+                })
                 .put("apkMcpAutoProbe", apkMcpAutoProbe)
                 .put("apkMcpMergeTools", apkMcpMergeTools)
                 .put("apkMcpProbeTimeoutMs", apkMcpProbeTimeoutMs))
@@ -739,6 +809,24 @@ class SettingsStore(context: Context) {
         val apk = obj("apkBridge") ?: patch
         applyStr(apk, "apkMcpUrl") { apkMcpUrl = it }
         if (allowSecrets) applyStr(apk, "apkMcpToken") { apkMcpToken = it }
+        // Support setting multiple bridge configs via JSON array
+        if (apk.has("apkMcpConfigs") && !apk.isNull("apkMcpConfigs")) {
+            try {
+                val arr = apk.optJSONArray("apkMcpConfigs")
+                if (arr != null && arr.length() > 0) {
+                    val configs = mutableListOf<BridgeConfig>()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        val url = obj.optString("url", "").trim()
+                        if (url.isNotBlank()) {
+                            val token = if (allowSecrets) obj.optString("token", "") else ""
+                            configs.add(BridgeConfig(url, token))
+                        }
+                    }
+                    if (configs.isNotEmpty()) apkMcpConfigs = configs
+                }
+            } catch (_: Exception) {}
+        }
         applyBool(apk, "apkMcpAutoProbe") { apkMcpAutoProbe = it }
         applyBool(apk, "apkMcpMergeTools") { apkMcpMergeTools = it }
         applyInt(apk, "apkMcpProbeTimeoutMs") { apkMcpProbeTimeoutMs = it }
