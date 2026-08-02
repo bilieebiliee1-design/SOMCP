@@ -348,12 +348,11 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             connections.size.coerceIn(1, 4)
         )
         try {
-            val snapshot = connections.map { conn -> conn.state }
             val results = connections.map { conn ->
                 exec.submit<State> { conn.probe() }
             }
             results.forEach { it.get() }
-            return snapshot.firstOrNull() ?: State()
+            return connections.firstOrNull()?.state ?: State()
         } finally {
             exec.shutdown()
         }
