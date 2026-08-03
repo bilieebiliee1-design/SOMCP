@@ -53,9 +53,16 @@
     <string name="backup_encrypt_password_hint">Enter password to encrypt the backup file</string>
     <string name="backup_decrypt_password">Enter password to decrypt backup</string>
     <string name="backup_decrypt_password_hint">The backup file is encrypted. Enter the password to decrypt it.</string>
-    <string name="backup_password_mismatch">Passwords do not match</string>
     <string name="backup_password_required">Password is required for encrypted backup</string>
     <string name="backup_decrypt_failed">Decryption failed: wrong password or corrupted file</string>
-    <string name="backup_encrypt_warning">⚠️ If you forget the encryption password, the backup data CANNOT be recovered. There is no password reset.</string>
     <string name="backup_encrypt_warning_title">Important</string>
+    <string name="backup_encrypt">Encrypt with password</string>
+    <string name="backup_encrypt_warning">⚠️ If you forget the encryption password, the backup data CANNOT be recovered. There is no password reset.</string>
+    <string name="backup_password_prompt">Enter encryption password</string>
+    <string name="backup_password_confirm">Confirm password</string>
+    <string name="backup_password_mismatch">Passwords do not match</string>
+    <string name="backup_password_label">Encryption password</string>
+    <string name="backup_decrypt_prompt">Enter password to decrypt backup</string>
+    <string name="backup_wrong_password">Wrong password or corrupted data</string>
+    <string name="backup_decrypting">Decrypting…</string>
 </resources>

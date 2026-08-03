@@ -257,6 +257,13 @@ private fun textFor(mode: String, context: Context): UiText {
         backupDecryptFailed = s(R.string.backup_decrypt_failed),
         backupEncryptWarning = s(R.string.backup_encrypt_warning),
         backupEncryptWarningTitle = s(R.string.backup_encrypt_warning_title),
+        backupEncrypt = s(R.string.backup_encrypt),
+        backupPasswordPrompt = s(R.string.backup_password_prompt),
+        backupPasswordConfirm = s(R.string.backup_password_confirm),
+        backupPasswordLabel = s(R.string.backup_password_label),
+        backupDecryptPrompt = s(R.string.backup_decrypt_prompt),
+        backupWrongPassword = s(R.string.backup_wrong_password),
+        backupDecrypting = s(R.string.backup_decrypting),
     )
 }
 
