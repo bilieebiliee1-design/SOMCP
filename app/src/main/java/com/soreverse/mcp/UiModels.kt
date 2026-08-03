@@ -149,4 +149,11 @@ internal data class UiText(
     val backupDecryptFailed: String,
     val backupEncryptWarning: String,
     val backupEncryptWarningTitle: String,
+    val backupEncrypt: String,
+    val backupPasswordPrompt: String,
+    val backupPasswordConfirm: String,
+    val backupPasswordLabel: String,
+    val backupDecryptPrompt: String,
+    val backupWrongPassword: String,
+    val backupDecrypting: String,
 )
