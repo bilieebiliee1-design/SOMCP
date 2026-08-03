@@ -246,6 +246,17 @@ private fun textFor(mode: String, context: Context): UiText {
         backupImportSuccess = s(R.string.backup_import_success),
         backupImportError = s(R.string.backup_import_error),
         backupSecretsMasked = s(R.string.backup_secrets_masked),
+        backupEncryptToggle = s(R.string.backup_encrypt_toggle),
+        backupEncryptPassword = s(R.string.backup_encrypt_password),
+        backupEncryptConfirm = s(R.string.backup_encrypt_confirm),
+        backupEncryptPasswordHint = s(R.string.backup_encrypt_password_hint),
+        backupDecryptPassword = s(R.string.backup_decrypt_password),
+        backupDecryptPasswordHint = s(R.string.backup_decrypt_password_hint),
+        backupPasswordMismatch = s(R.string.backup_password_mismatch),
+        backupPasswordRequired = s(R.string.backup_password_required),
+        backupDecryptFailed = s(R.string.backup_decrypt_failed),
+        backupEncryptWarning = s(R.string.backup_encrypt_warning),
+        backupEncryptWarningTitle = s(R.string.backup_encrypt_warning_title),
     )
 }
 
