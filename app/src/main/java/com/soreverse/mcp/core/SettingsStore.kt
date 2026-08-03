@@ -429,6 +429,10 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("tunnelEdgeIpVersion", "4") ?: "4"
         set(value) = prefs.edit().putString("tunnelEdgeIpVersion", if (value in setOf("4", "6", "auto")) value else "4").apply()
 
+    var tunnelUseMirror: Boolean
+        get() = prefs.getBoolean("tunnelUseMirror", false)
+        set(value) = prefs.edit().putBoolean("tunnelUseMirror", value).apply()
+
     var tunnelReconnect: Boolean
         get() = prefs.getBoolean("tunnelReconnect", true)
         set(value) = prefs.edit().putBoolean("tunnelReconnect", value).apply()

@@ -602,6 +602,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put("apkMcpUrl", s.apkMcpUrl)
                 .put("hint", integrationHint))
             .put("cloudflaredAvailable", tunnel.binary()?.exists() == true)
+            .put("cloudflaredBinaryState", tunnel.binaryState().name)
         )
     }
 
