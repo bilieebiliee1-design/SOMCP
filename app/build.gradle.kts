@@ -146,8 +146,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
     implementation("org.jsoup:jsoup:1.22.2")
-    implementation("com.lambdapioneer.argon2kt:argon2kt:1.5.0")
-
     implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
     implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
     implementation(files("libs/capstone-3.1.8-android-patched.jar"))
