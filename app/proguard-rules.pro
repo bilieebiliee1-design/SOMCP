@@ -1,3 +1,11 @@
+-keep class com.soreverse.mcp.core.BackupCrypto {
+    *;
+}
+
+-keep class com.lambdapioneer.argon2kt.** {
+    *;
+}
+
 -keep class com.soreverse.mcp.nativecore.RizinNativeEngine {
     *;
 }
