@@ -116,15 +116,16 @@ object BackupCrypto {
     }
 
     private fun deriveKeyBinary(password: String, salt: ByteArray): ByteArray {
-        return argon2.hash(
-            mode = Argon2Mode.Argon2id,
+        val hash = argon2.hash(
+            mode = Argon2Mode.ARGON2ID,
             password = password.toByteArray(Charsets.UTF_8),
             salt = salt,
-            iterations = 3,
-            memoryCostInPowOfTwo = 16,  // 2^16 KiB = 64 MiB
+            memoryCostInKibibytes = 64 * 1024,
+            iterationCount = 3,
             hashLengthInBytes = KEY_BYTES,
             parallelism = 2,
-        ).hash
+        )
+        return hash.rawHash
     }
 
     // ===== JSON format (REMOTE) =====
