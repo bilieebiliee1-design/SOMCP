@@ -20,6 +20,17 @@ class CloudflareTunnelManager(private val context: Context, private val settings
 
     enum class Mode { OFF, QUICK, NAMED }
     enum class State { STOPPED, STARTING, RUNNING, FAILED }
+    enum class BinaryState { UNKNOWN, NOT_FOUND, DOWNLOADING, READY }
+
+    companion object {
+        /** GitHub release URL for the cloudflared Android arm64 binary. */
+        const val CLOUDFLARED_DOWNLOAD_URL =
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
+        const val CLOUDFLARED_MIRROR_URL =
+            "https://mirror.ghproxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
+        const val CLOUDFLARED_DIR = "cloudflared"
+        const val CLOUDFLARED_FILE = "cloudflared"
+    }
 
     data class TunnelStatus(
         val state: State = State.STOPPED,
@@ -38,6 +49,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
 
     private val _status = AtomicReference(TunnelStatus())
     fun status(): TunnelStatus = _status.get()
+
+    private val _binaryState = AtomicReference(BinaryState.UNKNOWN)
+    fun binaryState(): BinaryState = _binaryState.get()
 
     private var process: Process? = null
     private var watchThread: Thread? = null
@@ -110,9 +124,83 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     }
 
     fun binary(): File? {
-        val dir = context.applicationInfo?.nativeLibraryDir ?: return null
-        val f = File(dir, "libcloudflared.so")
-        return if (f.exists() && f.canExecute()) f else f.takeIf { it.exists() }
+        // 1. Check app-private data directory (downloaded binary)
+        val dataDir = File(context.filesDir, CLOUDFLARED_DIR)
+        val dataFile = File(dataDir, CLOUDFLARED_FILE)
+        if (dataFile.exists() && dataFile.canExecute()) {
+            _binaryState.set(BinaryState.READY)
+            return dataFile
+        }
+        // 2. Fall back to nativeLibraryDir (legacy / bundled path)
+        val ndkDir = context.applicationInfo?.nativeLibraryDir
+        if (ndkDir != null) {
+            val ndkFile = File(ndkDir, "lib${CLOUDFLARED_FILE}.so")
+            if (ndkFile.exists()) {
+                _binaryState.set(BinaryState.READY)
+                return ndkFile
+            }
+        }
+        _binaryState.set(BinaryState.NOT_FOUND)
+        return null
+    }
+
+    /**
+     * Download the cloudflared binary from GitHub releases (or mirror if
+     * [useMirror] is true) to the app's private data directory.
+     * Runs on the calling thread — caller should dispatch to [Dispatchers.IO].
+     *
+     * @throws Exception on download / write failure.
+     */
+    fun downloadBinary(useMirror: Boolean = false) {
+        _binaryState.set(BinaryState.DOWNLOADING)
+        try {
+            val dir = File(context.filesDir, CLOUDFLARED_DIR)
+            dir.mkdirs()
+            val tmp = File(dir, "${CLOUDFLARED_FILE}.download")
+            // Try URLs in order: selected source first, then fallback
+            val urls = if (useMirror) {
+                listOf(CLOUDFLARED_MIRROR_URL, CLOUDFLARED_DOWNLOAD_URL)
+            } else {
+                listOf(CLOUDFLARED_DOWNLOAD_URL, CLOUDFLARED_MIRROR_URL)
+            }
+            var lastError: Exception? = null
+            for (url in urls) {
+                try {
+                    val req = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", "SOMCP")
+                        .build()
+                    client.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            throw IllegalStateException("HTTP ${resp.code}")
+                        }
+                        val body = resp.body ?: throw IllegalStateException("empty response body")
+                        body.byteStream().use { input ->
+                            tmp.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    }
+                    lastError = null
+                    break
+                } catch (e: Exception) {
+                    lastError = e
+                    AppLog.w("cloudflared download failed from $url: ${e.message}")
+                }
+            }
+            if (lastError != null) throw lastError!!
+            // Atomically replace the old binary
+            val target = File(dir, CLOUDFLARED_FILE)
+            if (target.exists()) target.delete()
+            tmp.renameTo(target)
+            // Make executable
+            target.setExecutable(true, false)
+            _binaryState.set(BinaryState.READY)
+            AppLog.i("cloudflared binary downloaded to ${target.absolutePath}")
+        } catch (e: Exception) {
+            _binaryState.set(BinaryState.NOT_FOUND)
+            throw e
+        }
     }
 
     fun start(targetPort: Int, mode: Mode, token: String): TunnelStatus =
@@ -166,7 +254,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         totalRestarts.incrementAndGet()
         val bin = binary()
         if (bin == null) {
-            return fail(mode, targetPort, "libcloudflared.so not found in nativeLibraryDir")
+            return fail(mode, targetPort, "cloudflared binary not found — download it from the tunnel settings page")
         }
         transitionTo(State.STARTING, mode, publicUrl = null, message = "starting")
         publish()
@@ -696,6 +784,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             put("targetPort", s.targetPort)
             put("message", s.message)
             put("binaryAvailable", binary()?.exists() == true)
+            put("binaryState", _binaryState.get().name)
             put("history", settings.tunnelHistoryUrls)
             put("totalRunningMs", stats.optLong("totalRunningMs"))
             put("currentRunningMs", stats.optLong("currentRunningMs"))
