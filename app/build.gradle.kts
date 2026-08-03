@@ -166,4 +166,7 @@ dependencies {
     }
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
+
+    // Argon2 key derivation for encrypted backup/restore
+    implementation("com.lambdapioneer.argon2kt:argon2kt:1.7.0")
 }

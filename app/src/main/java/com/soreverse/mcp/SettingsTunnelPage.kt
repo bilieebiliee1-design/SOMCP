@@ -55,15 +55,26 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
     var tunnelLogLevel by remember { mutableStateOf(settings.tunnelLogLevel) }
     var tunnelReconnect by remember { mutableStateOf(settings.tunnelReconnect) }
     var tunnelKeepAlive by remember { mutableStateOf(settings.tunnelKeepAlive) }
+    var tunnelUseMirror by remember { mutableStateOf(settings.tunnelUseMirror) }
     var keepaliveInterval by remember { mutableStateOf(settings.tunnelKeepaliveIntervalSec.toString()) }
     var reconnectBackoff by remember { mutableStateOf(settings.tunnelReconnectBackoffSec.toString()) }
     var historyEnabled by remember { mutableStateOf(settings.tunnelHistoryEnabled) }
     var history by remember { mutableStateOf(settings.tunnelHistoryUrls.split('\n').map { it.trim() }.filter { it.isNotBlank() }) }
     var tunnelStatus by remember { mutableStateOf<CloudflareTunnelManager.TunnelStatus?>(null) }
+    var binaryState by remember { mutableStateOf(CloudflareTunnelManager.BinaryState.UNKNOWN) }
+    var isDownloading by remember { mutableStateOf(false) }
+    var downloadError by remember { mutableStateOf<String?>(null) }
     var showExport by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
+        val tunnel = activeTunnel(context)
+        if (tunnel != null) {
+            binaryState = tunnel.binaryState()
+            // Trigger a re-check so binary() updates the state
+            tunnel.binary()
+            binaryState = tunnel.binaryState()
+        }
         tunnelStatus = tunnelStatusOf(context)
         while (true) {
             delay(3_000)
@@ -81,6 +92,49 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             Text("${if (t.zh) "隧道状态" else "Tunnel state"}: ${tunnelStatus?.state?.name ?: "STOPPED"}", color = stateColor, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(14.dp))
             if (tunnelStatus?.message?.isNotBlank() == true) {
                 Text(tunnelStatus!!.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
+            }
+            GroupDivider()
+            val binaryLabel = if (t.zh) "cloudflared 二进制" else "cloudflared binary"
+            val binaryStatusText = when (binaryState) {
+                CloudflareTunnelManager.BinaryState.READY -> "${binaryLabel}: ${if (t.zh) "就绪" else "Ready"}"
+                CloudflareTunnelManager.BinaryState.DOWNLOADING -> "${binaryLabel}: ${if (t.zh) "下载中…" else "Downloading…"}"
+                CloudflareTunnelManager.BinaryState.NOT_FOUND -> "${binaryLabel}: ${if (t.zh) "未找到，请点击下方按钮下载" else "Not found, download below"}"
+                else -> "${binaryLabel}: ${if (t.zh) "未知" else "Unknown"}"
+            }
+            Text(binaryStatusText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
+            if (binaryState == CloudflareTunnelManager.BinaryState.NOT_FOUND && !isDownloading) {
+                Button(
+                    onClick = {
+                        val tunnel = activeTunnel(context) ?: return@Button
+                        isDownloading = true
+                        downloadError = null
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) { tunnel.downloadBinary(settings.tunnelUseMirror) }
+                            }.onSuccess {
+                                binaryState = tunnel.binaryState()
+                            }.onFailure { e ->
+                                downloadError = e.message ?: "download failed"
+                                binaryState = tunnel.binaryState()
+                            }
+                            isDownloading = false
+                        }
+                    },
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                ) {
+                    Text(if (t.zh) "下载 cloudflared" else "Download cloudflared")
+                }
+            }
+            if (isDownloading) {
+                Text(
+                    if (t.zh) "正在下载 cloudflared（约 15MB），请稍候…" else "Downloading cloudflared (~15 MB), please wait…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                )
+            }
+            downloadError?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
             }
             if (tunnelStatus?.mode == CloudflareTunnelManager.Mode.NAMED && tunnelStatus?.state == CloudflareTunnelManager.State.RUNNING && tunnelStatus?.publicUrl.isNullOrBlank()) {
                 Text(if (t.zh) "永久隧道已连接，但需要在下方填写 Cloudflare 已发布应用的公网主机名/URL 才能显示可复制地址。" else "Named tunnel is connected, but enter the Cloudflare published application hostname/URL below to display a copyable public address.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
@@ -148,6 +202,10 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             GroupDivider()
             Text(if (t.zh) "隧道日志级别" else "Tunnel log level", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             ChipRow(listOf("info" to "Info", "debug" to "Debug", "warn" to "Warn", "error" to "Error"), tunnelLogLevel) { tunnelLogLevel = it; settings.tunnelLogLevel = it }
+            GroupDivider()
+            ToggleRow(if (t.zh) "使用镜像源下载" else "Use mirror for download", tunnelUseMirror) {
+                tunnelUseMirror = it; settings.tunnelUseMirror = it
+            }
         }
         GlassGroup {
             ToggleRow(if (t.zh) "随服务自动启动" else "Auto-start with service", tunnelAutoStart) { tunnelAutoStart = it; settings.tunnelAutoStart = it }

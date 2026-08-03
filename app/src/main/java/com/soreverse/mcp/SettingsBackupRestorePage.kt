@@ -13,10 +13,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -32,13 +32,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.BackupCrypto
 import com.soreverse.mcp.core.SettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
 
 @Composable
 internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
@@ -61,7 +65,51 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
     var decryptError by remember { mutableStateOf<String?>(null) }
     var pendingEncryptedBytes by remember { mutableStateOf<ByteArray?>(null) }
 
-    val exportLauncher = rememberLauncherForActivityResult(
+    // ----- export password dialog state (REMOTE) -----
+    var showExportPasswordDialog by remember { mutableStateOf(false) }
+    var exportPassword by remember { mutableStateOf("") }
+    var exportPasswordConfirm by remember { mutableStateOf("") }
+    var exportPasswordError by remember { mutableStateOf<String?>(null) }
+
+    // ----- import password dialog state (REMOTE) -----
+    var showImportPasswordDialog by remember { mutableStateOf(false) }
+    var importPassword by remember { mutableStateOf("") }
+    var importPasswordError by remember { mutableStateOf<String?>(null) }
+    var pendingImportContent by remember { mutableStateOf<String?>(null) }
+
+    // ----- export state (REMOTE) -----
+    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
+
+    // ----- export: encrypted file launcher (REMOTE) -----
+    val encryptedExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        val password = pendingExportPassword ?: return@rememberLauncherForActivityResult
+        if (uri == null) { pendingExportPassword = null; return@rememberLauncherForActivityResult }
+        scope.launch {
+            runCatching {
+                val json = settings.toJsonString(maskSecrets = !includeSecrets)
+                val encrypted = withContext(Dispatchers.Default) {
+                    BackupCrypto.encrypt(json.toByteArray(Charsets.UTF_8), password)
+                }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(encrypted.toString(2).toByteArray(Charsets.UTF_8))
+                    } ?: error("Cannot open output file")
+                }
+            }.onSuccess {
+                resultOk = true
+                resultMessage = t.backupExportSuccess
+            }.onFailure { error ->
+                resultOk = false
+                resultMessage = error.message ?: t.backupImportError
+            }
+        }
+        pendingExportPassword = null
+    }
+
+    // ----- export: plain file launcher (REMOTE, no encryption) -----
+    val plainExportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -90,6 +138,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         }
     }
 
+    // ----- import launcher -----
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
@@ -101,18 +150,30 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                         input.readBytes()
                     } ?: error("Cannot read input file")
                 }
+                // Try binary format first (HEAD)
                 if (BackupCrypto.isEncrypted(bytes)) {
-                    // File is encrypted — show password dialog
                     pendingEncryptedBytes = bytes
                     decryptPassword = ""
                     decryptError = null
                     decryptDialogVisible = true
                 } else {
-                    // Plaintext JSON — import directly
-                    val json = bytes.decodeToString()
-                    check(settings.fromJsonString(json, allowSecrets = includeSecrets).optBoolean("ok", false))
-                    resultOk = true
-                    resultMessage = t.backupImportSuccess
+                    // Try JSON format (REMOTE)
+                    val content = bytes.decodeToString()
+                    val json = withContext(Dispatchers.Default) {
+                        try { JSONObject(content) } catch (_: Exception) { null }
+                    }
+                    if (json != null && BackupCrypto.isEncryptedBackup(json)) {
+                        pendingImportContent = content
+                        importPassword = ""
+                        importPasswordError = null
+                        showImportPasswordDialog = true
+                    } else {
+                        // Plain JSON — import directly
+                        applyImport(content, t, settings, includeSecrets) { ok, msg ->
+                            resultOk = ok
+                            resultMessage = msg
+                        }
+                    }
                 }
             }.onFailure { error ->
                 resultOk = false
@@ -121,7 +182,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         }
     }
 
-    // Decrypt dialog
+    // Decrypt dialog (HEAD — binary format)
     if (decryptDialogVisible) {
         AlertDialog(
             onDismissRequest = {
@@ -201,7 +262,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         )
     }
 
-    // Encryption warning dialog
+    // Encryption warning dialog (HEAD)
     if (showEncryptWarning) {
         AlertDialog(
             onDismissRequest = {
@@ -233,6 +294,130 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         )
     }
 
+    // --- export password dialog (REMOTE) ---
+    if (showExportPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportPasswordDialog = false },
+            title = { Text(t.backupPasswordPrompt) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = exportPassword,
+                        onValueChange = { exportPassword = it; exportPasswordError = null },
+                        label = { Text(t.backupPasswordLabel) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = exportPasswordConfirm,
+                        onValueChange = { exportPasswordConfirm = it; exportPasswordError = null },
+                        label = { Text(t.backupPasswordConfirm) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    exportPasswordError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (exportPassword.length < 4) {
+                        exportPasswordError = t.backupPasswordPrompt
+                    } else if (exportPassword != exportPasswordConfirm) {
+                        exportPasswordError = t.backupPasswordMismatch
+                    } else {
+                        showExportPasswordDialog = false
+                        pendingExportPassword = exportPassword
+                        encryptedExportLauncher.launch("somcp_settings_backup_encrypted.json")
+                    }
+                }) {
+                    Text(t.confirm)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportPasswordDialog = false }) {
+                    Text(t.cancel)
+                }
+            },
+        )
+    }
+
+    // --- import password dialog (REMOTE) ---
+    if (showImportPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = { showImportPasswordDialog = false; pendingImportContent = null },
+            title = { Text(t.backupDecryptPrompt) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        t.backupEncryptWarning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    OutlinedTextField(
+                        value = importPassword,
+                        onValueChange = { importPassword = it; importPasswordError = null },
+                        label = { Text(t.backupPasswordLabel) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    importPasswordError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (importPassword.isBlank()) {
+                        importPasswordError = t.backupPasswordLabel
+                    } else {
+                        val content = pendingImportContent ?: return@TextButton
+                        showImportPasswordDialog = false
+                        pendingImportContent = null
+                        scope.launch {
+                            runCatching {
+                                val decrypted = withContext(Dispatchers.Default) {
+                                    BackupCrypto.decrypt(JSONObject(content), importPassword)
+                                }
+                                val decryptedText = decrypted.toString(Charsets.UTF_8)
+                                applyImport(decryptedText, t, settings, includeSecrets) { ok, msg ->
+                                    resultOk = ok
+                                    resultMessage = msg
+                                }
+                            }.onFailure { error ->
+                                val msg = if (error.message?.contains("tag mismatch") == true ||
+                                    error.message?.contains("AEADBadTagException") == true ||
+                                    error.message?.contains("GCM") == true
+                                ) {
+                                    t.backupWrongPassword
+                                } else {
+                                    "${t.backupImportError}: ${error.message.orEmpty()}"
+                                }
+                                resultOk = false
+                                resultMessage = msg
+                            }
+                        }
+                    }
+                }) {
+                    Text(t.confirm)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportPasswordDialog = false; pendingImportContent = null }) {
+                    Text(t.cancel)
+                }
+            },
+        )
+    }
+
+    // --- main UI ---
     Column(
         Modifier
             .fillMaxSize()
@@ -309,7 +494,6 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 Modifier.fillMaxWidth().padding(14.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                val exportEnabled = !encryptEnabled || (encryptPassword.isNotBlank() && encryptPassword == encryptConfirm)
                 PrimaryActionButton(
                     text = t.backupExport,
                     onClick = {
@@ -320,7 +504,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                             resultOk = false
                             resultMessage = t.backupPasswordMismatch
                         } else {
-                            exportLauncher.launch("somcp_settings_backup.json")
+                            plainExportLauncher.launch("somcp_settings_backup.json")
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -332,6 +516,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 )
             }
         }
+
         resultMessage?.let { message ->
             GlassGroup {
                 Text(
@@ -342,5 +527,21 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 )
             }
         }
+    }
+}
+
+private fun applyImport(
+    content: String,
+    t: UiText,
+    settings: SettingsStore,
+    includeSecrets: Boolean,
+    onResult: (Boolean, String) -> Unit,
+) {
+    runCatching {
+        check(settings.fromJsonString(content, allowSecrets = includeSecrets).optBoolean("ok", false))
+    }.onSuccess {
+        onResult(true, t.backupImportSuccess)
+    }.onFailure { error ->
+        onResult(false, "${t.backupImportError}: ${error.message.orEmpty()}")
     }
 }

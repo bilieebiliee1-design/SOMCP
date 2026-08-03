@@ -53,9 +53,16 @@
     <string name="backup_encrypt_password_hint">输入密码以加密备份文件</string>
     <string name="backup_decrypt_password">输入密码解密备份</string>
     <string name="backup_decrypt_password_hint">备份文件已加密，请输入密码进行解密</string>
-    <string name="backup_password_mismatch">两次输入的密码不一致</string>
     <string name="backup_password_required">加密备份需要填写密码</string>
     <string name="backup_decrypt_failed">解密失败：密码错误或文件损坏</string>
-    <string name="backup_encrypt_warning">⚠️ 忘记加密密码将无法恢复备份数据，没有任何方式可以找回密码。</string>
     <string name="backup_encrypt_warning_title">重要提醒</string>
+    <string name="backup_encrypt">加密备份</string>
+    <string name="backup_encrypt_warning">⚠️ 忘记加密密码将无法恢复备份数据，没有任何方式可以找回密码。</string>
+    <string name="backup_password_prompt">请输入加密密码</string>
+    <string name="backup_password_confirm">确认密码</string>
+    <string name="backup_password_mismatch">两次输入的密码不一致</string>
+    <string name="backup_password_label">加密密码</string>
+    <string name="backup_decrypt_prompt">请输入密码解密备份</string>
+    <string name="backup_wrong_password">密码错误或数据已损坏</string>
+    <string name="backup_decrypting">正在解密…</string>
 </resources>
