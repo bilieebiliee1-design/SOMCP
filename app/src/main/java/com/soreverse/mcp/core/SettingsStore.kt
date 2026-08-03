@@ -14,6 +14,20 @@ class SettingsStore(context: Context) {
                 .putBoolean("apkAutoProbeDefaultMigrated", true)
                 .apply()
         }
+        // Pre-populate default bridge URLs (MT Manager :8787, NP Manager :8788)
+        // when no bridge configs exist at all. This lets users see the built-in
+        // bridges immediately without having to manually add common URLs.
+        if (!prefs.getBoolean("apkDefaultBridgesAdded", false)) {
+            val raw = prefs.getString("apkMcpConfigs", "") ?: ""
+            val legacyUrl = prefs.getString("apkMcpUrl", "") ?: ""
+            if (raw.isBlank() && legacyUrl.isBlank()) {
+                val arr = org.json.JSONArray()
+                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8787/mcp").put("token", ""))
+                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8788/mcp").put("token", ""))
+                prefs.edit().putString("apkMcpConfigs", arr.toString()).apply()
+            }
+            prefs.edit().putBoolean("apkDefaultBridgesAdded", true).apply()
+        }
         // One-time correction of misconfiguration introduced by the 1.0.10/1.0.11
         // updates, which silently forced bindHost=127.0.0.1 and authEnabled=true
         // onto existing installs and broke the LAN-link experience. Per the

@@ -366,13 +366,12 @@ class ApkMcpBridge(private val settings: SettingsStore) {
     fun probeUrl(url: String, token: String = ""): State {
         val conn = ensureConnection(url, token)
         val st = conn.probe()
-        // Save to settings if online
-        if (st.online) {
-            val configs = settings.apkMcpConfigs.toMutableList()
-            if (configs.none { it.url == url }) {
-                configs.add(SettingsStore.BridgeConfig(url, token))
-                settings.apkMcpConfigs = configs
-            }
+        // Always save to settings so the bridge appears in the UI list
+        // even when it is currently offline (user can retry later).
+        val configs = settings.apkMcpConfigs.toMutableList()
+        if (configs.none { it.url == url }) {
+            configs.add(SettingsStore.BridgeConfig(url, token))
+            settings.apkMcpConfigs = configs
         }
         return st
     }

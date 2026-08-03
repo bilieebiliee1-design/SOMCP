@@ -46,6 +46,10 @@
     *;
 }
 
+-keep class com.lambdapioneer.argon2kt.** {
+    *;
+}
+
 -dontwarn com.github.unidbg.**
 -dontwarn unicorn.**
 -dontwarn net.fornwall.jelf.**
