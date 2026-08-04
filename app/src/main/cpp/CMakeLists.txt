@@ -85,6 +85,11 @@ endif()
 add_library(rz_native SHARED ${RZ_SOURCES})
 target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
+# Native APK signature verification — reads the APK directly from the
+# filesystem to bypass Java-level PackageManager hooks (used by kstools
+# and ApkSignatureKiller). Linked into the main rz_native library.
+target_sources(rz_native PRIVATE signature_verify.cpp)
+
 add_library(blutter_bridge SHARED blutter_bridge.cpp)
 target_link_libraries(blutter_bridge PRIVATE dl log)
 

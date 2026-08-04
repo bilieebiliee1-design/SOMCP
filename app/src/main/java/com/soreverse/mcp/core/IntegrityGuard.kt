@@ -6,7 +6,9 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Debug
+import android.os.Process
 import com.soreverse.mcp.BuildConfig
+import com.soreverse.mcp.nativecore.SignatureVerifier
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -23,6 +25,41 @@ object IntegrityGuard {
     )
 
     @Volatile private var cached: Pair<Long, Result>? = null
+
+    /**
+     * Runs all integrity checks (Java PackageManager + native APK file
+     * verification) and terminates the process if any check fails.
+     *
+     * This is the main entry point for startup integrity enforcement.
+     * It should be called once during Application.onCreate().
+     *
+     * The reason for two layers of verification:
+     * - Cracking tools (kstools, ApkSignatureKiller, MT) hook the Java
+     *   PackageManager.getPackageInfo() Binder call to replace the
+     *   returned signature. The Java-level check alone can be bypassed.
+     * - The native check reads the APK directly from the filesystem and
+     *   extracts the certificate from the META-INF/*.RSA PKCS7 signature.
+     *   This path cannot be intercepted by a Binder-level hook.
+     * - Together, they provide defense in depth: a cracker would need to
+     *   hook BOTH the Java PackageManager AND the native JNI bridge,
+     *   significantly raising the effort required.
+     */
+    fun enforce(context: Context) {
+        // 1. Java-level check (can be hooked by kstools-style tools)
+        val javaResult = verify(context)
+        val javaPass = javaResult.trusted
+
+        // 2. Native-level check (reads APK directly, bypasses PackageManager hook)
+        val nativePass = SignatureVerifier.verify(context)
+
+        if (!javaPass || !nativePass) {
+            val reasons = mutableListOf<String>()
+            if (!javaPass) reasons.add("Java: ${javaResult.reason}")
+            if (!nativePass) reasons.add("Native: APK signer mismatch detected by filesystem-level verification")
+            AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
+            terminateWithContext(context)
+        }
+    }
 
     fun verify(context: Context): Result {
         cached?.let { (time, result) ->
@@ -53,6 +90,21 @@ object IntegrityGuard {
     }
 
     fun isTrusted(context: Context): Boolean = verify(context).trusted
+
+    /**
+     * Terminates the current process immediately. This is a hard kill that
+     * bypasses any Java-level exception handlers.
+     */
+    fun terminateWithContext(context: Context) {
+        try {
+            if (context is Activity) {
+                context.finishAffinity()
+            }
+        } catch (_: Exception) {
+        }
+        Process.killProcess(Process.myPid())
+        exitProcess(173)
+    }
 
     fun terminate(activity: Activity) {
         runCatching { activity.finishAffinity() }
