@@ -18,8 +18,7 @@ class SoReverseApplication : Application() {
         ToolStats.setPersistEnabled(settings.toolStatsPersist)
         ToolStats.attachContext(this)
         RizinNativeEngine.configureGhidra(this)
-        val integrity = IntegrityGuard.verify(this)
-        if (!integrity.trusted) AppLog.e("Integrity check failed: ${integrity.reason}; expected=${integrity.expected}; actual=${integrity.actual.joinToString()}")
+        IntegrityGuard.enforce(this)
         AppLog.i("SOMCP initialized (toolStatsPersist=${settings.toolStatsPersist})")
     }
 }
