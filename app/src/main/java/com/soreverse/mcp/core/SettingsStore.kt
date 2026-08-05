@@ -22,8 +22,8 @@ class SettingsStore(context: Context) {
             val legacyUrl = prefs.getString("apkMcpUrl", "") ?: ""
             if (raw.isBlank() && legacyUrl.isBlank()) {
                 val arr = org.json.JSONArray()
-                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8787/mcp").put("token", ""))
-                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8788/mcp").put("token", ""))
+                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8787/mcp").put("token", "").put("transport", "auto"))
+                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8788/mcp").put("token", "").put("transport", "sse"))
                 prefs.edit().putString("apkMcpConfigs", arr.toString()).apply()
             }
             prefs.edit().putBoolean("apkDefaultBridgesAdded", true).apply()
@@ -502,9 +502,9 @@ class SettingsStore(context: Context) {
             apkMcpConfigs = configs
         }
 
-    data class BridgeConfig(val url: String, val token: String = "")
+    data class BridgeConfig(val url: String, val token: String = "", val transport: String = "auto")
 
-    /** Multiple bridge configurations as a JSON array of {"url","token"} objects. */
+    /** Multiple bridge configurations as a JSON array of {"url","token","transport"} objects. */
     var apkMcpConfigs: List<BridgeConfig>
         get() {
             val raw = prefs.getString("apkMcpConfigs", "") ?: ""
@@ -523,6 +523,7 @@ class SettingsStore(context: Context) {
                     BridgeConfig(
                         url = obj.optString("url", ""),
                         token = sanitizeCredential(obj.optString("token", "")),
+                        transport = obj.optString("transport", "auto").takeIf { it in setOf("auto", "http", "sse") } ?: "auto",
                     )
                 }.filter { it.url.isNotBlank() }
             } catch (_: Exception) { emptyList() }
@@ -532,7 +533,8 @@ class SettingsStore(context: Context) {
             value.forEach { config ->
                 arr.put(org.json.JSONObject()
                     .put("url", config.url.trim())
-                    .put("token", config.token))
+                    .put("token", config.token)
+                    .put("transport", config.transport))
             }
             prefs.edit().putString("apkMcpConfigs", arr.toString()).apply()
             // Keep legacy fields in sync for backward compatibility
@@ -700,7 +702,7 @@ class SettingsStore(context: Context) {
                 .put("apkMcpToken", mask(apkMcpToken))
                 .put("apkMcpConfigs", org.json.JSONArray().apply {
                     apkMcpConfigs.forEach { c ->
-                        put(org.json.JSONObject().put("url", c.url).put("token", mask(c.token)))
+                        put(org.json.JSONObject().put("url", c.url).put("token", mask(c.token)).put("transport", c.transport))
                     }
                 })
                 .put("apkMcpAutoProbe", apkMcpAutoProbe)
@@ -838,7 +840,8 @@ class SettingsStore(context: Context) {
                         val url = obj.optString("url", "").trim()
                         if (url.isNotBlank()) {
                             val token = if (allowSecrets) obj.optString("token", "") else ""
-                            configs.add(BridgeConfig(url, token))
+                            val transport = obj.optString("transport", "auto").takeIf { it in setOf("auto", "http", "sse") } ?: "auto"
+                            configs.add(BridgeConfig(url, token, transport))
                         }
                     }
                     if (configs.isNotEmpty()) apkMcpConfigs = configs
