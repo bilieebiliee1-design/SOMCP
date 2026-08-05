@@ -80,6 +80,151 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
         @Synchronized
         fun probe(timeoutMs: Int = 8000): State {
+            return if (shouldUseSse()) {
+                probeSse(timeoutMs)
+            } else {
+                probeHttp(timeoutMs)
+            }
+        }
+
+        @Synchronized
+        fun ping(): State {
+            return if (shouldUseSse()) {
+                pingSse()
+            } else {
+                pingHttp()
+            }
+        }
+
+        fun callTool(name: String, arguments: JSONObject): JSONObject {
+            val st = state
+            if (!st.online || st.url.isBlank()) {
+                return errorResult(name, "APK MCP $url is offline or not configured")
+            }
+            val params = JSONObject().put("name", name).put("arguments", arguments)
+            return try {
+                if (shouldUseSse()) {
+                    val sseClient = SseClient(url, token)
+                    val resp = sseClient.callTool("tools/call", params, timeoutMs = 20000)
+                    parseToolResult(resp)
+                } else {
+                    val req = buildJsonRpc(url, "tools/call", params, id = connIdCounter.incrementAndGet())
+                    val resp = post(req)
+                    parseToolResult(resp)
+                }
+            } catch (e: Exception) {
+                errorResult(name, "forward failed: ${e.message}")
+            }
+        }
+
+        fun startHealthMonitor(intervalMs: Long = 30_000) {
+            stopHealthMonitor()
+            healthStop = false
+            healthThread = Thread({
+                while (!healthStop && !Thread.currentThread().isInterrupted) {
+                    try {
+                        Thread.sleep(intervalMs)
+                    } catch (_: InterruptedException) { break }
+                    if (healthStop) break
+                    try {
+                        val start = System.nanoTime()
+                        val tools = if (shouldUseSse()) {
+                            SseClient(url, token).listTools(timeoutMs = 8000)
+                        } else {
+                            val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
+                            val resp = post(req)
+                            parseTools(resp)
+                        }
+                        val latencyMs = (System.nanoTime() - start) / 1_000_000
+                        val prefix = detectPrefix(tools)
+                        if (prefix != null) {
+                            val cur = state
+                            state = State(url = url, online = true, lastError = "", tools = tools, toolPrefix = prefix, lastCheckedAt = System.currentTimeMillis(), lastLatencyMs = latencyMs)
+                            if (!cur.online) AppLog.i("apk-mcp health: $url back online (${tools.size} tools, prefix=$prefix)")
+                        }
+                    } catch (e: Exception) {
+                        val cur = state
+                        if (cur.online) {
+                            state = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName, tools = emptyList(), lastCheckedAt = System.currentTimeMillis())
+                            AppLog.w("apk-mcp health: $url marked offline (${e.message})")
+                        }
+                    }
+                }
+            }, "apk-mcp-health-$url").apply { isDaemon = true; start() }
+        }
+
+        fun stopHealthMonitor() {
+            healthStop = true
+            healthThread?.interrupt()
+            healthThread = null
+        }
+
+        private fun probeHttp(timeoutMs: Int): State {
+            return try {
+                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
+                val start = System.nanoTime()
+                val resp = post(req)
+                val latencyMs = (System.nanoTime() - start) / 1_000_000
+                val parsed = parseTools(resp)
+                val prefix = detectPrefix(parsed)
+                val prev = state
+                val s = State(
+                    url = url,
+                    online = true,
+                    lastError = "",
+                    tools = parsed,
+                    toolPrefix = prefix ?: prev.toolPrefix,
+                    lastCheckedAt = System.currentTimeMillis(),
+                    lastLatencyMs = latencyMs,
+                    probes = prev.probes + 1,
+                    probeFailures = prev.probeFailures,
+                    totalLatencyMs = prev.totalLatencyMs + latencyMs,
+                    maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs),
+                )
+                state = s
+                val label = prefixLabel(prefix)
+                AppLog.i("apk-mcp bridge online: ${parsed.size} tools from $url ($label, ${latencyMs}ms)")
+                return s
+            } catch (e: Exception) {
+                val prev = state
+                val s = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName,
+                    probes = prev.probes + 1, probeFailures = prev.probeFailures + 1,
+                    totalLatencyMs = prev.totalLatencyMs, maxLatencyMs = prev.maxLatencyMs)
+                state = s
+                AppLog.w("apk-mcp probe failed: $url ${e.message}")
+                return s
+            }
+        }
+
+        private fun pingHttp(): State {
+            return try {
+                val req = buildJsonRpc(url, "initialize", JSONObject().put("client", "somcp-ping"), id = connIdCounter.incrementAndGet())
+                val start = System.nanoTime()
+                post(req)
+                val latencyMs = (System.nanoTime() - start) / 1_000_000
+                val prev = state
+                val s = if (!prev.online) {
+                    prev.copy(lastLatencyMs = latencyMs, lastCheckedAt = System.currentTimeMillis(),
+                        probes = prev.probes + 1, lastError = "", online = false, tools = prev.tools)
+                } else {
+                    State(url = url, online = true, lastError = "", tools = prev.tools,
+                        lastCheckedAt = System.currentTimeMillis(), lastLatencyMs = latencyMs,
+                        probes = prev.probes + 1, probeFailures = prev.probeFailures,
+                        totalLatencyMs = prev.totalLatencyMs + latencyMs, maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs))
+                }
+                state = s
+                s
+            } catch (e: Exception) {
+                val prev = state
+                val s = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName,
+                    probes = prev.probes + 1, probeFailures = prev.probeFailures + 1,
+                    totalLatencyMs = prev.totalLatencyMs, maxLatencyMs = prev.maxLatencyMs)
+                state = s
+                s
+            }
+        }
+
+        private fun probeSse(timeoutMs: Int): State {
             return try {
                 val sseClient = SseClient(url, token)
                 val start = System.nanoTime()
@@ -115,8 +260,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             }
         }
 
-        @Synchronized
-        fun ping(): State {
+        private fun pingSse(): State {
             return try {
                 val sseClient = SseClient(url, token)
                 val start = System.nanoTime()
@@ -142,58 +286,6 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 state = s
                 s
             }
-        }
-
-        fun callTool(name: String, arguments: JSONObject): JSONObject {
-            val st = state
-            if (!st.online || st.url.isBlank()) {
-                return errorResult(name, "APK MCP $url is offline or not configured")
-            }
-            val params = JSONObject().put("name", name).put("arguments", arguments)
-            return try {
-                val sseClient = SseClient(url, token)
-                val resp = sseClient.callTool("tools/call", params, timeoutMs = 20000)
-                parseToolResult(resp)
-            } catch (e: Exception) {
-                errorResult(name, "forward failed: ${e.message}")
-            }
-        }
-
-        fun startHealthMonitor(intervalMs: Long = 30_000) {
-            stopHealthMonitor()
-            val sseClient = SseClient(url, token)
-            healthStop = false
-            healthThread = Thread({
-                while (!healthStop && !Thread.currentThread().isInterrupted) {
-                    try {
-                        Thread.sleep(intervalMs)
-                    } catch (_: InterruptedException) { break }
-                    if (healthStop) break
-                    try {
-                        val start = System.nanoTime()
-                        val tools = sseClient.listTools(timeoutMs = 8000)
-                        val latencyMs = (System.nanoTime() - start) / 1_000_000
-                        val prefix = detectPrefix(tools)
-                        if (prefix != null) {
-                            val cur = state
-                            state = State(url = url, online = true, lastError = "", tools = tools, toolPrefix = prefix, lastCheckedAt = System.currentTimeMillis(), lastLatencyMs = latencyMs)
-                            if (!cur.online) AppLog.i("apk-mcp health (sse): $url back online (${tools.size} tools, prefix=$prefix)")
-                        }
-                    } catch (e: Exception) {
-                        val cur = state
-                        if (cur.online) {
-                            state = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName, tools = emptyList(), lastCheckedAt = System.currentTimeMillis())
-                            AppLog.w("apk-mcp health (sse): $url marked offline (${e.message})")
-                        }
-                    }
-                }
-            }, "apk-mcp-health-sse-$url").apply { isDaemon = true; start() }
-        }
-
-        fun stopHealthMonitor() {
-            healthStop = true
-            healthThread?.interrupt()
-            healthThread = null
         }
 
         private fun buildJsonRpc(url: String, method: String, params: JSONObject, id: Int): Request {
@@ -274,7 +366,6 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             .readTimeout(0, TimeUnit.SECONDS)
             .build()
 
-        @Volatile private var sessionId: String? = null
         @Volatile private var messageEndpoint: String? = null
 
         fun listTools(timeoutMs: Int): List<BridgeConnection.ToolDef> {
@@ -290,21 +381,19 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 }
 
                 override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                    when (type) {
-                        "endpoint" -> {
-                            messageEndpoint = data.trim()
-                            AppLog.d("sse endpoint: $messageEndpoint")
-                        }
-                        "message" -> {
-                            try {
-                                val root = JSONObject(data)
-                                val result = root.optJSONObject("result")
-                                if (result != null && result.has("tools")) {
-                                    resultHolder[0] = result
-                                    latch.countDown()
-                                }
-                            } catch (_: Exception) {}
-                        }
+                    if (type == null) return
+                    if (type == "endpoint") {
+                        messageEndpoint = data.trim()
+                        AppLog.d("sse endpoint: $messageEndpoint")
+                    } else if (type == "message") {
+                        try {
+                            val root = JSONObject(data)
+                            val result = root.optJSONObject("result")
+                            if (result != null && result.has("tools")) {
+                                resultHolder[0] = result
+                                latch.countDown()
+                            }
+                        } catch (_: Exception) {}
                     }
                 }
 
@@ -318,7 +407,6 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 }
             })
 
-            // Wait for endpoint event
             if (!latch.await(timeoutMs.toLong(), TimeUnit.MILLISECONDS)) {
                 eventSource.cancel()
                 throw java.util.concurrent.TimeoutException("SSE connect timeout")
@@ -425,7 +513,6 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                             }
                         })
                     } else if (type == "message") {
-                        // Some servers push result via SSE instead of HTTP response
                         resultHolder[0] = data
                         latch.countDown()
                     }
