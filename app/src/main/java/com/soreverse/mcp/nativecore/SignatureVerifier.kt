@@ -2,7 +2,6 @@ package com.soreverse.mcp.nativecore
 
 import android.content.Context
 import android.util.Log
-import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.normalizeSignerDigest
 import java.security.MessageDigest
@@ -51,6 +50,7 @@ object SignatureVerifier {
 
     // JNI: implemented in cpp/signature_verify.cpp
     private external fun nativeReadApkCertificate(apkPath: String): ByteArray?
+    private external fun nativeGetExpectedSignerDigest(): String
 
     /**
      * Reads the APK signing certificate directly from the APK file, bypassing
@@ -107,14 +107,27 @@ object SignatureVerifier {
     }
 
     /**
+     * Returns the expected signer digest from native code (XOR-obfuscated).
+     */
+    fun getExpectedSignerDigest(): String {
+        if (!loaded) return ""
+        return try {
+            nativeGetExpectedSignerDigest()
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: nativeGetExpectedSignerDigest failed", e)
+            ""
+        }
+    }
+
+    /**
      * Verifies the APK's signing certificate against the expected digest from
-     * BuildConfig.
+     * native code (XOR-obfuscated in the .so binary).
      *
      * @return true if the APK signer matches the expected digest, false if
      *         verification fails or the expected digest is not configured
      */
     fun verify(context: Context): Boolean {
-        val expected = BuildConfig.EXPECTED_SIGNER_SHA256.let { normalizeSignerDigest(it) }
+        val expected = nativeGetExpectedSignerDigest().let { normalizeSignerDigest(it) }
         if (expected.isBlank()) {
             AppLog.i("SignatureVerifier: no release signer pin configured, skipping native verification")
             return true // no pin configured, skip
