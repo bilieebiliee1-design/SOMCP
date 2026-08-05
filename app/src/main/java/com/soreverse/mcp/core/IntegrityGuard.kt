@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Debug
 import android.os.Process
-import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.nativecore.SignatureVerifier
 import java.io.File
 import java.net.InetSocketAddress
@@ -66,7 +65,7 @@ object IntegrityGuard {
             if (System.currentTimeMillis() - time < 2_000L) return result
         }
         val result = runCatching {
-            val expected = BuildConfig.EXPECTED_SIGNER_SHA256.normalizeDigest()
+            val expected = SignatureVerifier.getExpectedSignerDigest().normalizeDigest()
             val threats = runtimeThreats()
             if (expected.isBlank()) {
                 Result(threats.isEmpty(), if (threats.isEmpty()) "no release signer pin configured" else "runtime instrumentation detected", expected, emptyList(), threats)
@@ -83,7 +82,7 @@ object IntegrityGuard {
                 )
             }
         }.getOrElse {
-            Result(false, it.message ?: it.javaClass.simpleName, BuildConfig.EXPECTED_SIGNER_SHA256.normalizeDigest(), emptyList())
+            Result(false, it.message ?: it.javaClass.simpleName, SignatureVerifier.getExpectedSignerDigest().normalizeDigest(), emptyList())
         }
         cached = System.currentTimeMillis() to result
         return result
