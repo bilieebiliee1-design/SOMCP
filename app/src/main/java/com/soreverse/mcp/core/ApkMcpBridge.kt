@@ -108,7 +108,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                     val resp = sseClient.callTool("tools/call", params, timeoutMs = 20000)
                     parseToolResult(resp)
                 } else {
-                    val req = buildJsonRpc(url, "tools/call", params, id = connIdCounter.incrementAndGet())
+                    val req = buildJsonRpc(url, "tools/call", params, id = ApkMcpBridge.connIdCounter.incrementAndGet())
                     val resp = post(req)
                     parseToolResult(resp)
                 }
@@ -131,7 +131,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                         val tools = if (shouldUseSse()) {
                             SseClient(url, token).listTools(timeoutMs = 8000)
                         } else {
-                            val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
+                            val req = buildJsonRpc(url, "tools/list", JSONObject(), id = ApkMcpBridge.connIdCounter.incrementAndGet())
                             val resp = post(req)
                             parseTools(resp)
                         }
@@ -161,7 +161,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
         private fun probeHttp(timeoutMs: Int): State {
             return try {
-                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
+                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = ApkMcpBridge.connIdCounter.incrementAndGet())
                 val start = System.nanoTime()
                 val resp = post(req)
                 val latencyMs = (System.nanoTime() - start) / 1_000_000
@@ -198,7 +198,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
         private fun pingHttp(): State {
             return try {
-                val req = buildJsonRpc(url, "initialize", JSONObject().put("client", "somcp-ping"), id = connIdCounter.incrementAndGet())
+                val req = buildJsonRpc(url, "initialize", JSONObject().put("client", "somcp-ping"), id = ApkMcpBridge.connIdCounter.incrementAndGet())
                 val start = System.nanoTime()
                 post(req)
                 val latencyMs = (System.nanoTime() - start) / 1_000_000
@@ -296,7 +296,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 .put("params", params)
                 .toString()
             val builder = Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType()))
-            if (token.isNotBlank()) builder.safeHeader("Authorization", "Bearer $token")
+            if (token.isNotBlank()) builder.header("Authorization", "Bearer $token")
             return builder.build()
         }
 
@@ -848,7 +848,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         const val MT_PREFIX = "mt_apk_"
         const val NP_PREFIX = "np_"
         val KNOWN_PREFIXES = listOf(MT_PREFIX, NP_PREFIX)
-        private val connIdCounter = AtomicInteger(1000)
+        val connIdCounter = AtomicInteger(1000)
 
         fun prefixLabel(prefix: String?): String = when (prefix) {
             MT_PREFIX -> "MT Manager"
