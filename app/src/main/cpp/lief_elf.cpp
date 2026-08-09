@@ -530,6 +530,10 @@ Java_com_soreverse_mcp_engine_LiefEngine_nativeAvailable(
         JNIEnv* env, jobject thiz) {
     (void)env;
     (void)thiz;
+    // 此函数仅作为 JNI 符号存在性探针：真实 librz_native.so 链接了
+    // lief_elf.cpp 因而必有本符号；空 stub（rizin_stub.cpp）没有，Kotlin 侧
+    // 调用会抛 UnsatisfiedLinkError，available() 如实返回 false。它不验证
+    // LIEF 内部链接是否完整（dlopen 时未解析符号即失败，已由加载期兜底）。
     return JNI_TRUE;
 }
 

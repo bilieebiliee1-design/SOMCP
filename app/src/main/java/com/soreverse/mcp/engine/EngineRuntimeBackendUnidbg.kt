@@ -292,6 +292,11 @@ internal fun EngineRuntime.emulationStatus(): JSONObject {
         .put("available", available)
         .put("backend", "unidbg+unicorn2")
         .put("scope", "Full Unidbg Android native emulation path backed by Unicorn2 native backend: SO load, DalvikVM/JNIEnv, JNI_OnLoad, exported symbol calls, Java_* JNI calls, and post-load memory dump")
+        .put("setup", when {
+            !available -> "requires-extra-install: unidbg native libraries are NOT bundled in this APK — ${UnidbgEmulator.unavailableReason()}"
+            UnidbgEmulator.optionalNativeMissing() -> "bundled-partial: core unidbg native libraries present; optional disassembler/demumble not bundled"
+            else -> "bundled-ok"
+        })
         .put("androidFramework", JSONObject()
             .put("status", "unidbg-runtime")
             .put("implemented", JSONArray(listOf("AndroidEmulatorBuilder", "Unicorn2Factory", "AndroidResolver", "DalvikVM creation", "JNIEnv for Java_* calls", "JNI_OnLoad pre-call", "exported symbol call", "post-load memory dump")))
