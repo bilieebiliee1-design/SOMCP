@@ -264,6 +264,8 @@ private fun textFor(mode: String, context: Context): UiText {
         backupDecryptPrompt = s(R.string.backup_decrypt_prompt),
         backupWrongPassword = s(R.string.backup_wrong_password),
         backupDecrypting = s(R.string.backup_decrypting),
+        confirm = s(R.string.confirm),
+        cancel = s(R.string.cancel),
     )
 }
 

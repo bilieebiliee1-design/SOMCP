@@ -156,4 +156,6 @@ internal data class UiText(
     val backupDecryptPrompt: String,
     val backupWrongPassword: String,
     val backupDecrypting: String,
+    val confirm: String,
+    val cancel: String,
 )
