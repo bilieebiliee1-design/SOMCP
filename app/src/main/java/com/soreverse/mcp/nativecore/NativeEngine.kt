@@ -125,17 +125,35 @@ object RizinNativeEngine : NativeEngine {
     private var loadError: String = ""
 
     init {
-        val result = runCatching { System.loadLibrary("rz_native") }
-        loaded = result.isSuccess
-        if (!loaded) {
-            loadError = result.exceptionOrNull()?.message ?: "Unknown load error"
+        val loadResult = runCatching { System.loadLibrary("rz_native") }
+        if (loadResult.isFailure) {
+            loaded = false
+            loadError = loadResult.exceptionOrNull()?.message ?: "Unknown load error"
             AppLog.w("RizinNativeEngine: librz_native load FAILED: $loadError")
         } else {
-            AppLog.i("RizinNativeEngine: librz_native load OK")
+            // JNI 冒烟自检：真实 librz_native.so 提供 rzSelfTest，空 stub
+            // （rizin_stub.cpp，常见于 Rizin 静态库缺失时的 fallback 构建）
+            // 没有该符号，调用会抛 UnsatisfiedLinkError。仅凭 dlopen 成功
+            // 就报告 loaded 会让 stub 被误判为可用，导致所有 rz* 调用静默
+            // 降级（pseudo-fallback / {"error":"failed"}）。
+            val selfTest = runCatching { rzSelfTest() }
+            val selfTestText = selfTest.getOrNull().orEmpty().trim()
+            if (selfTest.isSuccess && selfTestText.isNotEmpty() && !selfTestText.startsWith("ERROR:")) {
+                loaded = true
+                loadError = ""
+                AppLog.i("RizinNativeEngine: librz_native load OK (selfTest: $selfTestText)")
+            } else {
+                loaded = false
+                loadError = "librz_native.so 加载成功但 JNI 自检失败——该 .so 可能是空 stub（Rizin 静态库缺失时的 fallback 构建）。${
+                    selfTest.exceptionOrNull()?.message ?: selfTestText.ifBlank { "rzSelfTest returned empty" }
+                }"
+                AppLog.e("RizinNativeEngine: selfTest FAILED: $loadError")
+            }
         }
     }
 
     // JNI surface implemented in cpp/rizin_core.cpp.
+    external fun rzSelfTest(): String
     external fun rzDisassemble(bytes: ByteArray, arch: String, address: Long, thumb: Boolean, limit: Int): String
     external fun rzAssemble(asm: String, arch: String, address: Long, thumb: Boolean): ByteArray
     external fun rzXrefs(bytes: ByteArray, arch: String, atVa: Long, direction: String): String
