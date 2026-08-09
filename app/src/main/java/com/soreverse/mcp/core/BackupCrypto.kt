@@ -117,15 +117,15 @@ object BackupCrypto {
 
     private fun deriveKeyBinary(password: String, salt: ByteArray): ByteArray {
         val hash = argon2.hash(
-            mode = Argon2Mode.ARGON2ID,
+            mode = Argon2Mode.ARGON2_ID,
             password = password.toByteArray(Charsets.UTF_8),
             salt = salt,
-            memoryCostInKibibytes = 64 * 1024,
-            iterationCount = 3,
+            mCostInKibibyte = 64 * 1024,
+            tCostInIterations = 3,
             hashLengthInBytes = KEY_BYTES,
             parallelism = 2,
         )
-        return hash.rawHash
+        return hash.rawHashAsByteArray()
     }
 
     // ===== JSON format (REMOTE) =====
@@ -174,15 +174,15 @@ object BackupCrypto {
 
     private fun deriveKey(password: String, salt: ByteArray): ByteArray {
         val hash = argon2.hash(
-            mode = Argon2Mode.ARGON2ID,
+            mode = Argon2Mode.ARGON2_ID,
             password = password.toByteArray(),
             salt = salt,
-            memoryCostInKibibytes = ARGON2_MEMORY_KIB,
-            iterationCount = ARGON2_ITERATIONS,
+            mCostInKibibyte = ARGON2_MEMORY_KIB,
+            tCostInIterations = ARGON2_ITERATIONS,
             parallelism = ARGON2_PARALLELISM,
             hashLengthInBytes = ARGON2_KEY_LENGTH,
         )
-        return hash.rawHash
+        return hash.rawHashAsByteArray()
     }
 
     private fun aesGcmEncrypt(plaintext: ByteArray, key: ByteArray, nonce: ByteArray): ByteArray {
