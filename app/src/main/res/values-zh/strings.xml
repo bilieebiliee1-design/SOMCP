@@ -65,4 +65,6 @@
     <string name="backup_decrypt_prompt">请输入密码解密备份</string>
     <string name="backup_wrong_password">密码错误或数据已损坏</string>
     <string name="backup_decrypting">正在解密…</string>
+    <string name="confirm">确认</string>
+    <string name="cancel">取消</string>
 </resources>

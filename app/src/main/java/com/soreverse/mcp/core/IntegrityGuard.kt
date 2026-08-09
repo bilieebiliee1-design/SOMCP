@@ -37,7 +37,7 @@ object IntegrityGuard {
      *   PackageManager.getPackageInfo() Binder call to replace the
      *   returned signature. The Java-level check alone can be bypassed.
      * - The native check reads the APK directly from the filesystem and
-     *   extracts the certificate from the META-INF/*.RSA PKCS7 signature.
+     *   extracts the certificate from the META-INF/ *.RSA PKCS7 signature.
      *   This path cannot be intercepted by a Binder-level hook.
      * - Together, they provide defense in depth: a cracker would need to
      *   hook BOTH the Java PackageManager AND the native JNI bridge,
