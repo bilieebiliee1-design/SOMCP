@@ -32,9 +32,21 @@ class LiefEngine {
 
     init {
         val result = runCatching { System.loadLibrary("rz_native") }
-        libLoaded = result.isSuccess
-        if (!libLoaded) {
+        if (result.isFailure) {
+            libLoaded = false
             loadError = result.exceptionOrNull()?.message ?: "Unknown load error"
+        } else {
+            // JNI 符号验证：空 stub（rizin_stub.cpp，Rizin/LIEF 静态库缺失时
+            // 的 fallback 构建）没有 nativeAvailable 符号，调用会抛
+            // UnsatisfiedLinkError。仅凭 dlopen 成功就报告 loaded 会让 stub
+            // 被误判为可用，导致 nativeParse 静默 fallback 到 Kotlin ElfParser
+            // （dynamicEntries 等 LIEF 独有字段全部丢失，imports 全部显示
+            // UNRESOLVED）。与 XAnSoEngine.available() 的验证模式保持一致。
+            val jniOk = runCatching { nativeAvailable() }.getOrDefault(false)
+            libLoaded = jniOk
+            if (!libLoaded) {
+                loadError = "librz_native.so 加载成功但 LIEF JNI 自检失败——该 .so 可能是空 stub（LIEF 静态库缺失时的 fallback 构建）"
+            }
         }
     }
 

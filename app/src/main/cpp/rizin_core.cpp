@@ -586,6 +586,56 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzConfigureGhidra(
 
 extern "C" {
 
+// JNI 冒烟自检：验证 librz_native.so 是真实 Rizin 而非空 stub。
+// 空 stub（rizin_stub.cpp）没有本函数符号，Kotlin 侧调用会抛
+// UnsatisfiedLinkError，从而让 available() 如实返回 false，而不是
+// 把"能 dlopen"误报成"Rizin 可用"。同时用 ARM64 的 `ret` 做一次真实
+// 解码，确认 asm 插件（asm.arm）已静态注册。
+JNIEXPORT jstring JNICALL
+Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzSelfTest(
+        JNIEnv* env, jobject) {
+    RzAsm* a = rz_asm_new();
+    if (!a) return env->NewStringUTF("ERROR:rz_asm_new failed");
+    // 先试 AArch64（`ret` = C0 03 5F D6）；若该构建未注册 arm64 插件，
+    // 回退验证 ARM32（`mov r0, r0` = 00 00 A0 E1），避免误伤仅含 arm32
+    // 插件（armeabi-v7a 构建）的 Rizin 库。
+    struct ArmProbe { const char* arch; int bits; const uint8_t bytes[4]; };
+    const ArmProbe probes[] = {
+        { "arm", 64, { 0xC0, 0x03, 0x5F, 0xD6 } },
+        { "arm", 32, { 0x00, 0x00, 0xA0, 0xE1 } },
+    };
+    bool okArch = false;
+    int hitBits = 0;
+    std::string disasm;
+    for (const auto& probe : probes) {
+        if (!rz_asm_set_arch(a, probe.arch, probe.bits)) continue;
+        okArch = true;
+        hitBits = probe.bits;
+        disasm.clear();
+        rz_asm_set_pc(a, 0x1000);
+        RzAsmCode* code = rz_asm_mdisassemble(a, probe.bytes, 4);
+        if (code) {
+            if (code->assembly) disasm = code->assembly;
+            rz_asm_code_free(code);
+        }
+        if (!disasm.empty()) break;
+    }
+    rz_asm_free(a);
+    if (!okArch) {
+        RZ_NATIVE_LOG("rzSelfTest ERROR: rz_asm_set_arch(arm,*) failed — asm.arm plugin not registered");
+        return env->NewStringUTF("ERROR:rz_asm_set_arch(arm,32/64) failed — asm.arm plugin not registered");
+    }
+    if (disasm.empty()) {
+        RZ_NATIVE_LOG("rzSelfTest ERROR: failed to decode ARM probe (ret / mov r0,r0)");
+        return env->NewStringUTF("ERROR:failed to decode ARM probe (arm64 ret C0 03 5F D6 / arm32 mov r0,r0 00 00 A0 E1)");
+    }
+    char buf[192];
+    snprintf(buf, sizeof(buf), "arch_arm%d=%d disasm=%s",
+             hitBits, 1, disasm.c_str());
+    RZ_NATIVE_LOG("rzSelfTest %s", buf);
+    return env->NewStringUTF(buf);
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDisassemble(
         JNIEnv* env, jobject, jbyteArray jbytes, jstring jarch, jlong jaddr, jboolean jthumb, jint jlimit) {
