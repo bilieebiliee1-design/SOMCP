@@ -65,4 +65,6 @@
     <string name="backup_decrypt_prompt">Enter password to decrypt backup</string>
     <string name="backup_wrong_password">Wrong password or corrupted data</string>
     <string name="backup_decrypting">Decrypting…</string>
+    <string name="confirm">Confirm</string>
+    <string name="cancel">Cancel</string>
 </resources>
