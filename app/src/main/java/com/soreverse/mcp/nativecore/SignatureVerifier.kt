@@ -13,7 +13,7 @@ import java.security.cert.CertificateFactory
  * Unlike [com.soreverse.mcp.core.IntegrityGuard] which obtains the signing
  * certificate through the Java [android.content.pm.PackageManager] API, this
  * class reads the APK file directly from the filesystem in native (C++) code
- * and extracts the embedded X.509 certificate from the META-INF/*.RSA/.DSA/.EC
+ * and extracts the embedded X.509 certificate from the META-INF/ *.RSA/.DSA/.EC
  * PKCS7 signature file.
  *
  * Because the certificate is read at the filesystem level rather than through
