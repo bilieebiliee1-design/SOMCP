@@ -44,6 +44,7 @@ class UnidbgEmulator(private val context: Context) {
         @Volatile private var nativeLoadError: Throwable? = null
         @Volatile private var availabilityError: Throwable? = null
         @Volatile private var nativeLoaded = false
+        @Volatile private var optionalNativeMissing = false
         @Volatile private var capstoneSelfTest = false
         @Volatile private var keystoneSelfTest = false
         @Volatile private var demumbleSelfTest = false
@@ -59,7 +60,18 @@ class UnidbgEmulator(private val context: Context) {
                     System.setProperty("jna.library.path", nativeDir)
                     listOf("capstone", "keystone", "unicorn", "jnidispatch", "disassembler", "demumble").forEach { NativeLibrary.addSearchPath(it, nativeDir) }
                 }
-                listOf("capstone", "keystone", "unicorn", "jnidispatch", "disassembler", "demumble").forEach { System.loadLibrary(it) }
+                // 核心后端库（capstone/keystone/unicorn/jnidispatch）是 Unidbg
+                // 执行路径的硬依赖，缺失则整体不可用。disassembler/demumble 只
+                // 服务部分诊断路径且没有 Android prebuilt 来源，缺失时降级为
+                // 警告，不再让整个 Unidbg 后端因为它们而不可用。
+                listOf("capstone", "keystone", "unicorn", "jnidispatch").forEach { System.loadLibrary(it) }
+                listOf("disassembler", "demumble").forEach {
+                    runCatching { System.loadLibrary(it) }
+                        .onFailure {
+                            optionalNativeMissing = true
+                            AppLog.w("Unidbg optional native '$it' not bundled; continuing without it: ${it.message}")
+                        }
+                }
                 nativeSelfTestStage = "keystone-open"
                 val assembler = Keystone(KeystoneArchitecture.Arm64, KeystoneMode.LittleEndian)
                 nativeSelfTestStage = "keystone-assemble"
@@ -74,11 +86,18 @@ class UnidbgEmulator(private val context: Context) {
                 disassembler.close()
                 check(instructions.isNotEmpty())
                 capstoneSelfTest = true
+                // demumble 与 disassembler 同属可选诊断路径：Android 上无
+                // prebuilt 来源，失败只告警，不让整个 Unidbg 后端不可用。
                 nativeSelfTestStage = "demumble"
-                val demangle = Class.forName("com.github.zhkl0228.demumble.Demangler").getDeclaredMethod("demangle", String::class.java)
-                demangle.isAccessible = true
-                check((demangle.invoke(null, "_Z3foov") as String).contains("foo"))
-                demumbleSelfTest = true
+                runCatching {
+                    val demangle = Class.forName("com.github.zhkl0228.demumble.Demangler").getDeclaredMethod("demangle", String::class.java)
+                    demangle.isAccessible = true
+                    check((demangle.invoke(null, "_Z3foov") as String).contains("foo"))
+                    demumbleSelfTest = true
+                }.onFailure {
+                    optionalNativeMissing = true
+                    AppLog.w("Unidbg optional demumble self-test failed; continuing without it: ${it.message}")
+                }
                 nativeSelfTestStage = "completed"
             }.onSuccess {
                 nativeLoaded = true
@@ -91,6 +110,29 @@ class UnidbgEmulator(private val context: Context) {
 
         fun nativeDependencyError(): Throwable? = nativeLoadError
         fun availabilityError(): Throwable? = availabilityError
+        fun optionalNativeMissing(): Boolean = optionalNativeMissing
+
+        /**
+         * Human-readable reason for Unidbg being unavailable. Distinguishes a
+         * missing unidbg classpath (dependency not packaged) from missing
+         * native libraries (libcapstone.so / libkeystone.so / libunicorn.so /
+         * libjnidispatch.so not bundled into the APK's jniLibs) so callers and
+         * the status report stop giving the misleading "classes not on
+         * classpath" message when the real problem is native packaging.
+         */
+        fun unavailableReason(): String {
+            val classesMissing = runCatching {
+                Class.forName("com.github.unidbg.AndroidEmulator")
+                Class.forName("com.github.unidbg.linux.android.AndroidEmulatorBuilder")
+            }.isFailure
+            return when {
+                classesMissing ->
+                    "Unidbg classes not on classpath; check dependency com.github.zhkl0228:unidbg-android"
+                nativeLoadError != null ->
+                    "Unidbg native libraries not bundled in this APK (${nativeLoadError?.message ?: "native load failed"}); libcapstone.so / libkeystone.so / libunicorn.so / libjnidispatch.so must be shipped in jniLibs or installed separately"
+                else -> "Unidbg unavailable on this device"
+            }
+        }
         fun nativeDependencyErrorChain(): JSONArray {
             val chain = JSONArray()
             var current = nativeLoadError
@@ -163,7 +205,7 @@ class UnidbgEmulator(private val context: Context) {
         if (!available()) return@runCatching JSONObject()
             .put("ok", false)
             .put("error", JSONObject().put("code", "EMULATOR_UNAVAILABLE")
-                .put("message", "Unidbg classes not on classpath; check dependency com.github.zhkl0228:unidbg-android"))
+                .put("message", UnidbgEmulator.unavailableReason()))
 
         val t0 = System.nanoTime()
         val result = JSONObject()
@@ -208,7 +250,7 @@ class UnidbgEmulator(private val context: Context) {
         if (!available()) return@runCatching JSONObject()
             .put("ok", false)
             .put("error", JSONObject().put("code", "EMULATOR_UNAVAILABLE")
-                .put("message", "Unidbg not available"))
+                .put("message", UnidbgEmulator.unavailableReason()))
 
         val result = JSONObject()
         runCatching { doDumpMemory(bytes, arch, addr, size, result) }
