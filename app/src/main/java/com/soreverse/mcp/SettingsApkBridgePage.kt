@@ -207,7 +207,7 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                         modifier = Modifier.weight(1f),
                     )
                     PrimaryActionButton(
-                        if (t.zh) "添加并探测" else "Add & Probe",
+                        if (t.zh) "添加" else "Add",
                         {
                             val url = newUrl.trim()
                             if (url.isNotBlank()) {
