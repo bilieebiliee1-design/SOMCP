@@ -178,13 +178,30 @@ system_control(action=status)
 - CMake `3.22.1`
 - Gradle `9.6.1`
 
+获取 Rizin 源码（Rizin 反汇编/分析后端，非 git 子模块，需手动 clone 一次）：
+
+```powershell
+git clone --depth 1 --branch v0.10.0 https://github.com/rizinorg/rizin.git third_party/rizin-src
+```
+
 构建 Rizin / LIEF 原生依赖：
 
 ```powershell
-.
-\build-rizin-all.ps1
+.\build-rizin-all.ps1
 .\build-lief-all.ps1
 ```
+
+构建脚本不依赖任何固定机器路径：工具链通过环境变量解析（`ANDROID_NDK_HOME` / `ANDROID_HOME` 定位 NDK，`MINGW_HOME` / PATH 定位 MinGW 宿主编译器，`ANDROID_HOME` 定位 CMake/Ninja），也支持显式参数覆盖。例如：
+
+```powershell
+# Rizin：指定源码树 / NDK / 宿主 MinGW（任一均可省略，缺省自动探测）
+.\build-rizin.ps1 -Abi arm64-v8a -RizinSrc D:\rizin-src -NdkRoot D:\Android\Sdk\ndk\29.0.14206865 -HostTools D:\mingw64
+.\build-rizin-all.ps1 -RizinSrc D:\rizin-src   # 一次构建全部 4 个 ABI（含 arm64-v8a）
+# LIEF：指定 CMake / Ninja / NDK
+.\build-lief.ps1 -Abi arm64-v8a -NdkRoot D:\Android\Sdk\ndk\29.0.14206865
+```
+
+**关于 Rizin 的 host 编译器（build machine）**：Rizin 构建时需要用它生成少量 host 工具，Windows 下官方支持 MSVC，本构建脚本默认使用 MinGW-w64 作为 host（自动探测 `MINGW_HOME` / PATH，`-HostTools` 可覆盖），并会在 meson setup 前**自动对 Rizin 源码树应用幂等补丁**（`librz/util/` 下的 `file.c` / `time.c` / `sys.c` / `subprocess.c`：放宽 `_MSC_VER` 条件使其同时覆盖 MinGW 的 `__WINDOWS__`，并为 MSVC secure-CRT 的 `_wdupenv_s` / `_wputenv_s` / `_chsize_s` / `_snwprintf_s` 插入 MinGW shim）。这些补丁只改本地的 Rizin checkout，已打过则跳过，用 `-SkipPatch` 可关闭。若改用 MSVC host（需自行准备 VsDevCmd 环境并把 `rizin-native.ini` 指向 `cl.exe`），则无需这些补丁。
 
 （可选）构建 Unidbg 模拟后端所需的 Android 原生库（capstone/keystone/unicorn，默认不内置，详见“核心能力”中 Unidbg 说明）：
 
