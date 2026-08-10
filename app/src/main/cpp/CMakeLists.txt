@@ -142,7 +142,12 @@ endif()
 
 # --- Rizin archives ---
 if(RIZIN_AVAILABLE)
-    set(RIZIN_SRC "C:/Users/15884/Downloads/somcp/rizin-src" CACHE PATH "Rizin source tree")
+    set(RIZIN_SRC "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/rizin-src" CACHE PATH "Rizin source tree")
+    if(NOT EXISTS "${RIZIN_SRC}/librz/include")
+        message(FATAL_ERROR "RIZIN_SRC='${RIZIN_SRC}' does not look like a Rizin source tree "
+                            "(missing librz/include). Pass -DRIZIN_SRC=<path> from Gradle "
+                            "(or set the RIZIN_SRC env var, see build.gradle.kts) and clean the CMake cache.")
+    endif()
     if(EXISTS "${RIZIN_SHARED_SDK}/lib/librz_core.so")
         message(STATUS "Rizin: linking shared SDK from ${RIZIN_SHARED_SDK}")
         target_include_directories(rz_native PRIVATE
@@ -166,22 +171,47 @@ if(RIZIN_AVAILABLE)
         endforeach()
 
         message(STATUS "Rizin: linking ${RZ_LINK_ARCHIVES} from ${RIZIN_BUILD_DIR}")
+
+        # Meson wrap subproject directories may carry a version suffix
+        # (e.g. "tree-sitter-0.26.9", "zlib-1.3.1"), so never hardcode the exact
+        # folder name — resolve each one by prefix glob and keep only paths that
+        # actually exist.
+        set(RZ_SUBPROJ_INC "")
+        foreach(_root "${RIZIN_SRC}/subprojects" "${RIZIN_BUILD_DIR}/subprojects")
+            foreach(_spec
+                "sdb|include"
+                "sdb|include/sdb"
+                "capstone|include"
+                "capstone|include/capstone"
+                "tree-sitter|lib/include"
+                "tree-sitter|lib/src"
+                "libdemangle|include"
+            )
+                string(REPLACE "|" ";" _parts "${_spec}")
+                list(GET _parts 0 _prefix)
+                list(GET _parts 1 _suffix)
+                file(GLOB _cands LIST_DIRECTORIES true "${_root}/${_prefix}*")
+                foreach(_cand ${_cands})
+                    if(IS_DIRECTORY "${_cand}/${_suffix}")
+                        list(APPEND RZ_SUBPROJ_INC "${_cand}/${_suffix}")
+                    endif()
+                endforeach()
+            endforeach()
+        endforeach()
+        if(RZ_SUBPROJ_INC)
+            list(REMOVE_DUPLICATES RZ_SUBPROJ_INC)
+        endif()
+        message(STATUS "Rizin subproject includes: ${RZ_SUBPROJ_INC}")
+
         target_include_directories(rz_native PRIVATE
             ${RIZIN_SRC}/librz/include
             ${RIZIN_SRC}/librz/analysis
             ${RIZIN_SRC}/librz/util
             ${RIZIN_SRC}/librz/util/sdb/src
             ${RIZIN_SRC}
-            ${RIZIN_SRC}/subprojects/sdb/include
-            ${RIZIN_SRC}/subprojects/sdb/include/sdb
-            ${RIZIN_SRC}/subprojects/capstone-next/include
-            ${RIZIN_SRC}/subprojects/capstone-next/include/capstone
-            ${RIZIN_SRC}/subprojects/tree-sitter/lib/include
-            ${RIZIN_SRC}/subprojects/tree-sitter/lib/src
-            ${RIZIN_SRC}/subprojects/libdemangle/include
+            ${RZ_SUBPROJ_INC}
             ${RIZIN_BUILD_DIR}
             ${RIZIN_BUILD_DIR}/librz/include
-            ${RIZIN_BUILD_DIR}/subprojects/sdb/include
             ${RIZIN_BUILD_DIR}/subprojects
         )
         foreach(archive ${RZ_LINK_ARCHIVES})
