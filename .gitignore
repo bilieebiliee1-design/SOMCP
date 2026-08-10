@@ -9,6 +9,7 @@ __pycache__/
 *.iml
 .trae/
 .reasonix/
+.workbuddy/
 
 # Local Android configuration
 local.properties
