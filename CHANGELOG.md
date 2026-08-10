@@ -10,6 +10,7 @@
 - 修复 `probe()` 返回探针前快照而非探针后状态的问题，现正确返回所有探针完成后的实际连接状态。
 - 修复 `ApkMcpBridge.probeUrl()` 在桥接离线时未保存配置的问题，用户可添加离线桥接稍后重试。
 - 修复设置备份迁移缺失：新增一次性迁移，为 MT Manager 和 NP Manager 预填默认桥接 URL。
+- 修复 Rizin 原生构建配置不可移植的问题（issue #17）：构建脚本不再硬编码机器路径，改为按脚本位置与环境变量（`ANDROID_NDK_HOME` / `ANDROID_HOME` / `MINGW_HOME`）自动探测工具链并支持参数覆盖；`build-rizin-all.ps1` 补齐 `arm64-v8a`（原缺失，导致该 ABI 设备 Rizin 反汇编不可用）；cross/native meson 配置文件模板化（`@NDK_ROOT@` / `@HOST_TOOLS@` 占位符）；内置 MinGW host 兼容补丁（Rizin v0.10.0 的 `_MSC_VER` / MSVC secure-CRT 兼容，幂等可跳过）；`CMakeLists.txt` 的 `RIZIN_SRC` 改为相对路径并加存在性校验。
 - CI 调整：移除 test-v3 的 pull_request 触发，PR 默认使用 test-v6。
 
 ## 1.0.16
