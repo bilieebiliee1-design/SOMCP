@@ -26,6 +26,15 @@ android {
             cmake {
                 cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
                 arguments += listOf("-DANDROID_STL=c++_shared")
+                // Rizin source tree location. Optional: defaults to the repo's
+                // third_party/rizin-src (see CMakeLists.txt); set RIZIN_SRC to
+                // point at an existing checkout when it lives elsewhere.
+                // 过滤 ';' / '"' / 空格：防止注入额外 CMake 缓存变量。
+                System.getenv("RIZIN_SRC")?.takeIf {
+                    it.isNotBlank() && it.none { c -> c == ';' || c == '"' || c == ' ' }
+                }?.let {
+                    arguments += listOf("-DRIZIN_SRC=$it")
+                }
             }
         }
     }
