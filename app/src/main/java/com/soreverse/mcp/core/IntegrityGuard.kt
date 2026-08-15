@@ -20,7 +20,7 @@ object IntegrityGuard {
         val reason: String,
         val expected: String,
         val actual: List<String>,
-        val threats: List<String> = emptyList(),
+        val threats: List<String> = emptyList()
     )
 
     @Volatile private var cached: Pair<Long, Result>? = null
@@ -54,7 +54,11 @@ object IntegrityGuard {
         if (!javaPass || !nativePass) {
             val reasons = mutableListOf<String>()
             if (!javaPass) reasons.add("Java: ${javaResult.reason}")
-            if (!nativePass) reasons.add("Native: APK signer mismatch detected by filesystem-level verification")
+            if (!nativePass) {
+                reasons.add(
+                    "Native: APK signer mismatch detected by filesystem-level verification"
+                )
+            }
             AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
             terminateWithContext(context)
         }
@@ -68,21 +72,43 @@ object IntegrityGuard {
             val expected = SignatureVerifier.getExpectedSignerDigest().normalizeDigest()
             val threats = runtimeThreats()
             if (expected.isBlank()) {
-                Result(threats.isEmpty(), if (threats.isEmpty()) "no release signer pin configured" else "runtime instrumentation detected", expected, emptyList(), threats)
+                Result(
+                    threats.isEmpty(),
+                    if (threats.isEmpty()) "no release signer pin configured" else "runtime instrumentation detected",
+                    expected,
+                    emptyList(),
+                    threats
+                )
             } else {
                 val actual = signingCertificateDigests(context).map { it.normalizeDigest() }
                 val signerTrusted = actual.any { it == expected }
-                val allThreats = if (signerTrusted) threats else listOf("application signature mismatch") + threats
+                val allThreats = if (signerTrusted) {
+                    threats
+                } else {
+                    listOf("application signature mismatch") +
+                        threats
+                }
                 Result(
                     trusted = allThreats.isEmpty(),
-                    reason = if (allThreats.isEmpty()) "trusted release signer" else allThreats.joinToString("; "),
+                    reason = if (allThreats.isEmpty()) {
+                        "trusted release signer"
+                    } else {
+                        allThreats.joinToString(
+                            "; "
+                        )
+                    },
                     expected = expected,
                     actual = actual,
-                    threats = allThreats,
+                    threats = allThreats
                 )
             }
         }.getOrElse {
-            Result(false, it.message ?: it.javaClass.simpleName, SignatureVerifier.getExpectedSignerDigest().normalizeDigest(), emptyList())
+            Result(
+                false,
+                it.message ?: it.javaClass.simpleName,
+                SignatureVerifier.getExpectedSignerDigest().normalizeDigest(),
+                emptyList()
+            )
         }
         cached = System.currentTimeMillis() to result
         return result
@@ -121,13 +147,19 @@ object IntegrityGuard {
             info.signatures.orEmpty().map { it.toByteArray() }
         }
         return certs.map { bytes ->
-            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02X".format(it) }
+            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+                "%02X".format(it)
+            }
         }
     }
 
     private fun runtimeThreats(): List<String> {
         val threats = linkedSetOf<String>()
-        if (Debug.isDebuggerConnected() || Debug.waitingForDebugger()) threats += "debugger attached"
+        if (Debug.isDebuggerConnected() ||
+            Debug.waitingForDebugger()
+        ) {
+            threats += "debugger attached"
+        }
         val tracer = tracerPid()
         if (tracer > 0) threats += "native tracer attached"
         val maps = procMapsIndicators()
@@ -147,12 +179,25 @@ object IntegrityGuard {
     }.getOrDefault(0)
 
     private fun procMapsIndicators(): List<String> = runCatching {
-        val needles = listOf("frida", "gum-js-loop", "gadget", "xposed", "lsposed", "edxp", "zygisk", "substrate")
+        val needles =
+            listOf(
+                "frida",
+                "gum-js-loop",
+                "gadget",
+                "xposed",
+                "lsposed",
+                "edxp",
+                "zygisk",
+                "substrate"
+            )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
             lines.take(8_000).forEach { line ->
                 val lower = line.lowercase()
-                needles.firstOrNull { lower.contains(it) }?.let { hits += "runtime hook artifact: $it" }
+                needles.firstOrNull { lower.contains(it) }?.let {
+                    hits +=
+                        "runtime hook artifact: $it"
+                }
             }
         }
         hits.toList()
@@ -183,4 +228,6 @@ object IntegrityGuard {
     private fun String.normalizeDigest(): String = normalizeSignerDigest(this)
 }
 
-internal fun normalizeSignerDigest(value: String): String = value.filter { it.isLetterOrDigit() }.uppercase()
+internal fun normalizeSignerDigest(value: String): String = value.filter {
+    it.isLetterOrDigit()
+}.uppercase()

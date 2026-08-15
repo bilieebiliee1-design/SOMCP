@@ -22,8 +22,12 @@ class SettingsStore(context: Context) {
             val legacyUrl = prefs.getString("apkMcpUrl", "") ?: ""
             if (raw.isBlank() && legacyUrl.isBlank()) {
                 val arr = org.json.JSONArray()
-                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8787/mcp").put("token", ""))
-                arr.put(org.json.JSONObject().put("url", "http://127.0.0.1:8788/mcp").put("token", ""))
+                arr.put(
+                    org.json.JSONObject().put("url", "http://127.0.0.1:8787/mcp").put("token", "")
+                )
+                arr.put(
+                    org.json.JSONObject().put("url", "http://127.0.0.1:8788/mcp").put("token", "")
+                )
                 prefs.edit().putString("apkMcpConfigs", arr.toString()).apply()
             }
             prefs.edit().putBoolean("apkDefaultBridgesAdded", true).apply()
@@ -63,7 +67,8 @@ class SettingsStore(context: Context) {
      *  default workspace location so the app always has a sensible default even before the user
      *  opens the directory picker. The actual read still goes through SAF after the user grants it. */
     var defaultWorkDirPath: String
-        get() = prefs.getString("defaultWorkDirPath", "/storage/emulated/0/MT2/mcp") ?: "/storage/emulated/0/MT2/mcp"
+        get() = prefs.getString("defaultWorkDirPath", "/storage/emulated/0/MT2/mcp")
+            ?: "/storage/emulated/0/MT2/mcp"
         set(value) = prefs.edit().putString("defaultWorkDirPath", value).apply()
 
     var port: Int
@@ -72,7 +77,16 @@ class SettingsStore(context: Context) {
 
     var bindHost: String
         get() = prefs.getString("bindHost", "0.0.0.0") ?: "0.0.0.0"
-        set(value) = prefs.edit().putString("bindHost", if (value == "0.0.0.0") "0.0.0.0" else "127.0.0.1").apply()
+        set(value) = prefs.edit().putString(
+            "bindHost",
+            if (value ==
+                "0.0.0.0"
+            ) {
+                "0.0.0.0"
+            } else {
+                "127.0.0.1"
+            }
+        ).apply()
 
     var authEnabled: Boolean
         get() = prefs.getBoolean("authEnabled", false)
@@ -100,14 +114,29 @@ class SettingsStore(context: Context) {
 
     var themeMode: String
         get() = prefs.getString("themeMode", "system") ?: "system"
-        set(value) = prefs.edit().putString("themeMode", if (value in setOf("system", "light", "dark")) value else "system").apply()
+        set(value) = prefs.edit().putString(
+            "themeMode",
+            if (value in
+                setOf("system", "light", "dark")
+            ) {
+                value
+            } else {
+                "system"
+            }
+        ).apply()
 
     /** Accent color preset for the whole UI. */
     var accentColor: String
         get() = prefs.getString("accentColor", "teal") ?: "teal"
         set(value) = prefs.edit().putString(
             "accentColor",
-            if (value in setOf("blue", "teal", "indigo", "purple", "green", "orange", "red", "mono")) value else "teal",
+            if (value in
+                setOf("blue", "teal", "indigo", "purple", "green", "orange", "red", "mono")
+            ) {
+                value
+            } else {
+                "teal"
+            }
         ).apply()
 
     /** true = pure black OLED dark background; false = elevated dark gray. */
@@ -120,7 +149,7 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("uiDensity", "comfortable") ?: "comfortable"
         set(value) = prefs.edit().putString(
             "uiDensity",
-            if (value in setOf("compact", "comfortable", "spacious")) value else "comfortable",
+            if (value in setOf("compact", "comfortable", "spacious")) value else "comfortable"
         ).apply()
 
     /** small | medium | large | xlarge for corner radii */
@@ -128,7 +157,7 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("cornerStyle", "medium") ?: "medium"
         set(value) = prefs.edit().putString(
             "cornerStyle",
-            if (value in setOf("small", "medium", "large", "xlarge")) value else "medium",
+            if (value in setOf("small", "medium", "large", "xlarge")) value else "medium"
         ).apply()
 
     /** system | reduced | full — full keeps standard UI motion; reduced softens; system follows OS. */
@@ -136,7 +165,7 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("motionMode", "system") ?: "system"
         set(value) = prefs.edit().putString(
             "motionMode",
-            if (value in setOf("system", "reduced", "full")) value else "system",
+            if (value in setOf("system", "reduced", "full")) value else "system"
         ).apply()
 
     /** Show advanced client-config / tool-catalog blocks on the home tab. */
@@ -154,7 +183,7 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("textScale", "normal") ?: "normal"
         set(value) = prefs.edit().putString(
             "textScale",
-            if (value in setOf("normal", "large", "xlarge")) value else "normal",
+            if (value in setOf("normal", "large", "xlarge")) value else "normal"
         ).apply()
 
     var predictiveBackEnabled: Boolean
@@ -238,7 +267,16 @@ class SettingsStore(context: Context) {
 
     var outputConflictStrategy: String
         get() = prefs.getString("outputConflictStrategy", "rename") ?: "rename"
-        set(value) = prefs.edit().putString("outputConflictStrategy", if (value == "overwrite") "overwrite" else "rename").apply()
+        set(value) = prefs.edit().putString(
+            "outputConflictStrategy",
+            if (value ==
+                "overwrite"
+            ) {
+                "overwrite"
+            } else {
+                "rename"
+            }
+        ).apply()
 
     var writePatchReport: Boolean
         get() = prefs.getBoolean("writePatchReport", true)
@@ -344,7 +382,9 @@ class SettingsStore(context: Context) {
      */
     var toolCallRateLimitPerMin: Int
         get() = prefs.getInt("toolCallRateLimitPerMin", 0)
-        set(value) = prefs.edit().putInt("toolCallRateLimitPerMin", value.coerceIn(0, 60000)).apply()
+        set(
+            value
+        ) = prefs.edit().putInt("toolCallRateLimitPerMin", value.coerceIn(0, 60000)).apply()
 
     /**
      * Comma-separated list of tool names refused with code TOOL_DISABLED
@@ -374,7 +414,16 @@ class SettingsStore(context: Context) {
 
     var logLevel: String
         get() = prefs.getString("logLevel", "I") ?: "I"
-        set(value) = prefs.edit().putString("logLevel", if (value in setOf("I", "W", "E")) value else "I").apply()
+        set(value) = prefs.edit().putString(
+            "logLevel",
+            if (value in
+                setOf("I", "W", "E")
+            ) {
+                value
+            } else {
+                "I"
+            }
+        ).apply()
 
     var autoCheckUpdates: Boolean
         get() = prefs.getBoolean("autoCheckUpdates", true)
@@ -383,7 +432,16 @@ class SettingsStore(context: Context) {
     // ---- Cloudflare Tunnel ----
     var tunnelMode: String
         get() = prefs.getString("tunnelMode", "off") ?: "off"
-        set(value) = prefs.edit().putString("tunnelMode", if (value in setOf("off", "quick", "named")) value else "off").apply()
+        set(value) = prefs.edit().putString(
+            "tunnelMode",
+            if (value in
+                setOf("off", "quick", "named")
+            ) {
+                value
+            } else {
+                "off"
+            }
+        ).apply()
 
     var tunnelAutoStart: Boolean
         get() = prefs.getBoolean("tunnelAutoStart", false)
@@ -423,11 +481,29 @@ class SettingsStore(context: Context) {
 
     var tunnelProtocol: String
         get() = prefs.getString("tunnelProtocol", "http2") ?: "http2"
-        set(value) = prefs.edit().putString("tunnelProtocol", if (value in setOf("http2", "quic", "auto")) value else "http2").apply()
+        set(value) = prefs.edit().putString(
+            "tunnelProtocol",
+            if (value in
+                setOf("http2", "quic", "auto")
+            ) {
+                value
+            } else {
+                "http2"
+            }
+        ).apply()
 
     var tunnelEdgeIpVersion: String
         get() = prefs.getString("tunnelEdgeIpVersion", "4") ?: "4"
-        set(value) = prefs.edit().putString("tunnelEdgeIpVersion", if (value in setOf("4", "6", "auto")) value else "4").apply()
+        set(value) = prefs.edit().putString(
+            "tunnelEdgeIpVersion",
+            if (value in
+                setOf("4", "6", "auto")
+            ) {
+                value
+            } else {
+                "4"
+            }
+        ).apply()
 
     var tunnelUseMirror: Boolean
         get() = prefs.getBoolean("tunnelUseMirror", false)
@@ -451,7 +527,9 @@ class SettingsStore(context: Context) {
      */
     var tunnelKeepaliveIntervalSec: Int
         get() = prefs.getInt("tunnelKeepaliveIntervalSec", 15)
-        set(value) = prefs.edit().putInt("tunnelKeepaliveIntervalSec", value.coerceIn(5, 300)).apply()
+        set(
+            value
+        ) = prefs.edit().putInt("tunnelKeepaliveIntervalSec", value.coerceIn(5, 300)).apply()
 
     /**
      * Seconds to wait after a tunnel FAILED broadcast before attempting an
@@ -467,9 +545,19 @@ class SettingsStore(context: Context) {
 
     var tunnelLogLevel: String
         get() = prefs.getString("tunnelLogLevel", "info") ?: "info"
-        set(value) = prefs.edit().putString("tunnelLogLevel", if (value in setOf("debug", "info", "warn", "error", "fatal")) value else "info").apply()
+        set(value) = prefs.edit().putString(
+            "tunnelLogLevel",
+            if (value in
+                setOf("debug", "info", "warn", "error", "fatal")
+            ) {
+                value
+            } else {
+                "info"
+            }
+        ).apply()
 
     // ---- APK MCP bridge ----
+
     /** Single bridge URL (legacy, maps to first entry in [apkMcpConfigs]). */
     var apkMcpUrl: String
         get() {
@@ -512,9 +600,12 @@ class SettingsStore(context: Context) {
                 // Migration: read legacy single URL+token
                 val legacyUrl = prefs.getString("apkMcpUrl", "") ?: ""
                 return if (legacyUrl.isNotBlank()) {
-                    val legacyToken = sanitizeCredential(prefs.getString("apkMcpToken", "").orEmpty())
+                    val legacyToken =
+                        sanitizeCredential(prefs.getString("apkMcpToken", "").orEmpty())
                     listOf(BridgeConfig(legacyUrl, legacyToken))
-                } else emptyList()
+                } else {
+                    emptyList()
+                }
             }
             return try {
                 val arr = org.json.JSONArray(raw)
@@ -522,17 +613,21 @@ class SettingsStore(context: Context) {
                     val obj = arr.getJSONObject(i)
                     BridgeConfig(
                         url = obj.optString("url", ""),
-                        token = sanitizeCredential(obj.optString("token", "")),
+                        token = sanitizeCredential(obj.optString("token", ""))
                     )
                 }.filter { it.url.isNotBlank() }
-            } catch (_: Exception) { emptyList() }
+            } catch (_: Exception) {
+                emptyList()
+            }
         }
         set(value) {
             val arr = org.json.JSONArray()
             value.forEach { config ->
-                arr.put(org.json.JSONObject()
-                    .put("url", config.url.trim())
-                    .put("token", config.token))
+                arr.put(
+                    org.json.JSONObject()
+                        .put("url", config.url.trim())
+                        .put("token", config.token)
+                )
             }
             prefs.edit().putString("apkMcpConfigs", arr.toString()).apply()
             // Keep legacy fields in sync for backward compatibility
@@ -553,16 +648,28 @@ class SettingsStore(context: Context) {
 
     var apkMcpProbeTimeoutMs: Int
         get() = prefs.getInt("apkMcpProbeTimeoutMs", 8000)
-        set(value) = prefs.edit().putInt("apkMcpProbeTimeoutMs", value.coerceIn(2000, 30000)).apply()
+        set(
+            value
+        ) = prefs.edit().putInt("apkMcpProbeTimeoutMs", value.coerceIn(2000, 30000)).apply()
 
     // ---- UX / combo ----
     // ---- AI deep analysis ----
     var aiProvider: String
         get() = prefs.getString("aiProvider", "openai") ?: "openai"
-        set(value) = prefs.edit().putString("aiProvider", if (value in setOf("openai", "anthropic")) value else "openai").apply()
+        set(value) = prefs.edit().putString(
+            "aiProvider",
+            if (value in
+                setOf("openai", "anthropic")
+            ) {
+                value
+            } else {
+                "openai"
+            }
+        ).apply()
 
     var aiEndpoint: String
-        get() = prefs.getString("aiEndpoint", "https://api.openai.com/v1") ?: "https://api.openai.com/v1"
+        get() = prefs.getString("aiEndpoint", "https://api.openai.com/v1")
+            ?: "https://api.openai.com/v1"
         set(value) = prefs.edit().putString("aiEndpoint", value.trim().trimEnd('/')).apply()
 
     var aiApiKey: String
@@ -594,10 +701,11 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putString("aiCustomBodyJson", value.ifBlank { "{}" }).apply()
 
     var aiSystemPrompt: String
-        get() = prefs.getString("aiSystemPrompt", DEFAULT_AI_SYSTEM_PROMPT) ?: DEFAULT_AI_SYSTEM_PROMPT
+        get() = prefs.getString("aiSystemPrompt", DEFAULT_AI_SYSTEM_PROMPT)
+            ?: DEFAULT_AI_SYSTEM_PROMPT
         set(value) = prefs.edit().putString(
             "aiSystemPrompt",
-            value.ifBlank { DEFAULT_AI_SYSTEM_PROMPT },
+            value.ifBlank { DEFAULT_AI_SYSTEM_PROMPT }
         ).apply()
 
     fun resetAccessToken(): String {
@@ -615,113 +723,145 @@ class SettingsStore(context: Context) {
             return value.take(4) + "…" + value.takeLast(4)
         }
         return org.json.JSONObject()
-            .put("appearance", org.json.JSONObject()
-                .put("language", language)
-                .put("themeMode", themeMode)
-                .put("accentColor", accentColor)
-                .put("pureBlackDark", pureBlackDark)
-                .put("uiDensity", uiDensity)
-                .put("cornerStyle", cornerStyle)
-                .put("motionMode", motionMode)
-                .put("showAdvancedHome", showAdvancedHome)
-                .put("highContrast", highContrast)
-                .put("textScale", textScale)
-                .put("predictiveBackEnabled", predictiveBackEnabled))
-            .put("service", org.json.JSONObject()
-                .put("port", port)
-                .put("bindHost", bindHost)
-                .put("authEnabled", authEnabled)
-                .put("accessToken", mask(accessToken))
-                .put("defaultWorkDirPath", defaultWorkDirPath)
-                .put("useDefaultWorkDir", useDefaultWorkDir)
-                .put("hasTreeUri", treeUri != null)
-                .put("floatingEnabled", floatingEnabled)
-                .put("wakeLockEnabled", wakeLockEnabled)
-                .put("bootAutoStart", bootAutoStart))
-            .put("engine", org.json.JSONObject()
-                .put("indexCacheEnabled", indexCacheEnabled)
-                .put("parseMetadataInList", parseMetadataInList)
-                .put("defaultLimit", defaultLimit)
-                .put("stringLimit", stringLimit)
-                .put("disasmLimit", disasmLimit)
-                .put("disasmMaxBytes", disasmMaxBytes)
-                .put("nativeBackend", nativeBackend)
-                .put("emulationEnabled", emulationEnabled)
-                .put("toolResultMaxChars", toolResultMaxChars)
-                .put("disasmPseudoFallback", disasmPseudoFallback)
-                .put("hexdumpMaxBytes", hexdumpMaxBytes)
-                .put("maxRequestKb", maxRequestKb)
-                .put("outputConflictStrategy", outputConflictStrategy)
-                .put("writePatchReport", writePatchReport)
-                .put("editStrictValidation", editStrictValidation)
-                .put("editCheckDeep", editCheckDeep)
-                .put("buildCopyToWorkDir", buildCopyToWorkDir)
-                .put("maxPatchBytes", maxPatchBytes)
-                .put("maxBuildOutputs", maxBuildOutputs)
-                .put("maxSnapshots", maxSnapshots)
-                .put("auditLogEnabled", auditLogEnabled)
-                .put("autoSnapshotBeforeEdit", autoSnapshotBeforeEdit)
-                .put("auditPersist", auditPersist)
-                .put("maxCompareRanges", maxCompareRanges)
-                .put("defaultBuildVariants", defaultBuildVariants)
-                .put("maxAudits", maxAudits)
-                .put("editAutoPersist", editAutoPersist)
-                .put("defaultDisasmBytes", defaultDisasmBytes)
-                .put("includeCategoryInSchema", includeCategoryInSchema)
-                .put("leanTools", leanTools)
-                .put("logMaxLines", logMaxLines)
-                .put("collectToolStats", collectToolStats)
-                .put("toolStatsPersist", toolStatsPersist)
-                .put("adaptiveLeanTools", adaptiveLeanTools)
-                .put("maxConcurrentTools", maxConcurrentTools)
-                .put("requestTimeoutMs", requestTimeoutMs)
-                .put("toolCallRateLimitPerMin", toolCallRateLimitPerMin)
-                .put("disabledTools", disabledTools)
-                .put("scanApks", scanApks)
-                .put("scanSubdirectories", scanSubdirectories)
-                .put("maxScanDepth", maxScanDepth)
-                .put("skipFilesLargerThanMb", skipFilesLargerThanMb)
-                .put("logLevel", logLevel)
-                .put("externalProbeUrl", externalProbeUrl))
-            .put("tunnel", org.json.JSONObject()
-                .put("tunnelMode", tunnelMode)
-                .put("tunnelAutoStart", tunnelAutoStart)
-                .put("tunnelTargetPort", tunnelTargetPort)
-                .put("tunnelNamedToken", mask(tunnelNamedToken))
-                .put("tunnelProtocol", tunnelProtocol)
-                .put("tunnelEdgeIpVersion", tunnelEdgeIpVersion)
-                .put("tunnelReconnect", tunnelReconnect)
-                .put("tunnelKeepAlive", tunnelKeepAlive)
-                .put("tunnelKeepaliveIntervalSec", tunnelKeepaliveIntervalSec)
-                .put("tunnelReconnectBackoffSec", tunnelReconnectBackoffSec)
-                .put("tunnelLogLevel", tunnelLogLevel))
-            .put("apkBridge", org.json.JSONObject()
-                .put("apkMcpUrl", apkMcpUrl)
-                .put("apkMcpToken", mask(apkMcpToken))
-                .put("apkMcpConfigs", org.json.JSONArray().apply {
-                    apkMcpConfigs.forEach { c ->
-                        put(org.json.JSONObject().put("url", c.url).put("token", mask(c.token)))
-                    }
-                })
-                .put("apkMcpAutoProbe", apkMcpAutoProbe)
-                .put("apkMcpMergeTools", apkMcpMergeTools)
-                .put("apkMcpProbeTimeoutMs", apkMcpProbeTimeoutMs))
-            .put("ai", org.json.JSONObject()
-                .put("provider", aiProvider)
-                .put("endpoint", aiEndpoint)
-                .put("apiKey", mask(aiApiKey))
-                .put("model", aiModel)
-                .put("temperature", aiTemperature.toDouble())
-                .put("maxIterations", aiMaxIterations)
-                .put("historySoftLimit", aiHistorySoftLimit)
-                .put("customHeadersJson", aiCustomHeadersJson)
-                .put("customBodyJson", aiCustomBodyJson)
-                .put("systemPromptChars", aiSystemPrompt.length))
+            .put(
+                "appearance",
+                org.json.JSONObject()
+                    .put("language", language)
+                    .put("themeMode", themeMode)
+                    .put("accentColor", accentColor)
+                    .put("pureBlackDark", pureBlackDark)
+                    .put("uiDensity", uiDensity)
+                    .put("cornerStyle", cornerStyle)
+                    .put("motionMode", motionMode)
+                    .put("showAdvancedHome", showAdvancedHome)
+                    .put("highContrast", highContrast)
+                    .put("textScale", textScale)
+                    .put("predictiveBackEnabled", predictiveBackEnabled)
+            )
+            .put(
+                "service",
+                org.json.JSONObject()
+                    .put("port", port)
+                    .put("bindHost", bindHost)
+                    .put("authEnabled", authEnabled)
+                    .put("accessToken", mask(accessToken))
+                    .put("defaultWorkDirPath", defaultWorkDirPath)
+                    .put("useDefaultWorkDir", useDefaultWorkDir)
+                    .put("hasTreeUri", treeUri != null)
+                    .put("floatingEnabled", floatingEnabled)
+                    .put("wakeLockEnabled", wakeLockEnabled)
+                    .put("bootAutoStart", bootAutoStart)
+            )
+            .put(
+                "engine",
+                org.json.JSONObject()
+                    .put("indexCacheEnabled", indexCacheEnabled)
+                    .put("parseMetadataInList", parseMetadataInList)
+                    .put("defaultLimit", defaultLimit)
+                    .put("stringLimit", stringLimit)
+                    .put("disasmLimit", disasmLimit)
+                    .put("disasmMaxBytes", disasmMaxBytes)
+                    .put("nativeBackend", nativeBackend)
+                    .put("emulationEnabled", emulationEnabled)
+                    .put("toolResultMaxChars", toolResultMaxChars)
+                    .put("disasmPseudoFallback", disasmPseudoFallback)
+                    .put("hexdumpMaxBytes", hexdumpMaxBytes)
+                    .put("maxRequestKb", maxRequestKb)
+                    .put("outputConflictStrategy", outputConflictStrategy)
+                    .put("writePatchReport", writePatchReport)
+                    .put("editStrictValidation", editStrictValidation)
+                    .put("editCheckDeep", editCheckDeep)
+                    .put("buildCopyToWorkDir", buildCopyToWorkDir)
+                    .put("maxPatchBytes", maxPatchBytes)
+                    .put("maxBuildOutputs", maxBuildOutputs)
+                    .put("maxSnapshots", maxSnapshots)
+                    .put("auditLogEnabled", auditLogEnabled)
+                    .put("autoSnapshotBeforeEdit", autoSnapshotBeforeEdit)
+                    .put("auditPersist", auditPersist)
+                    .put("maxCompareRanges", maxCompareRanges)
+                    .put("defaultBuildVariants", defaultBuildVariants)
+                    .put("maxAudits", maxAudits)
+                    .put("editAutoPersist", editAutoPersist)
+                    .put("defaultDisasmBytes", defaultDisasmBytes)
+                    .put("includeCategoryInSchema", includeCategoryInSchema)
+                    .put("leanTools", leanTools)
+                    .put("logMaxLines", logMaxLines)
+                    .put("collectToolStats", collectToolStats)
+                    .put("toolStatsPersist", toolStatsPersist)
+                    .put("adaptiveLeanTools", adaptiveLeanTools)
+                    .put("maxConcurrentTools", maxConcurrentTools)
+                    .put("requestTimeoutMs", requestTimeoutMs)
+                    .put("toolCallRateLimitPerMin", toolCallRateLimitPerMin)
+                    .put("disabledTools", disabledTools)
+                    .put("scanApks", scanApks)
+                    .put("scanSubdirectories", scanSubdirectories)
+                    .put("maxScanDepth", maxScanDepth)
+                    .put("skipFilesLargerThanMb", skipFilesLargerThanMb)
+                    .put("logLevel", logLevel)
+                    .put("externalProbeUrl", externalProbeUrl)
+            )
+            .put(
+                "tunnel",
+                org.json.JSONObject()
+                    .put("tunnelMode", tunnelMode)
+                    .put("tunnelAutoStart", tunnelAutoStart)
+                    .put("tunnelTargetPort", tunnelTargetPort)
+                    .put("tunnelNamedToken", mask(tunnelNamedToken))
+                    .put("tunnelProtocol", tunnelProtocol)
+                    .put("tunnelEdgeIpVersion", tunnelEdgeIpVersion)
+                    .put("tunnelReconnect", tunnelReconnect)
+                    .put("tunnelKeepAlive", tunnelKeepAlive)
+                    .put("tunnelKeepaliveIntervalSec", tunnelKeepaliveIntervalSec)
+                    .put("tunnelReconnectBackoffSec", tunnelReconnectBackoffSec)
+                    .put("tunnelLogLevel", tunnelLogLevel)
+            )
+            .put(
+                "apkBridge",
+                org.json.JSONObject()
+                    .put("apkMcpUrl", apkMcpUrl)
+                    .put("apkMcpToken", mask(apkMcpToken))
+                    .put(
+                        "apkMcpConfigs",
+                        org.json.JSONArray().apply {
+                            apkMcpConfigs.forEach { c ->
+                                put(
+                                    org.json.JSONObject().put(
+                                        "url",
+                                        c.url
+                                    ).put("token", mask(c.token))
+                                )
+                            }
+                        }
+                    )
+                    .put("apkMcpAutoProbe", apkMcpAutoProbe)
+                    .put("apkMcpMergeTools", apkMcpMergeTools)
+                    .put("apkMcpProbeTimeoutMs", apkMcpProbeTimeoutMs)
+            )
+            .put(
+                "ai",
+                org.json.JSONObject()
+                    .put("provider", aiProvider)
+                    .put("endpoint", aiEndpoint)
+                    .put("apiKey", mask(aiApiKey))
+                    .put("model", aiModel)
+                    .put("temperature", aiTemperature.toDouble())
+                    .put("maxIterations", aiMaxIterations)
+                    .put("historySoftLimit", aiHistorySoftLimit)
+                    .put("customHeadersJson", aiCustomHeadersJson)
+                    .put("customBodyJson", aiCustomBodyJson)
+                    .put("systemPromptChars", aiSystemPrompt.length)
+            )
     }
 
-    fun applyPatch(patch: org.json.JSONObject, allowSecrets: Boolean = true, allowSecurityFields: Boolean = false): org.json.JSONObject {
+    fun applyPatch(
+        patch: org.json.JSONObject,
+        allowSecrets: Boolean = true,
+        allowSecurityFields: Boolean = false
+    ): org.json.JSONObject {
         val changed = org.json.JSONArray()
-        fun touch(key: String) { changed.put(key) }
+        fun touch(key: String) {
+            changed.put(key)
+        }
         fun obj(name: String): org.json.JSONObject? = patch.optJSONObject(name)
         fun applyBool(source: org.json.JSONObject?, key: String, apply: (Boolean) -> Unit) {
             if (source != null && source.has(key) && !source.isNull(key)) {
@@ -758,7 +898,11 @@ class SettingsStore(context: Context) {
         applyInt(service, "port") { port = it }
         if (allowSecurityFields) applyStr(service, "bindHost") { bindHost = it }
         if (allowSecurityFields) applyBool(service, "authEnabled") { authEnabled = it }
-        if (allowSecrets && allowSecurityFields) applyStr(service, "accessToken") { accessToken = it }
+        if (allowSecrets &&
+            allowSecurityFields
+        ) {
+            applyStr(service, "accessToken") { accessToken = it }
+        }
         applyStr(service, "defaultWorkDirPath") { defaultWorkDirPath = it }
         applyBool(service, "useDefaultWorkDir") { useDefaultWorkDir = it }
         applyBool(service, "floatingEnabled") { floatingEnabled = it }
@@ -815,7 +959,11 @@ class SettingsStore(context: Context) {
         applyStr(tunnel, "tunnelMode") { tunnelMode = it }
         applyBool(tunnel, "tunnelAutoStart") { tunnelAutoStart = it }
         applyInt(tunnel, "tunnelTargetPort") { tunnelTargetPort = it }
-        if (allowSecrets && allowSecurityFields) applyStr(tunnel, "tunnelNamedToken") { tunnelNamedToken = it }
+        if (allowSecrets &&
+            allowSecurityFields
+        ) {
+            applyStr(tunnel, "tunnelNamedToken") { tunnelNamedToken = it }
+        }
         applyStr(tunnel, "tunnelProtocol") { tunnelProtocol = it }
         applyStr(tunnel, "tunnelEdgeIpVersion") { tunnelEdgeIpVersion = it }
         applyBool(tunnel, "tunnelReconnect") { tunnelReconnect = it }
@@ -858,52 +1006,215 @@ class SettingsStore(context: Context) {
             "disasmMaxBytes", "emulationEnabled", "leanTools", "adaptiveLeanTools", "logLevel",
             "tunnelMode", "tunnelAutoStart", "tunnelTargetPort", "tunnelNamedToken", "tunnelProtocol",
             "apkMcpUrl", "apkMcpToken", "apkMcpAutoProbe", "apkMcpMergeTools", "disabledTools",
-            "maxConcurrentTools", "requestTimeoutMs", "toolResultMaxChars", "toolCallRateLimitPerMin",
+            "maxConcurrentTools", "requestTimeoutMs", "toolResultMaxChars", "toolCallRateLimitPerMin"
         )
         for (key in flatKeys) {
             if (!patch.has(key) || patch.isNull(key)) continue
             if (patch.opt(key) is org.json.JSONObject) continue
             when (key) {
-                "language" -> { language = patch.optString(key); touch(key) }
-                "themeMode" -> { themeMode = patch.optString(key); touch(key) }
-                "accentColor" -> { accentColor = patch.optString(key); touch(key) }
-                "pureBlackDark" -> { pureBlackDark = patch.optBoolean(key); touch(key) }
-                "uiDensity" -> { uiDensity = patch.optString(key); touch(key) }
-                "cornerStyle" -> { cornerStyle = patch.optString(key); touch(key) }
-                "motionMode" -> { motionMode = patch.optString(key); touch(key) }
-                "showAdvancedHome" -> { showAdvancedHome = patch.optBoolean(key); touch(key) }
-                "highContrast" -> { highContrast = patch.optBoolean(key); touch(key) }
-                "textScale" -> { textScale = patch.optString(key); touch(key) }
-                "predictiveBackEnabled" -> { predictiveBackEnabled = patch.optBoolean(key); touch(key) }
-                "port" -> { port = patch.optInt(key); touch(key) }
-                "bindHost" -> if (allowSecurityFields) { bindHost = patch.optString(key); touch(key) }
-                "authEnabled" -> if (allowSecurityFields) { authEnabled = patch.optBoolean(key); touch(key) }
-                "accessToken" -> if (allowSecrets && allowSecurityFields) { accessToken = patch.optString(key); touch(key) }
-                "floatingEnabled" -> { floatingEnabled = patch.optBoolean(key); touch(key) }
-                "wakeLockEnabled" -> { wakeLockEnabled = patch.optBoolean(key); touch(key) }
-                "bootAutoStart" -> { bootAutoStart = patch.optBoolean(key); touch(key) }
-                "defaultLimit" -> { defaultLimit = patch.optInt(key); touch(key) }
-                "stringLimit" -> { stringLimit = patch.optInt(key); touch(key) }
-                "disasmLimit" -> { disasmLimit = patch.optInt(key); touch(key) }
-                "disasmMaxBytes" -> { disasmMaxBytes = patch.optInt(key); touch(key) }
-                "emulationEnabled" -> { emulationEnabled = patch.optBoolean(key); touch(key) }
-                "leanTools" -> { leanTools = patch.optBoolean(key); touch(key) }
-                "adaptiveLeanTools" -> { adaptiveLeanTools = patch.optBoolean(key); touch(key) }
-                "logLevel" -> { logLevel = patch.optString(key); touch(key) }
-                "tunnelMode" -> { tunnelMode = patch.optString(key); touch(key) }
-                "tunnelAutoStart" -> { tunnelAutoStart = patch.optBoolean(key); touch(key) }
-                "tunnelTargetPort" -> { tunnelTargetPort = patch.optInt(key); touch(key) }
-                "tunnelNamedToken" -> if (allowSecrets && allowSecurityFields) { tunnelNamedToken = patch.optString(key); touch(key) }
-                "tunnelProtocol" -> { tunnelProtocol = patch.optString(key); touch(key) }
-                "apkMcpUrl" -> { apkMcpUrl = patch.optString(key); touch(key) }
-                "apkMcpToken" -> if (allowSecrets) { apkMcpToken = patch.optString(key); touch(key) }
-                "apkMcpAutoProbe" -> { apkMcpAutoProbe = patch.optBoolean(key); touch(key) }
-                "apkMcpMergeTools" -> { apkMcpMergeTools = patch.optBoolean(key); touch(key) }
-                "disabledTools" -> { disabledTools = patch.optString(key); touch(key) }
-                "maxConcurrentTools" -> { maxConcurrentTools = patch.optInt(key); touch(key) }
-                "requestTimeoutMs" -> { requestTimeoutMs = patch.optInt(key); touch(key) }
-                "toolResultMaxChars" -> { toolResultMaxChars = patch.optInt(key); touch(key) }
-                "toolCallRateLimitPerMin" -> { toolCallRateLimitPerMin = patch.optInt(key); touch(key) }
+                "language" -> {
+                    language = patch.optString(key)
+                    touch(key)
+                }
+
+                "themeMode" -> {
+                    themeMode = patch.optString(key)
+                    touch(key)
+                }
+
+                "accentColor" -> {
+                    accentColor = patch.optString(key)
+                    touch(key)
+                }
+
+                "pureBlackDark" -> {
+                    pureBlackDark = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "uiDensity" -> {
+                    uiDensity = patch.optString(key)
+                    touch(key)
+                }
+
+                "cornerStyle" -> {
+                    cornerStyle = patch.optString(key)
+                    touch(key)
+                }
+
+                "motionMode" -> {
+                    motionMode = patch.optString(key)
+                    touch(key)
+                }
+
+                "showAdvancedHome" -> {
+                    showAdvancedHome = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "highContrast" -> {
+                    highContrast = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "textScale" -> {
+                    textScale = patch.optString(key)
+                    touch(key)
+                }
+
+                "predictiveBackEnabled" -> {
+                    predictiveBackEnabled = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "port" -> {
+                    port = patch.optInt(key)
+                    touch(key)
+                }
+
+                "bindHost" -> if (allowSecurityFields) {
+                    bindHost = patch.optString(key)
+                    touch(key)
+                }
+
+                "authEnabled" -> if (allowSecurityFields) {
+                    authEnabled = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "accessToken" -> if (allowSecrets &&
+                    allowSecurityFields
+                ) {
+                    accessToken = patch.optString(key)
+                    touch(key)
+                }
+
+                "floatingEnabled" -> {
+                    floatingEnabled = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "wakeLockEnabled" -> {
+                    wakeLockEnabled = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "bootAutoStart" -> {
+                    bootAutoStart = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "defaultLimit" -> {
+                    defaultLimit = patch.optInt(key)
+                    touch(key)
+                }
+
+                "stringLimit" -> {
+                    stringLimit = patch.optInt(key)
+                    touch(key)
+                }
+
+                "disasmLimit" -> {
+                    disasmLimit = patch.optInt(key)
+                    touch(key)
+                }
+
+                "disasmMaxBytes" -> {
+                    disasmMaxBytes = patch.optInt(key)
+                    touch(key)
+                }
+
+                "emulationEnabled" -> {
+                    emulationEnabled = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "leanTools" -> {
+                    leanTools = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "adaptiveLeanTools" -> {
+                    adaptiveLeanTools = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "logLevel" -> {
+                    logLevel = patch.optString(key)
+                    touch(key)
+                }
+
+                "tunnelMode" -> {
+                    tunnelMode = patch.optString(key)
+                    touch(key)
+                }
+
+                "tunnelAutoStart" -> {
+                    tunnelAutoStart = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "tunnelTargetPort" -> {
+                    tunnelTargetPort = patch.optInt(key)
+                    touch(key)
+                }
+
+                "tunnelNamedToken" -> if (allowSecrets &&
+                    allowSecurityFields
+                ) {
+                    tunnelNamedToken = patch.optString(key)
+                    touch(key)
+                }
+
+                "tunnelProtocol" -> {
+                    tunnelProtocol = patch.optString(key)
+                    touch(key)
+                }
+
+                "apkMcpUrl" -> {
+                    apkMcpUrl = patch.optString(key)
+                    touch(key)
+                }
+
+                "apkMcpToken" -> if (allowSecrets) {
+                    apkMcpToken = patch.optString(key)
+                    touch(key)
+                }
+
+                "apkMcpAutoProbe" -> {
+                    apkMcpAutoProbe = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "apkMcpMergeTools" -> {
+                    apkMcpMergeTools = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "disabledTools" -> {
+                    disabledTools = patch.optString(key)
+                    touch(key)
+                }
+
+                "maxConcurrentTools" -> {
+                    maxConcurrentTools = patch.optInt(key)
+                    touch(key)
+                }
+
+                "requestTimeoutMs" -> {
+                    requestTimeoutMs = patch.optInt(key)
+                    touch(key)
+                }
+
+                "toolResultMaxChars" -> {
+                    toolResultMaxChars = patch.optInt(key)
+                    touch(key)
+                }
+
+                "toolCallRateLimitPerMin" -> {
+                    toolCallRateLimitPerMin = patch.optInt(key)
+                    touch(key)
+                }
             }
         }
         return org.json.JSONObject()
@@ -916,24 +1227,36 @@ class SettingsStore(context: Context) {
     fun schema(): org.json.JSONObject {
         fun enums(vararg values: String) = org.json.JSONArray(values.toList())
         return org.json.JSONObject()
-            .put("appearance", org.json.JSONObject()
-                .put("themeMode", enums("system", "light", "dark"))
-                .put("accentColor", enums("blue", "teal", "indigo", "purple", "green", "orange", "red", "mono"))
-                .put("uiDensity", enums("compact", "comfortable", "spacious"))
-                .put("cornerStyle", enums("small", "medium", "large", "xlarge"))
-                .put("motionMode", enums("system", "reduced", "full"))
-                .put("textScale", enums("normal", "large", "xlarge"))
-                .put("language", enums("system", "zh", "en")))
-            .put("notes", "Use app_config action=get|set|schema|reset_token. Nested groups or flat keys both work. Secret fields are masked on get.")
+            .put(
+                "appearance",
+                org.json.JSONObject()
+                    .put("themeMode", enums("system", "light", "dark"))
+                    .put(
+                        "accentColor",
+                        enums("blue", "teal", "indigo", "purple", "green", "orange", "red", "mono")
+                    )
+                    .put("uiDensity", enums("compact", "comfortable", "spacious"))
+                    .put("cornerStyle", enums("small", "medium", "large", "xlarge"))
+                    .put("motionMode", enums("system", "reduced", "full"))
+                    .put("textScale", enums("normal", "large", "xlarge"))
+                    .put("language", enums("system", "zh", "en"))
+            )
+            .put(
+                "notes",
+                "Use app_config action=get|set|schema|reset_token. Nested groups or flat keys both work. Secret fields are masked on get."
+            )
     }
 
     /** Export all settings as a formatted JSON string. */
     fun toJsonString(maskSecrets: Boolean = true): String = snapshot(maskSecrets).toString(2)
 
     /** Import settings from a JSON string. Returns the applyPatch result. */
-    fun fromJsonString(json: String, allowSecrets: Boolean = false): org.json.JSONObject {
-        return applyPatch(org.json.JSONObject(json), allowSecrets = allowSecrets, allowSecurityFields = allowSecrets)
-    }
+    fun fromJsonString(json: String, allowSecrets: Boolean = false): org.json.JSONObject =
+        applyPatch(
+            org.json.JSONObject(json),
+            allowSecrets = allowSecrets,
+            allowSecurityFields = allowSecrets
+        )
 
     companion object {
         const val DEFAULT_AI_SYSTEM_PROMPT =

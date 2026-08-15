@@ -7,7 +7,11 @@ import kotlin.math.min
 
 class ElfParser(private val data: ByteArray) {
     fun parse(): ElfFile {
-        require(data.size >= 16 && data[0] == 0x7f.toByte() && data[1] == 'E'.code.toByte() && data[2] == 'L'.code.toByte() && data[3] == 'F'.code.toByte()) {
+        require(
+            data.size >= 16 && data[0] == 0x7f.toByte() && data[1] == 'E'.code.toByte() &&
+                data[2] == 'L'.code.toByte() &&
+                data[3] == 'F'.code.toByte()
+        ) {
             "Not an ELF file"
         }
         val bits = if (data[4].toInt() == 2) 64 else 32
@@ -33,7 +37,7 @@ class ElfParser(private val data: ByteArray) {
                 link = if (bits == 64) r.u32(off + 40).toInt() else r.u32(off + 24).toInt(),
                 info = if (bits == 64) r.u32(off + 44).toInt() else r.u32(off + 28).toInt(),
                 addralign = if (bits == 64) r.u64(off + 48) else r.u32(off + 32),
-                entsize = if (bits == 64) r.u64(off + 56) else r.u32(off + 36),
+                entsize = if (bits == 64) r.u64(off + 56) else r.u32(off + 36)
             )
         }
         val shstr = rawSections.getOrNull(shstrndx)?.bytes(data) ?: ByteArray(0)
@@ -48,7 +52,7 @@ class ElfParser(private val data: ByteArray) {
                 link = it.link,
                 info = it.info,
                 addralign = it.addralign,
-                entsize = it.entsize,
+                entsize = it.entsize
             )
         }
         val symbols = mutableListOf<SymbolInfo>()
@@ -84,10 +88,31 @@ class ElfParser(private val data: ByteArray) {
                 }
                 val name = cstr(strtab, nameOffset)
                 if (name.isEmpty()) continue
-                val bind = when (info ushr 4) { 0 -> "LOCAL"; 1 -> "GLOBAL"; 2 -> "WEAK"; else -> "OTHER" }
-                val typ = when (info and 0xf) { 0 -> "NOTYPE"; 1 -> "OBJECT"; 2 -> "FUNC"; 6 -> "TLS"; else -> "OTHER" }
-                val vis = when (other and 0x3) { 0 -> "DEFAULT"; 1 -> "INTERNAL"; 2 -> "HIDDEN"; 3 -> "PROTECTED"; else -> "DEFAULT" }
-                dest += SymbolInfo(name, bind, typ, vis, shndx, value, size, shndx == 0, bind != "LOCAL" && shndx != 0)
+                val bind = when (info ushr 4) {
+                    0 -> "LOCAL"
+                    1 -> "GLOBAL"
+                    2 -> "WEAK"
+                    else -> "OTHER"
+                }
+                val typ = when (info and 0xf) {
+                    0 -> "NOTYPE"
+                    1 -> "OBJECT"
+                    2 -> "FUNC"
+                    6 -> "TLS"
+                    else -> "OTHER"
+                }
+                val vis = when (other and 0x3) {
+                    0 -> "DEFAULT"
+                    1 -> "INTERNAL"
+                    2 -> "HIDDEN"
+                    3 -> "PROTECTED"
+                    else -> "DEFAULT"
+                }
+                dest +=
+                    SymbolInfo(
+                        name, bind, typ, vis, shndx, value, size, shndx == 0,
+                        bind != "LOCAL" && shndx != 0
+                    )
             }
         }
         val allSymbols = symbols + dynSymbols
@@ -97,7 +122,9 @@ class ElfParser(private val data: ByteArray) {
             val symtab = if (sec.link in sections.indices) {
                 val linked = sections[sec.link]
                 if (linked.type == 11L) dynSymbols else symbols
-            } else allSymbols
+            } else {
+                allSymbols
+            }
             val count = if (sec.entsize > 0) (sec.size / sec.entsize).toInt() else 0
             for (i in 0 until count) {
                 val off = (sec.offset + i * sec.entsize).toInt()
@@ -115,7 +142,14 @@ class ElfParser(private val data: ByteArray) {
                 }
                 val symIndex = if (bits == 64) (info ushr 32).toInt() else (info ushr 8).toInt()
                 val relocType = if (bits == 64) info and 0xffffffffL else info and 0xff
-                relocs += RelocInfo(sec.name, relocOffset, relocType, symtab.getOrNull(symIndex)?.name.orEmpty(), addend)
+                relocs +=
+                    RelocInfo(
+                        sec.name,
+                        relocOffset,
+                        relocType,
+                        symtab.getOrNull(symIndex)?.name.orEmpty(),
+                        addend
+                    )
             }
         }
         val strings = mutableListOf<StringInfo>()
@@ -133,7 +167,12 @@ class ElfParser(private val data: ByteArray) {
         return data.copyOfRange(start, end)
     }
 
-    private fun extractStrings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>) {
+    private fun extractStrings(
+        bytes: ByteArray,
+        base: Long,
+        section: String,
+        out: MutableList<StringInfo>
+    ) {
         var start = 0
         var i = 0
         while (i <= bytes.size) {
@@ -145,7 +184,14 @@ class ElfParser(private val data: ByteArray) {
         }
     }
 
-    private fun emitStringCandidate(bytes: ByteArray, start: Int, end: Int, base: Long, section: String, out: MutableList<StringInfo>) {
+    private fun emitStringCandidate(
+        bytes: ByteArray,
+        start: Int,
+        end: Int,
+        base: Long,
+        section: String,
+        out: MutableList<StringInfo>
+    ) {
         if (end - start < 4) return
         val raw = bytes.copyOfRange(start, end)
         val text = runCatching {
@@ -155,10 +201,17 @@ class ElfParser(private val data: ByteArray) {
                 .decode(ByteBuffer.wrap(raw))
                 .toString()
         }.getOrNull() ?: return
-        val clean = text.takeWhile { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() }.trimEnd()
+        val clean = text.takeWhile {
+            it == '\t' || it == '\n' || it == '\r' || !it.isISOControl()
+        }.trimEnd()
         if (clean.length < 2) return
-        val useful = clean.any { it.isLetterOrDigit() || Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
-        val mostlyText = clean.count { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() } >= clean.length
+        val useful = clean.any {
+            it.isLetterOrDigit() ||
+                Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
+        val mostlyText =
+            clean.count { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() } >=
+                clean.length
         if (useful && mostlyText) {
             out += StringInfo(base + start, clean.take(1024), raw.size, section)
         }
@@ -181,7 +234,7 @@ class ElfParser(private val data: ByteArray) {
         val link: Int,
         val info: Int,
         val addralign: Long,
-        val entsize: Long,
+        val entsize: Long
     ) {
         fun bytes(data: ByteArray): ByteArray {
             val start = offset.toInt().coerceIn(0, data.size)
@@ -194,7 +247,8 @@ class ElfParser(private val data: ByteArray) {
         private val order = if (little) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
         fun u8(o: Int): Int = bytes[o].toInt() and 0xff
         fun u16(o: Int): Int = ByteBuffer.wrap(bytes, o, 2).order(order).short.toInt() and 0xffff
-        fun u32(o: Int): Long = ByteBuffer.wrap(bytes, o, 4).order(order).int.toLong() and 0xffffffffL
+        fun u32(o: Int): Long =
+            ByteBuffer.wrap(bytes, o, 4).order(order).int.toLong() and 0xffffffffL
         fun s32(o: Int): Int = ByteBuffer.wrap(bytes, o, 4).order(order).int
         fun u64(o: Int): Long = ByteBuffer.wrap(bytes, o, 8).order(order).long
         fun s64(o: Int): Long = ByteBuffer.wrap(bytes, o, 8).order(order).long

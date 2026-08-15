@@ -10,7 +10,7 @@ data class CachedApkSo(
     val entry: String,
     val name: String,
     val abi: String,
-    val size: Long,
+    val size: Long
 )
 
 data class CachedSourceSummary(
@@ -18,7 +18,7 @@ data class CachedSourceSummary(
     val bits: Int,
     val endian: String,
     val hasDebugInfo: Boolean,
-    val stripped: Boolean,
+    val stripped: Boolean
 )
 
 class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_cache.db", null, 1) {
@@ -36,7 +36,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
                 entry_size INTEGER NOT NULL,
                 PRIMARY KEY(tree_uri, apk_path, apk_size, apk_modified, entry)
             )
-            """.trimIndent(),
+            """.trimIndent()
         )
         db.execSQL(
             """
@@ -52,7 +52,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
                 stripped INTEGER NOT NULL,
                 PRIMARY KEY(tree_uri, path, size, modified)
             )
-            """.trimIndent(),
+            """.trimIndent()
         )
     }
 
@@ -62,7 +62,12 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
         onCreate(db)
     }
 
-    fun apkEntries(treeUri: String, apkPath: String, apkSize: Long, apkModified: Long): List<CachedApkSo> {
+    fun apkEntries(
+        treeUri: String,
+        apkPath: String,
+        apkSize: Long,
+        apkModified: Long
+    ): List<CachedApkSo> {
         readableDatabase.query(
             "apk_so_entries",
             arrayOf("entry", "name", "abi", "entry_size"),
@@ -70,7 +75,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
             arrayOf(treeUri, apkPath, apkSize.toString(), apkModified.toString()),
             null,
             null,
-            "entry",
+            "entry"
         ).use { cursor ->
             val out = mutableListOf<CachedApkSo>()
             val entryCol = cursor.getColumnIndexOrThrow("entry")
@@ -83,20 +88,26 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
                     entry = cursor.getString(entryCol),
                     name = cursor.getString(nameCol),
                     abi = cursor.getString(abiCol),
-                    size = cursor.getLong(sizeCol),
+                    size = cursor.getLong(sizeCol)
                 )
             }
             return out
         }
     }
 
-    fun putApkEntries(treeUri: String, apkPath: String, apkSize: Long, apkModified: Long, entries: List<CachedApkSo>) {
+    fun putApkEntries(
+        treeUri: String,
+        apkPath: String,
+        apkSize: Long,
+        apkModified: Long,
+        entries: List<CachedApkSo>
+    ) {
         writableDatabase.beginTransaction()
         try {
             writableDatabase.delete(
                 "apk_so_entries",
                 "tree_uri=? AND apk_path=?",
-                arrayOf(treeUri, apkPath),
+                arrayOf(treeUri, apkPath)
             )
             entries.forEach { entry ->
                 writableDatabase.insertWithOnConflict(
@@ -112,7 +123,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
                         put("abi", entry.abi)
                         put("entry_size", entry.size)
                     },
-                    SQLiteDatabase.CONFLICT_REPLACE,
+                    SQLiteDatabase.CONFLICT_REPLACE
                 )
             }
             writableDatabase.setTransactionSuccessful()
@@ -121,7 +132,12 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
         }
     }
 
-    fun sourceSummary(treeUri: String, path: String, size: Long, modified: Long): CachedSourceSummary? {
+    fun sourceSummary(
+        treeUri: String,
+        path: String,
+        size: Long,
+        modified: Long
+    ): CachedSourceSummary? {
         readableDatabase.query(
             "source_summaries",
             arrayOf("architecture", "bits", "endian", "has_debug", "stripped"),
@@ -129,7 +145,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
             arrayOf(treeUri, path, size.toString(), modified.toString()),
             null,
             null,
-            null,
+            null
         ).use { cursor ->
             if (!cursor.moveToFirst()) return null
             return CachedSourceSummary(
@@ -137,12 +153,18 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
                 bits = cursor.getInt(cursor.getColumnIndexOrThrow("bits")),
                 endian = cursor.getString(cursor.getColumnIndexOrThrow("endian")),
                 hasDebugInfo = cursor.getInt(cursor.getColumnIndexOrThrow("has_debug")) != 0,
-                stripped = cursor.getInt(cursor.getColumnIndexOrThrow("stripped")) != 0,
+                stripped = cursor.getInt(cursor.getColumnIndexOrThrow("stripped")) != 0
             )
         }
     }
 
-    fun putSourceSummary(treeUri: String, path: String, size: Long, modified: Long, summary: CachedSourceSummary) {
+    fun putSourceSummary(
+        treeUri: String,
+        path: String,
+        size: Long,
+        modified: Long,
+        summary: CachedSourceSummary
+    ) {
         writableDatabase.insertWithOnConflict(
             "source_summaries",
             null,
@@ -157,7 +179,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
                 put("has_debug", if (summary.hasDebugInfo) 1 else 0)
                 put("stripped", if (summary.stripped) 1 else 0)
             },
-            SQLiteDatabase.CONFLICT_REPLACE,
+            SQLiteDatabase.CONFLICT_REPLACE
         )
     }
 

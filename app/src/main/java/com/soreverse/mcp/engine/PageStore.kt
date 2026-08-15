@@ -1,8 +1,8 @@
 package com.soreverse.mcp.engine
 
-import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONObject
 
 internal class PageStore {
     internal data class PageSlice(
@@ -12,14 +12,14 @@ internal class PageStore {
         val nextCursor: String?,
         val returnedCount: Int,
         val limit: Int,
-        val totalCount: Int,
+        val totalCount: Int
     )
 
     private data class PageState(
         val field: String,
         val items: List<JSONObject>,
         val offset: Int,
-        val limit: Int,
+        val limit: Int
     )
 
     private val pages = ConcurrentHashMap<String, PageState>()
@@ -41,6 +41,14 @@ internal class PageStore {
         } else {
             null
         }
-        return PageSlice(state.field, chunk, nextCursor != null, nextCursor, chunk.size, state.limit, state.items.size)
+        return PageSlice(
+            state.field,
+            chunk,
+            nextCursor != null,
+            nextCursor,
+            chunk.size,
+            state.limit,
+            state.items.size
+        )
     }
 }

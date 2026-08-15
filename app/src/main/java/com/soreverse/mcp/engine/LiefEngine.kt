@@ -1,10 +1,10 @@
 package com.soreverse.mcp.engine
 
-import org.json.JSONArray
-import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import kotlin.math.min
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * LIEF-backed ELF parser and section header reconstructor.
@@ -45,7 +45,8 @@ class LiefEngine {
             val jniOk = runCatching { nativeAvailable() }.getOrDefault(false)
             libLoaded = jniOk
             if (!libLoaded) {
-                loadError = "librz_native.so 加载成功但 LIEF JNI 自检失败——该 .so 可能是空 stub（LIEF 静态库缺失时的 fallback 构建）"
+                loadError =
+                    "librz_native.so 加载成功但 LIEF JNI 自检失败——该 .so 可能是空 stub（LIEF 静态库缺失时的 fallback 构建）"
             }
         }
     }
@@ -81,7 +82,9 @@ class LiefEngine {
         }
     }
 
-    fun parseAny(data: ByteArray, format: String = "auto"): JSONObject = serial { JSONObject(nativeParseAny(data, format)) }
+    fun parseAny(data: ByteArray, format: String = "auto"): JSONObject = serial {
+        JSONObject(nativeParseAny(data, format))
+    }
 
     fun fixSections(data: ByteArray): ByteArray {
         if (!available()) return data
@@ -105,7 +108,9 @@ class LiefEngine {
 
     fun getSectionContent(data: ByteArray, sectionName: String): ByteArray {
         if (!available()) return ByteArray(0)
-        return serial { runCatching { nativeGetSectionContent(data, sectionName) }.getOrDefault(ByteArray(0)) }
+        return serial {
+            runCatching { nativeGetSectionContent(data, sectionName) }.getOrDefault(ByteArray(0))
+        }
     }
 
     fun setSectionContent(data: ByteArray, sectionName: String, content: ByteArray): ByteArray {
@@ -159,7 +164,7 @@ class LiefEngine {
         return ElfFile(
             data, bits, littleEndian, type, machine, entry,
             sections, symbols, dynSymbols, relocations, strings,
-            programHeaders, dynamicEntries,
+            programHeaders, dynamicEntries
         )
     }
 
@@ -177,7 +182,7 @@ class LiefEngine {
                 link = o.optInt("link"),
                 info = o.optInt("info"),
                 addralign = o.optLong("addralign"),
-                entsize = o.optLong("entsize"),
+                entsize = o.optLong("entsize")
             )
         }
         return out
@@ -198,7 +203,7 @@ class LiefEngine {
                 value = o.optLong("value"),
                 size = o.optLong("size"),
                 imported = o.optBoolean("imported"),
-                exported = o.optBoolean("exported"),
+                exported = o.optBoolean("exported")
             )
         }
         return out
@@ -213,7 +218,7 @@ class LiefEngine {
                 offset = o.optLong("offset"),
                 type = o.optLong("type"),
                 symbol = o.optString("symbol"),
-                addend = o.optLong("addend"),
+                addend = o.optLong("addend")
             )
         }
         return out
@@ -231,7 +236,7 @@ class LiefEngine {
                 paddr = o.optLong("paddr"),
                 filesz = o.optLong("filesz"),
                 memsz = o.optLong("memsz"),
-                align = o.optLong("align"),
+                align = o.optLong("align")
             )
         }
         return out
@@ -243,7 +248,7 @@ class LiefEngine {
             val o = arr.getJSONObject(i)
             out += DynamicEntryInfo(
                 tag = o.optLong("tag"),
-                value = o.optLong("value"),
+                value = o.optLong("value")
             )
         }
         return out
@@ -256,7 +261,12 @@ class LiefEngine {
             if (!shouldScanStrings(sec)) continue
             val bytes = sectionBytes(data, sec)
             extractUtf8Strings(bytes, sec.offset, sec.name, out, seen)
-            if (shouldScanUtf16Strings(sec)) extractUtf16LeStrings(bytes, sec.offset, sec.name, out, seen)
+            if (shouldScanUtf16Strings(
+                    sec
+                )
+            ) {
+                extractUtf16LeStrings(bytes, sec.offset, sec.name, out, seen)
+            }
         }
         extractUtf8Strings(data, 0, "<file>", out, seen)
         return out
@@ -264,13 +274,27 @@ class LiefEngine {
 
     private fun shouldScanStrings(section: SectionInfo): Boolean {
         if (section.size <= 0) return false
-        if (section.name in setOf(".rodata", ".strtab", ".dynstr", ".data", ".data.rel.ro", ".init_array", ".fini_array")) return true
-        return section.name.contains("str", ignoreCase = true) || section.name.contains("rodata", ignoreCase = true)
+        if (section.name in
+            setOf(
+                ".rodata",
+                ".strtab",
+                ".dynstr",
+                ".data",
+                ".data.rel.ro",
+                ".init_array",
+                ".fini_array"
+            )
+        ) {
+            return true
+        }
+        return section.name.contains("str", ignoreCase = true) ||
+            section.name.contains("rodata", ignoreCase = true)
     }
 
     private fun shouldScanUtf16Strings(section: SectionInfo): Boolean {
         if (section.flags and 4L != 0L) return false
-        return section.name in setOf(".rodata", ".data", ".data.rel.ro") || section.name.contains("utf16", ignoreCase = true)
+        return section.name in setOf(".rodata", ".data", ".data.rel.ro") ||
+            section.name.contains("utf16", ignoreCase = true)
     }
 
     private fun sectionBytes(data: ByteArray, section: SectionInfo): ByteArray {
@@ -280,7 +304,13 @@ class LiefEngine {
         return data.copyOfRange(start, end)
     }
 
-    private fun extractUtf8Strings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
+    private fun extractUtf8Strings(
+        bytes: ByteArray,
+        base: Long,
+        section: String,
+        out: MutableList<StringInfo>,
+        seen: MutableSet<String>
+    ) {
         var start = 0
         var i = 0
         while (i <= bytes.size) {
@@ -292,7 +322,15 @@ class LiefEngine {
         }
     }
 
-    private fun emitUtf8StringCandidate(bytes: ByteArray, start: Int, end: Int, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
+    private fun emitUtf8StringCandidate(
+        bytes: ByteArray,
+        start: Int,
+        end: Int,
+        base: Long,
+        section: String,
+        out: MutableList<StringInfo>,
+        seen: MutableSet<String>
+    ) {
         if (end - start < 4) return
         val raw = bytes.copyOfRange(start, end)
         val text = runCatching {
@@ -302,13 +340,25 @@ class LiefEngine {
                 .decode(ByteBuffer.wrap(raw))
                 .toString()
         }.getOrNull() ?: return
-        val clean = text.takeWhile { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() }.trimEnd()
+        val clean = text.takeWhile {
+            it == '\t' || it == '\n' || it == '\r' || !it.isISOControl()
+        }.trimEnd()
         if (clean.length < 2) return
-        val useful = clean.any { it.isLetterOrDigit() || Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
-        val mostlyText = clean.count { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() } >= clean.length
-        val letters = clean.count { it.isLetter() || Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
+        val useful = clean.any {
+            it.isLetterOrDigit() ||
+                Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
+        val mostlyText =
+            clean.count { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() } >=
+                clean.length
+        val letters = clean.count {
+            it.isLetter() ||
+                Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
         val digits = clean.count { it.isDigit() }
-        val hasHan = clean.any { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
+        val hasHan = clean.any {
+            Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
         val confidence = when {
             hasHan && mostlyText -> 0.95
             letters + digits >= clean.length * 2 / 3 -> 0.9
@@ -316,17 +366,28 @@ class LiefEngine {
             else -> 0.5
         }
         if (useful && mostlyText && confidence >= 0.5 && seen.add("UTF-8:${base + start}:$clean")) {
-            out += StringInfo(base + start, clean.take(1024), raw.size, section, "UTF-8", confidence)
+            out +=
+                StringInfo(base + start, clean.take(1024), raw.size, section, "UTF-8", confidence)
         }
     }
 
-    private fun extractUtf16LeStrings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
+    private fun extractUtf16LeStrings(
+        bytes: ByteArray,
+        base: Long,
+        section: String,
+        out: MutableList<StringInfo>,
+        seen: MutableSet<String>
+    ) {
         var start = -1
         var i = 0
         while (i + 1 < bytes.size) {
             val zeroTerminated = bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte()
             if (zeroTerminated) {
-                if (start >= 0) emitUtf16LeStringCandidate(bytes, start, i, base, section, out, seen)
+                if (start >=
+                    0
+                ) {
+                    emitUtf16LeStringCandidate(bytes, start, i, base, section, out, seen)
+                }
                 start = -1
                 i += 2
                 continue
@@ -344,7 +405,15 @@ class LiefEngine {
         return c == '\t' || c == '\n' || c == '\r' || !c.isISOControl()
     }
 
-    private fun emitUtf16LeStringCandidate(bytes: ByteArray, start: Int, end: Int, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
+    private fun emitUtf16LeStringCandidate(
+        bytes: ByteArray,
+        start: Int,
+        end: Int,
+        base: Long,
+        section: String,
+        out: MutableList<StringInfo>,
+        seen: MutableSet<String>
+    ) {
         if (section in setOf(".dynstr", ".strtab", ".shstrtab")) return
         val len = end - start
         if (len < 8 || len % 2 != 0) return
@@ -361,38 +430,65 @@ class LiefEngine {
         val likelyMisalignedAscii = asciiHighZero == 0 && asciiLowPrintable >= units * 3 / 4
         if (likelyMisalignedAscii) return
         val text = runCatching { raw.toString(Charsets.UTF_16LE) }.getOrNull() ?: return
-        val clean = text.takeWhile { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() }.trimEnd()
+        val clean = text.takeWhile {
+            it == '\t' || it == '\n' || it == '\r' || !it.isISOControl()
+        }.trimEnd()
         if (clean.length < 3) return
         val printable = clean.count { it == '\t' || it == '\n' || it == '\r' || !it.isISOControl() }
-        val letters = clean.count { it.isLetter() || Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
+        val letters = clean.count {
+            it.isLetter() ||
+                Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
         val digits = clean.count { it.isDigit() }
         val spaces = clean.count { it.isWhitespace() }
-        val useful = clean.any { it.isLetterOrDigit() || Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
+        val useful = clean.any {
+            it.isLetterOrDigit() ||
+                Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
         val mostlyText = printable >= clean.length * 95 / 100
-        val hasHan = clean.any { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN }
-        val hasStrongTextSignal = likelyAsciiUtf16 || hasHan || clean.any { it.code > 0x7f && Character.isLetterOrDigit(it) }
-        val entropyPenalty = clean.toSet().size >= clean.length * 3 / 4 && letters < clean.length / 3
+        val hasHan = clean.any {
+            Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
+        val hasStrongTextSignal =
+            likelyAsciiUtf16 || hasHan ||
+                clean.any { it.code > 0x7f && Character.isLetterOrDigit(it) }
+        val entropyPenalty =
+            clean.toSet().size >= clean.length * 3 / 4 && letters < clean.length / 3
         val confidence = when {
             hasHan && mostlyText -> 0.9
             likelyAsciiUtf16 && letters + digits >= clean.length / 2 -> 0.82
             hasStrongTextSignal && mostlyText && spaces > 0 -> 0.7
             else -> 0.35
         }
-        if (useful && mostlyText && hasStrongTextSignal && !entropyPenalty && confidence >= 0.7 && seen.add("UTF-16LE:${base + start}:$clean")) {
-            out += StringInfo(base + start, clean.take(256), raw.size, section, "UTF-16LE", confidence)
+        if (useful && mostlyText && hasStrongTextSignal && !entropyPenalty && confidence >= 0.7 &&
+            seen.add("UTF-16LE:${base + start}:$clean")
+        ) {
+            out +=
+                StringInfo(base + start, clean.take(256), raw.size, section, "UTF-16LE", confidence)
         }
     }
 
     private fun bindStr(v: Int): String = when (v) {
-        0 -> "LOCAL"; 1 -> "GLOBAL"; 2 -> "WEAK"; else -> "OTHER"
+        0 -> "LOCAL"
+        1 -> "GLOBAL"
+        2 -> "WEAK"
+        else -> "OTHER"
     }
 
     private fun typeStr(v: Int): String = when (v) {
-        0 -> "NOTYPE"; 1 -> "OBJECT"; 2 -> "FUNC"; 6 -> "TLS"; else -> "OTHER"
+        0 -> "NOTYPE"
+        1 -> "OBJECT"
+        2 -> "FUNC"
+        6 -> "TLS"
+        else -> "OTHER"
     }
 
     private fun visStr(v: Int): String = when (v) {
-        0 -> "DEFAULT"; 1 -> "INTERNAL"; 2 -> "HIDDEN"; 3 -> "PROTECTED"; else -> "DEFAULT"
+        0 -> "DEFAULT"
+        1 -> "INTERNAL"
+        2 -> "HIDDEN"
+        3 -> "PROTECTED"
+        else -> "DEFAULT"
     }
 
     private external fun nativeParse(data: ByteArray): String
@@ -400,8 +496,16 @@ class LiefEngine {
     private external fun nativeFixSections(data: ByteArray): ByteArray
     private external fun nativePatchAddress(data: ByteArray, va: Long, patch: ByteArray): ByteArray
     private external fun nativeGetSectionContent(data: ByteArray, sectionName: String): ByteArray
-    private external fun nativeSetSectionContent(data: ByteArray, sectionName: String, content: ByteArray): ByteArray
-    private external fun nativeAddExportedFunction(data: ByteArray, addr: Long, name: String): ByteArray
+    private external fun nativeSetSectionContent(
+        data: ByteArray,
+        sectionName: String,
+        content: ByteArray
+    ): ByteArray
+    private external fun nativeAddExportedFunction(
+        data: ByteArray,
+        addr: Long,
+        name: String
+    ): ByteArray
     private external fun nativeRemoveSymbol(data: ByteArray, name: String): ByteArray
     private external fun nativeAvailable(): Boolean
 

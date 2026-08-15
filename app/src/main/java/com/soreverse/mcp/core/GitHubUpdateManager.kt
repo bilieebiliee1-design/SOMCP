@@ -7,8 +7,13 @@ import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.soreverse.mcp.BuildConfig
-import kotlinx.coroutines.Dispatchers
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -20,11 +25,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.io.File
-import java.security.MessageDigest
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import java.util.concurrent.TimeUnit
 
 data class GitHubRelease(
     val tag: String,
@@ -34,7 +34,7 @@ data class GitHubRelease(
     val apkName: String,
     val apkUrl: String,
     val apkSize: Long,
-    val checksumUrl: String?,
+    val checksumUrl: String?
 )
 
 sealed interface UpdateCheckResult {
@@ -49,11 +49,12 @@ sealed interface UpdateDownloadEvent {
         val reachable: Boolean,
         val latencyMs: Long,
         val completed: Int,
-        val total: Int,
+        val total: Int
     ) : UpdateDownloadEvent
     data class Selected(val source: String) : UpdateDownloadEvent
     data class Downloading(val source: String, val percent: Int) : UpdateDownloadEvent
     data object Verifying : UpdateDownloadEvent
+
     /** Emitted when checksum verification is skipped (asset missing/unreachable). */
     data class VerifySkipped(val reason: String) : UpdateDownloadEvent
 }
@@ -96,7 +97,11 @@ class GitHubUpdateManager(private val context: Context) {
                 .build()
             val result = client.newCall(request).await().use { response ->
                 if (response.code == 404) return@use UpdateCheckResult.Current
-                if (!response.isSuccessful) error("GitHub HTTP ${response.code} ${response.message}")
+                if (!response.isSuccessful) {
+                    error(
+                        "GitHub HTTP ${response.code} ${response.message}"
+                    )
+                }
                 val root = JSONObject(response.body.string())
                 val tag = root.optString("tag_name")
                 if (!isNewer(tag, BuildConfig.VERSION_NAME)) return@use UpdateCheckResult.Current
@@ -118,8 +123,10 @@ class GitHubUpdateManager(private val context: Context) {
                         apkName = apk.getString("name"),
                         apkUrl = apk.getString("browser_download_url"),
                         apkSize = apk.optLong("size"),
-                        checksumUrl = checksum?.optString("browser_download_url")?.takeIf(String::isNotBlank),
-                    ),
+                        checksumUrl = checksum?.optString(
+                            "browser_download_url"
+                        )?.takeIf(String::isNotBlank)
+                    )
                 )
             }
             Result.success(result)
@@ -133,11 +140,10 @@ class GitHubUpdateManager(private val context: Context) {
     suspend fun download(
         release: GitHubRelease,
         forcedSource: String? = null,
-        onEvent: (UpdateDownloadEvent) -> Unit,
-    ): Result<File> =
-        withContext(Dispatchers.IO) {
-            try {
-                downloadMutex.withLock {
+        onEvent: (UpdateDownloadEvent) -> Unit
+    ): Result<File> = withContext(Dispatchers.IO) {
+        try {
+            downloadMutex.withLock {
                 suspend fun emit(event: UpdateDownloadEvent) {
                     withContext(Dispatchers.Main.immediate) { onEvent(event) }
                 }
@@ -150,7 +156,9 @@ class GitHubUpdateManager(private val context: Context) {
                 val target = File(directory, release.apkName.substringAfterLast('/'))
                 val partial = File(directory, "${target.name}.part")
                 val verified = File(directory, "${target.name}.verified")
-                directory.listFiles()?.filter { it !in setOf(target, verified) }?.forEach { it.delete() }
+                directory.listFiles()?.filter {
+                    it !in setOf(target, verified)
+                }?.forEach { it.delete() }
                 // When the user manually picks a mirror we honour it first and
                 // skip the speed probe entirely (their choice solves the
                 // "fast to probe but slow to download" case); the remaining
@@ -174,7 +182,11 @@ class GitHubUpdateManager(private val context: Context) {
                             .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
                             .build()
                         client.newCall(request).await().use { response ->
-                            if (!response.isSuccessful) error("Download HTTP ${response.code} ${response.message}")
+                            if (!response.isSuccessful) {
+                                error(
+                                    "Download HTTP ${response.code} ${response.message}"
+                                )
+                            }
                             val body = response.body
                             val total = body.contentLength().takeIf { it > 0 } ?: release.apkSize
                             body.byteStream().use { input ->
@@ -189,10 +201,18 @@ class GitHubUpdateManager(private val context: Context) {
                                         output.write(buffer, 0, count)
                                         copied += count
                                         if (total > 0) {
-                                            val percent = ((copied * 100) / total).toInt().coerceIn(0, 100)
+                                            val percent = ((copied * 100) / total).toInt().coerceIn(
+                                                0,
+                                                100
+                                            )
                                             if (percent != lastPercent) {
                                                 lastPercent = percent
-                                                emit(UpdateDownloadEvent.Downloading(sourceName(url), percent))
+                                                emit(
+                                                    UpdateDownloadEvent.Downloading(
+                                                        sourceName(url),
+                                                        percent
+                                                    )
+                                                )
                                             }
                                         }
                                     }
@@ -201,8 +221,10 @@ class GitHubUpdateManager(private val context: Context) {
                         }
                         if (partial.length() > 4 && partial.inputStream().use {
                                 val header = ByteArray(4)
-                                it.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
-                            }) {
+                                it.read(header) == 4 &&
+                                    header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+                            }
+                        ) {
                             downloaded = true
                             break
                         }
@@ -225,7 +247,13 @@ class GitHubUpdateManager(private val context: Context) {
                 // failure (that means tampering / corruption).
                 val verifiedHash = release.checksumUrl?.let { url ->
                     runCatching { verifyChecksum(partial, url, target.name) }
-                        .onFailure { emit(UpdateDownloadEvent.VerifySkipped(it.message ?: "checksum unavailable")) }
+                        .onFailure {
+                            emit(
+                                UpdateDownloadEvent.VerifySkipped(
+                                    it.message ?: "checksum unavailable"
+                                )
+                            )
+                        }
                         .getOrElse { failure ->
                             if (failure is ChecksumMismatchException) throw failure
                             null
@@ -235,22 +263,34 @@ class GitHubUpdateManager(private val context: Context) {
                     null
                 }
                 runCatching {
-                    Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+                    Files.move(
+                        partial.toPath(),
+                        target.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE
+                    )
                 }.getOrElse {
-                    Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    Files.move(
+                        partial.toPath(),
+                        target.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING
+                    )
                 }
                 // Only persist the .verified marker when we actually verified the
                 // hash; otherwise the cached-download fast path must re-check.
                 if (verifiedHash != null) verified.writeText(verifiedHash) else verified.delete()
                 Result.success(target)
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                File(File(context.cacheDir, "updates"), "${release.apkName.substringAfterLast('/')}.part").delete()
-                Result.failure(error)
             }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            File(
+                File(context.cacheDir, "updates"),
+                "${release.apkName.substringAfterLast('/')}.part"
+            ).delete()
+            Result.failure(error)
         }
+    }
 
     fun cachedDownload(release: GitHubRelease): File? {
         val file = File(File(context.cacheDir, "updates"), release.apkName.substringAfterLast('/'))
@@ -258,7 +298,9 @@ class GitHubUpdateManager(private val context: Context) {
         if (!file.isFile || file.length() <= 4) return null
         val sizeOk = release.apkSize <= 0 || file.length() == release.apkSize
         if (!sizeOk) return null
-        val expectedHash = verified.readTextOrNull()?.trim()?.lowercase()?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
+        val expectedHash = verified.readTextOrNull()?.trim()?.lowercase()?.takeIf {
+            it.matches(Regex("[a-f0-9]{64}"))
+        }
         if (expectedHash != null) {
             // Re-hash the actual bytes: a predictable marker alone must never be trusted.
             val actualHash = runCatching { fileSha256(file) }.getOrNull() ?: return null
@@ -279,12 +321,13 @@ class GitHubUpdateManager(private val context: Context) {
 
     private suspend fun rankedDownloadUrls(
         original: String,
-        emit: suspend (UpdateDownloadEvent) -> Unit,
+        emit: suspend (UpdateDownloadEvent) -> Unit
     ): List<String> = coroutineScope {
         val candidates = DownloadMirrorPolicy.candidates(original)
         emit(UpdateDownloadEvent.Probing(candidates.size))
         val completed = java.util.concurrent.atomic.AtomicInteger(0)
-        val ranked = candidates.map { url -> async(Dispatchers.IO) {
+        val ranked = candidates.map { url ->
+            async(Dispatchers.IO) {
                 ensureActive()
                 val started = System.nanoTime()
                 val reachable = try {
@@ -293,7 +336,7 @@ class GitHubUpdateManager(private val context: Context) {
                             .head()
                             .url(url)
                             .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
-                            .build(),
+                            .build()
                     ).await().use { it.isSuccessful || it.code in 300..399 || it.code == 405 }
                 } catch (error: CancellationException) {
                     throw error
@@ -307,14 +350,14 @@ class GitHubUpdateManager(private val context: Context) {
                         reachable,
                         latencyMs,
                         completed.incrementAndGet(),
-                        candidates.size,
-                    ),
+                        candidates.size
+                    )
                 )
                 Triple(url, reachable, latencyMs)
             }
         }.awaitAll()
         ranked.sortedWith(
-            compareByDescending<Triple<String, Boolean, Long>> { it.second }.thenBy { it.third },
+            compareByDescending<Triple<String, Boolean, Long>> { it.second }.thenBy { it.third }
         ).map { it.first }
     }
 
@@ -323,14 +366,20 @@ class GitHubUpdateManager(private val context: Context) {
 
     /** Distinct, user-selectable mirror host names for [release], in policy order. */
     fun mirrorSources(release: GitHubRelease): List<String> =
-        DownloadMirrorPolicy.candidates(release.apkUrl).map(::sourceName).filter { it.isNotBlank() }.distinct()
-
+        DownloadMirrorPolicy.candidates(release.apkUrl).map(::sourceName).filter {
+            it.isNotBlank()
+        }.distinct()
 
     fun install(file: File): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
             context.startActivity(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                )
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
             return false
         }
@@ -338,7 +387,7 @@ class GitHubUpdateManager(private val context: Context) {
         context.startActivity(
             Intent(Intent.ACTION_VIEW)
                 .setDataAndType(uri, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         )
         return true
     }
@@ -348,22 +397,36 @@ class GitHubUpdateManager(private val context: Context) {
         val abiNames = Build.SUPPORTED_ABIS.flatMap { abi ->
             listOf(abi.lowercase(), abi.lowercase().replace('-', '_'))
         }
-        return apks.firstOrNull { asset -> abiNames.any { it in asset.optString("name").lowercase() } }
+        return apks.firstOrNull { asset ->
+            abiNames.any { it in asset.optString("name").lowercase() }
+        }
             ?: apks.firstOrNull { "universal" in it.optString("name").lowercase() }
             ?: apks.singleOrNull()
     }
 
     private fun isNewer(remote: String, local: String): Boolean {
-        val remoteParts = remote.trim().removePrefix("v").split('.', '-', '+').mapNotNull(String::toIntOrNull)
-        val localParts = local.trim().removePrefix("v").split('.', '-', '+').mapNotNull(String::toIntOrNull)
+        val remoteParts = remote.trim().removePrefix(
+            "v"
+        ).split('.', '-', '+').mapNotNull(String::toIntOrNull)
+        val localParts = local.trim().removePrefix(
+            "v"
+        ).split('.', '-', '+').mapNotNull(String::toIntOrNull)
         for (index in 0 until maxOf(remoteParts.size, localParts.size)) {
-            val comparison = (remoteParts.getOrNull(index) ?: 0).compareTo(localParts.getOrNull(index) ?: 0)
+            val comparison = (
+                remoteParts.getOrNull(
+                    index
+                ) ?: 0
+                ).compareTo(localParts.getOrNull(index) ?: 0)
             if (comparison != 0) return comparison > 0
         }
         return false
     }
 
-    private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
+    private suspend fun verifyChecksum(
+        file: File,
+        url: String,
+        assetName: String = file.name
+    ): String {
         var expected: String? = null
         var lastFailure: Throwable? = null
         // Bound the total time spent chasing checksum mirrors so a slow/hanging
@@ -372,7 +435,9 @@ class GitHubUpdateManager(private val context: Context) {
         val candidates = rankedDownloadUrls(url) {}.take(CHECKSUM_MIRROR_ATTEMPTS)
         for (candidate in candidates) {
             try {
-                val request = Request.Builder().url(candidate).header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}").build()
+                val request = Request.Builder().url(
+                    candidate
+                ).header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}").build()
                 expected = client.newCall(request).await().use { response ->
                     if (!response.isSuccessful) error("Checksum HTTP ${response.code}")
                     val text = response.body.string()
@@ -390,10 +455,20 @@ class GitHubUpdateManager(private val context: Context) {
         }
         // Could not obtain a checksum -> signal "unavailable" (soft failure that
         // the caller downgrades to an unverified install), NOT a mismatch.
-        val expectedHash = expected ?: throw ChecksumUnavailableException(lastFailure?.message ?: "All checksum mirrors failed")
+        val expectedHash =
+            expected
+                ?: throw ChecksumUnavailableException(
+                    lastFailure?.message ?: "All checksum mirrors failed"
+                )
         val actual = fileSha256(file)
         // Obtained a checksum but it does not match -> hard failure (tampering).
-        if (!actual.equals(expectedHash, true)) throw ChecksumMismatchException("APK SHA-256 verification failed")
+        if (!actual.equals(
+                expectedHash,
+                true
+            )
+        ) {
+            throw ChecksumMismatchException("APK SHA-256 verification failed")
+        }
         return actual.lowercase()
     }
 
@@ -410,7 +485,9 @@ class GitHubUpdateManager(private val context: Context) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun File.readTextOrNull(): String? = runCatching { takeIf(File::isFile)?.readText() }.getOrNull()
+    private fun File.readTextOrNull(): String? = runCatching {
+        takeIf(File::isFile)?.readText()
+    }.getOrNull()
 
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"

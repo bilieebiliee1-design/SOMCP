@@ -2,10 +2,10 @@ package com.soreverse.mcp.core
 
 import android.content.Context
 import com.soreverse.mcp.mcp.ToolCatalog
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * ToolStats
@@ -28,19 +28,27 @@ object ToolStats {
         var totalMicros: Long = 0,
         var maxMicros: Long = 0,
         var lastError: String = "",
-        var lastAt: Long = 0,
+        var lastAt: Long = 0
     )
 
     private val stats = ConcurrentHashMap<String, Stat>()
+
     @Volatile private var enabled = true
+
     @Volatile private var startedAt = System.currentTimeMillis()
+
     @Volatile private var persistEnabled = true
     private var ctx: Context? = null
+
     @Volatile private var lastFlushAt = 0L
     private const val FLUSH_MIN_GAP_MS = 15_000L
 
-    fun setEnabled(v: Boolean) { enabled = v }
-    fun setPersistEnabled(v: Boolean) { persistEnabled = v }
+    fun setEnabled(v: Boolean) {
+        enabled = v
+    }
+    fun setPersistEnabled(v: Boolean) {
+        persistEnabled = v
+    }
     fun attachContext(context: Context) {
         ctx = context.applicationContext
         if (persistEnabled) loadFromDisk()
@@ -122,15 +130,17 @@ object ToolStats {
         stats.entries.sortedByDescending { it.value.lastAt }.forEach { (name, s) ->
             val snapshot = s
             val avgMicros = if (snapshot.calls > 0) snapshot.totalMicros / snapshot.calls else 0
-            arr.put(JSONObject()
-                .put("tool", name)
-                .put("calls", snapshot.calls)
-                .put("ok", snapshot.ok)
-                .put("failed", snapshot.failed)
-                .put("avgMs", avgMicros / 1000.0)
-                .put("maxMs", snapshot.maxMicros / 1000.0)
-                .put("lastError", snapshot.lastError)
-                .put("lastAt", snapshot.lastAt))
+            arr.put(
+                JSONObject()
+                    .put("tool", name)
+                    .put("calls", snapshot.calls)
+                    .put("ok", snapshot.ok)
+                    .put("failed", snapshot.failed)
+                    .put("avgMs", avgMicros / 1000.0)
+                    .put("maxMs", snapshot.maxMicros / 1000.0)
+                    .put("lastError", snapshot.lastError)
+                    .put("lastAt", snapshot.lastAt)
+            )
             totalCalls += snapshot.calls
             totalOk += snapshot.ok
             totalFailed += snapshot.failed

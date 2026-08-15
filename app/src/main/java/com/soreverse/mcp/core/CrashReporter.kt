@@ -24,16 +24,15 @@ object CrashReporter {
 
     fun isCrashProcess(): Boolean = currentProcessName().endsWith(":crash")
 
-    fun currentProcessName(): String =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            android.app.Application.getProcessName()
-        } else {
-            runCatching {
-                File("/proc/self/cmdline")
-                    .readText()
-                    .trimEnd('\u0000')
-            }.getOrDefault("unknown")
-        }
+    fun currentProcessName(): String = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        android.app.Application.getProcessName()
+    } else {
+        runCatching {
+            File("/proc/self/cmdline")
+                .readText()
+                .trimEnd('\u0000')
+        }.getOrDefault("unknown")
+    }
 
     fun install(context: Context) {
         if (isCrashProcess()) return
@@ -56,8 +55,8 @@ object CrashReporter {
                         .addFlags(
                             Intent.FLAG_ACTIVITY_NEW_TASK or
                                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS,
-                        ),
+                                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                        )
                 )
             }
             if (waitForFile(readyFile, READY_TIMEOUT_MS)) {
@@ -98,7 +97,9 @@ object CrashReporter {
 
     private fun buildReport(thread: Thread, throwable: Throwable): String = buildString {
         appendLine("SOMCP crash report")
-        appendLine("Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.US).format(Date())}")
+        appendLine(
+            "Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.US).format(Date())}"
+        )
         appendLine("Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         appendLine("Process: ${currentProcessName()} (${Process.myPid()})")
         appendLine("Thread: ${thread.name}")
@@ -152,8 +153,10 @@ object CrashReporter {
         }
     }
 
-    private fun validatedToken(token: String): String? =
-        token.takeIf { it.length in 1..64 && it.all { char -> char.isLetterOrDigit() || char == '-' } }
+    private fun validatedToken(token: String): String? = token.takeIf {
+        it.length in 1..64 &&
+            it.all { char -> char.isLetterOrDigit() || char == '-' }
+    }
 
     private fun reportFile(context: Context, token: String) =
         File(context.filesDir, "$FILE_PREFIX$token.txt")

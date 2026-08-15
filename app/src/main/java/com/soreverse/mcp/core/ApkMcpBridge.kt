@@ -1,15 +1,15 @@
 package com.soreverse.mcp.core
 
 import com.soreverse.mcp.core.AppLog
-import org.json.JSONArray
-import org.json.JSONObject
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Bridge to multiple external "APK MCP" servers (MT Manager, NP Manager, etc.).
@@ -31,7 +31,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         val title: String?,
         val description: String?,
         val inputSchema: JSONObject?,
-        val outputSchema: JSONObject?,
+        val outputSchema: JSONObject?
     )
 
     data class State(
@@ -45,7 +45,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         val probes: Long = 0,
         val probeFailures: Long = 0,
         val totalLatencyMs: Long = 0,
-        val maxLatencyMs: Long = 0,
+        val maxLatencyMs: Long = 0
     ) {
         fun avgLatencyMs(): Long = if (probes > 0) totalLatencyMs / probes else 0
         fun lossRate(): Double = if (probes == 0L) 0.0 else probeFailures.toDouble() / probes
@@ -64,12 +64,19 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         }
 
         @Volatile private var healthThread: Thread? = null
+
         @Volatile private var healthStop = false
 
         @Synchronized
         fun probe(timeoutMs: Int = 8000): State {
             try {
-                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
+                val req =
+                    buildJsonRpc(
+                        url,
+                        "tools/list",
+                        JSONObject(),
+                        id = connIdCounter.incrementAndGet()
+                    )
                 val start = System.nanoTime()
                 val resp = post(req)
                 val latencyMs = (System.nanoTime() - start) / 1_000_000
@@ -87,17 +94,26 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                     probes = prev.probes + 1,
                     probeFailures = prev.probeFailures,
                     totalLatencyMs = prev.totalLatencyMs + latencyMs,
-                    maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs),
+                    maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs)
                 )
                 state = s
                 val label = prefixLabel(prefix)
-                AppLog.i("apk-mcp bridge online: ${parsed.size} tools from $url ($label, ${latencyMs}ms)")
+                AppLog.i(
+                    "apk-mcp bridge online: ${parsed.size} tools from $url ($label, ${latencyMs}ms)"
+                )
                 return s
             } catch (e: Exception) {
                 val prev = state
-                val s = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName,
-                    probes = prev.probes + 1, probeFailures = prev.probeFailures + 1,
-                    totalLatencyMs = prev.totalLatencyMs, maxLatencyMs = prev.maxLatencyMs)
+                val s = State(
+                    url = url,
+                    online = false,
+                    lastError =
+                        e.message ?: e.javaClass.simpleName,
+                    probes = prev.probes + 1,
+                    probeFailures = prev.probeFailures + 1,
+                    totalLatencyMs = prev.totalLatencyMs,
+                    maxLatencyMs = prev.maxLatencyMs
+                )
                 state = s
                 AppLog.w("apk-mcp probe failed: $url ${e.message}")
                 return s
@@ -105,32 +121,55 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         }
 
         @Synchronized
-        fun ping(): State {
-            return try {
-                val req = buildJsonRpc(url, "initialize", JSONObject().put("client", "somcp-ping"), id = connIdCounter.incrementAndGet())
-                val start = System.nanoTime()
-                post(req)
-                val latencyMs = (System.nanoTime() - start) / 1_000_000
-                val prev = state
-                val s = if (!prev.online) {
-                    prev.copy(lastLatencyMs = latencyMs, lastCheckedAt = System.currentTimeMillis(),
-                        probes = prev.probes + 1, lastError = "", online = false, tools = prev.tools)
-                } else {
-                    State(url = url, online = true, lastError = "", tools = prev.tools,
-                        lastCheckedAt = System.currentTimeMillis(), lastLatencyMs = latencyMs,
-                        probes = prev.probes + 1, probeFailures = prev.probeFailures,
-                        totalLatencyMs = prev.totalLatencyMs + latencyMs, maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs))
-                }
-                state = s
-                s
-            } catch (e: Exception) {
-                val prev = state
-                val s = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName,
-                    probes = prev.probes + 1, probeFailures = prev.probeFailures + 1,
-                    totalLatencyMs = prev.totalLatencyMs, maxLatencyMs = prev.maxLatencyMs)
-                state = s
-                s
+        fun ping(): State = try {
+            val req =
+                buildJsonRpc(
+                    url,
+                    "initialize",
+                    JSONObject().put("client", "somcp-ping"),
+                    id = connIdCounter.incrementAndGet()
+                )
+            val start = System.nanoTime()
+            post(req)
+            val latencyMs = (System.nanoTime() - start) / 1_000_000
+            val prev = state
+            val s = if (!prev.online) {
+                prev.copy(
+                    lastLatencyMs = latencyMs,
+                    lastCheckedAt = System.currentTimeMillis(),
+                    probes = prev.probes + 1,
+                    lastError = "",
+                    online = false,
+                    tools = prev.tools
+                )
+            } else {
+                State(
+                    url = url, online = true, lastError = "", tools = prev.tools,
+                    lastCheckedAt = System.currentTimeMillis(), lastLatencyMs = latencyMs,
+                    probes = prev.probes + 1, probeFailures = prev.probeFailures,
+                    totalLatencyMs = prev.totalLatencyMs + latencyMs,
+                    maxLatencyMs = maxOf(
+                        prev.maxLatencyMs,
+                        latencyMs
+                    )
+                )
             }
+            state = s
+            s
+        } catch (e: Exception) {
+            val prev = state
+            val s = State(
+                url = url,
+                online = false,
+                lastError =
+                    e.message ?: e.javaClass.simpleName,
+                probes = prev.probes + 1,
+                probeFailures = prev.probeFailures + 1,
+                totalLatencyMs = prev.totalLatencyMs,
+                maxLatencyMs = prev.maxLatencyMs
+            )
+            state = s
+            s
         }
 
         fun callTool(name: String, arguments: JSONObject): JSONObject {
@@ -140,7 +179,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             }
             val params = JSONObject().put("name", name).put("arguments", arguments)
             return try {
-                val req = buildJsonRpc(url, "tools/call", params, id = connIdCounter.incrementAndGet())
+                val req =
+                    buildJsonRpc(url, "tools/call", params, id = connIdCounter.incrementAndGet())
                 val resp = post(req)
                 parseToolResult(resp)
             } catch (e: Exception) {
@@ -155,27 +195,58 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 while (!healthStop && !Thread.currentThread().isInterrupted) {
                     try {
                         Thread.sleep(intervalMs)
-                    } catch (_: InterruptedException) { break }
+                    } catch (_: InterruptedException) {
+                        break
+                    }
                     if (healthStop) break
                     try {
-                        val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
+                        val req =
+                            buildJsonRpc(
+                                url,
+                                "tools/list",
+                                JSONObject(),
+                                id = connIdCounter.incrementAndGet()
+                            )
                         val resp = post(req)
                         val parsed = parseTools(resp)
                         val prefix = detectPrefix(parsed)
                         if (prefix != null) {
                             val cur = state
-                            state = State(url = url, online = true, lastError = "", tools = parsed, toolPrefix = prefix, lastCheckedAt = System.currentTimeMillis())
-                            if (!cur.online) AppLog.i("apk-mcp health: $url back online (${parsed.size} tools, prefix=$prefix)")
+                            state =
+                                State(
+                                    url = url,
+                                    online = true,
+                                    lastError = "",
+                                    tools = parsed,
+                                    toolPrefix = prefix,
+                                    lastCheckedAt = System.currentTimeMillis()
+                                )
+                            if (!cur.online) {
+                                AppLog.i(
+                                    "apk-mcp health: $url back online (${parsed.size} tools, prefix=$prefix)"
+                                )
+                            }
                         }
                     } catch (e: Exception) {
                         val cur = state
                         if (cur.online) {
-                            state = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName, tools = emptyList(), lastCheckedAt = System.currentTimeMillis())
+                            state =
+                                State(
+                                    url = url,
+                                    online = false,
+                                    lastError =
+                                        e.message ?: e.javaClass.simpleName,
+                                    tools = emptyList(),
+                                    lastCheckedAt = System.currentTimeMillis()
+                                )
                             AppLog.w("apk-mcp health: $url marked offline (${e.message})")
                         }
                     }
                 }
-            }, "apk-mcp-health-$url").apply { isDaemon = true; start() }
+            }, "apk-mcp-health-$url").apply {
+                isDaemon = true
+                start()
+            }
         }
 
         fun stopHealthMonitor() {
@@ -184,14 +255,21 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             healthThread = null
         }
 
-        private fun buildJsonRpc(url: String, method: String, params: JSONObject, id: Int): Request {
+        private fun buildJsonRpc(
+            url: String,
+            method: String,
+            params: JSONObject,
+            id: Int
+        ): Request {
             val body = JSONObject()
                 .put("jsonrpc", "2.0")
                 .put("id", id)
                 .put("method", method)
                 .put("params", params)
                 .toString()
-            val builder = Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType()))
+            val builder = Request.Builder().url(
+                url
+            ).post(body.toRequestBody("application/json".toMediaType()))
             if (token.isNotBlank()) builder.safeHeader("Authorization", "Bearer $token")
             return builder.build()
         }
@@ -217,7 +295,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                         title = t.optString("title").takeIf { it.isNotBlank() },
                         description = t.optString("description").takeIf { it.isNotBlank() },
                         inputSchema = t.optJSONObject("inputSchema"),
-                        outputSchema = t.optJSONObject("outputSchema"),
+                        outputSchema = t.optJSONObject("outputSchema")
                     )
                 )
             }
@@ -230,11 +308,14 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             return (result as? JSONObject) ?: JSONObject().put("raw", body)
         }
 
-        private fun errorResult(name: String, msg: String): JSONObject {
-            return JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "APK MCP error [$name]: $msg")))
-                .put("isError", true)
-                .put("source", "apk-mcp-bridge")
-        }
+        private fun errorResult(name: String, msg: String): JSONObject = JSONObject().put(
+            "content",
+            JSONArray().put(
+                JSONObject().put("type", "text").put("text", "APK MCP error [$name]: $msg")
+            )
+        )
+            .put("isError", true)
+            .put("source", "apk-mcp-bridge")
 
         private fun detectPrefix(tools: List<ToolDef>): String? {
             tools.firstOrNull { it.name.startsWith(MT_PREFIX) }?.let { return MT_PREFIX }
@@ -294,7 +375,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         }
     }
 
-    fun configured(): Boolean = settings.apkMcpConfigs.isNotEmpty() || settings.apkMcpUrl.isNotBlank()
+    fun configured(): Boolean =
+        settings.apkMcpConfigs.isNotEmpty() || settings.apkMcpUrl.isNotBlank()
 
     /**
      * Auto-discover APK MCP servers on the standard ports.
@@ -310,7 +392,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             if (connections.any { it.url.contains(":$p/") }) continue
             val candidates = listOf(
                 "http://127.0.0.1:$p/mcp",
-                "http://localhost:$p/mcp",
+                "http://localhost:$p/mcp"
             )
             for (url in candidates) {
                 try {
@@ -325,7 +407,11 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                             settings.apkMcpConfigs = configs
                         }
                         if (firstState == null) firstState = st
-                        AppLog.i("apk-mcp auto-discovered ${prefixLabel(st.toolPrefix)} at $url (${st.tools.size} tools)")
+                        AppLog.i(
+                            "apk-mcp auto-discovered ${prefixLabel(
+                                st.toolPrefix
+                            )} at $url (${st.tools.size} tools)"
+                        )
                         break
                     }
                 } catch (_: Exception) {}
@@ -461,7 +547,10 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             offlineMsg.append("${conn.url} (${conn.state.online}) ")
         }
         if (connections.isEmpty()) offlineMsg.append("(none)")
-        return JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", offlineMsg.toString())))
+        return JSONObject().put(
+            "content",
+            JSONArray().put(JSONObject().put("type", "text").put("text", offlineMsg.toString()))
+        )
             .put("isError", true)
             .put("source", "apk-mcp-bridge")
     }
@@ -486,20 +575,21 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         for (config in configs) {
             val conn = connections.firstOrNull { it.url == config.url }
             val st = conn?.state ?: State(url = config.url)
-            bridges.put(JSONObject()
-                .put("url", config.url)
-                .put("online", st.online)
-                .put("toolPrefix", st.toolPrefix)
-                .put("toolCount", st.tools.size)
-                .put("lastError", st.lastError)
-                .put("lastCheckedAt", st.lastCheckedAt)
-                .put("lastLatencyMs", st.lastLatencyMs)
-                .put("avgLatencyMs", st.avgLatencyMs())
-                .put("maxLatencyMs", st.maxLatencyMs)
-                .put("probes", st.probes)
-                .put("probeFailures", st.probeFailures)
-                .put("lossRate", st.lossRate())
-                .put("tools", JSONArray().apply { st.tools.forEach { put(it.name) } })
+            bridges.put(
+                JSONObject()
+                    .put("url", config.url)
+                    .put("online", st.online)
+                    .put("toolPrefix", st.toolPrefix)
+                    .put("toolCount", st.tools.size)
+                    .put("lastError", st.lastError)
+                    .put("lastCheckedAt", st.lastCheckedAt)
+                    .put("lastLatencyMs", st.lastLatencyMs)
+                    .put("avgLatencyMs", st.avgLatencyMs())
+                    .put("maxLatencyMs", st.maxLatencyMs)
+                    .put("probes", st.probes)
+                    .put("probeFailures", st.probeFailures)
+                    .put("lossRate", st.lossRate())
+                    .put("tools", JSONArray().apply { st.tools.forEach { put(it.name) } })
             )
         }
         val firstOnline = connections.firstOrNull { it.state.online }
@@ -515,16 +605,33 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             put("toolPrefix", firstOnline?.state?.toolPrefix ?: first?.state?.toolPrefix ?: "")
             put("toolCount", firstOnline?.state?.tools?.size ?: 0)
             put("lastError", firstOnline?.state?.lastError ?: first?.state?.lastError ?: "")
-            put("lastCheckedAt", firstOnline?.state?.lastCheckedAt ?: first?.state?.lastCheckedAt ?: 0)
-            put("lastLatencyMs", firstOnline?.state?.lastLatencyMs ?: first?.state?.lastLatencyMs ?: 0)
-            put("avgLatencyMs", firstOnline?.state?.avgLatencyMs() ?: first?.state?.avgLatencyMs() ?: 0)
+            put(
+                "lastCheckedAt",
+                firstOnline?.state?.lastCheckedAt ?: first?.state?.lastCheckedAt ?: 0
+            )
+            put(
+                "lastLatencyMs",
+                firstOnline?.state?.lastLatencyMs ?: first?.state?.lastLatencyMs ?: 0
+            )
+            put(
+                "avgLatencyMs",
+                firstOnline?.state?.avgLatencyMs() ?: first?.state?.avgLatencyMs() ?: 0
+            )
             put("maxLatencyMs", firstOnline?.state?.maxLatencyMs ?: first?.state?.maxLatencyMs ?: 0)
             put("probes", firstOnline?.state?.probes ?: first?.state?.probes ?: 0)
-            put("probeFailures", firstOnline?.state?.probeFailures ?: first?.state?.probeFailures ?: 0)
+            put(
+                "probeFailures",
+                firstOnline?.state?.probeFailures ?: first?.state?.probeFailures ?: 0
+            )
             put("lossRate", firstOnline?.state?.lossRate() ?: first?.state?.lossRate() ?: 0.0)
-            put("tools", JSONArray().apply {
-                (firstOnline?.state?.tools ?: first?.state?.tools ?: emptyList()).forEach { put(it.name) }
-            })
+            put(
+                "tools",
+                JSONArray().apply {
+                    (firstOnline?.state?.tools ?: first?.state?.tools ?: emptyList()).forEach {
+                        put(it.name)
+                    }
+                }
+            )
         }
     }
 

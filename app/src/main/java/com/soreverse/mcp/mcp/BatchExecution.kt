@@ -4,10 +4,10 @@ import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.intValue
 import com.soreverse.mcp.core.ok
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.regex.Matcher
 import java.util.regex.Pattern
+import org.json.JSONArray
+import org.json.JSONObject
 
 internal object BatchTemplateResolver {
     private val keyPattern = Pattern.compile("\\$\\{([a-zA-Z0-9_]+)((?:\\.[^\\s\"\\}]+)*?)\\}")
@@ -31,11 +31,21 @@ internal object BatchTemplateResolver {
                     } else {
                         val field = raw.substring(0, bracket)
                         val access = raw.substring(bracket)
-                        val stepped = if (field.isBlank() || field == "]") current else if (current.has(field)) current.get(field) else null
+                        val stepped = if (field.isBlank() ||
+                            field == "]"
+                        ) {
+                            current
+                        } else if (current.has(field)) {
+                            current.get(field)
+                        } else {
+                            null
+                        }
                         stepArrayAccess(stepped, access)
                     }
                 }
+
                 is JSONArray -> stepArrayAccess(current, raw)
+
                 else -> null
             }
         }
@@ -44,8 +54,13 @@ internal object BatchTemplateResolver {
 
     private fun substituteValue(value: Any?, keyed: Map<String, JSONObject>): Any? = when (value) {
         is String -> substituteString(value, keyed)
+
         is JSONObject -> substitute(value, keyed)
-        is JSONArray -> JSONArray().also { out -> for (i in 0 until value.length()) out.put(substituteValue(value.get(i), keyed)) }
+
+        is JSONArray -> JSONArray().also { out ->
+            for (i in 0 until value.length()) out.put(substituteValue(value.get(i), keyed))
+        }
+
         else -> value
     }
 
@@ -106,15 +121,33 @@ internal class BatchExecutor(
     private val executeTool: (String, JSONObject) -> JSONObject,
     private val ensureSnapshot: (JSONObject, MutableMap<String, String>) -> JSONObject?,
     private val rollbackSnapshots: (Map<String, String>) -> JSONArray,
-    private val releaseSnapshots: (Map<String, String>) -> Unit = {},
+    private val releaseSnapshots: (Map<String, String>) -> Unit = {}
 ) {
     fun execute(args: JSONObject): JSONObject {
         val steps = args.optJSONArray("steps") ?: JSONArray()
         val stopOnError = if (args.has("stopOnError")) args.bool("stopOnError", true) else true
         val transactional = args.bool("transactional", false)
         val cap = args.intValue("maxSteps", 20).coerceIn(1, 50)
-        if (steps.length() == 0) return err("BAD_REQUEST", "steps[] is required and must not be empty", "steps", JSONArray())
-        if (steps.length() > cap) return err("TOO_MANY_STEPS", "Too many steps (got ${steps.length()}, max $cap). Split the pipeline or pass maxSteps (<=50).", "steps", steps.length())
+        if (steps.length() ==
+            0
+        ) {
+            return err(
+                "BAD_REQUEST",
+                "steps[] is required and must not be empty",
+                "steps",
+                JSONArray()
+            )
+        }
+        if (steps.length() >
+            cap
+        ) {
+            return err(
+                "TOO_MANY_STEPS",
+                "Too many steps (got ${steps.length()}, max $cap). Split the pipeline or pass maxSteps (<=50).",
+                "steps",
+                steps.length()
+            )
+        }
 
         val results = JSONArray()
         val keyed = HashMap<String, JSONObject>()
@@ -123,42 +156,119 @@ internal class BatchExecutor(
             val step = steps.optJSONObject(index) ?: continue
             val toolName = step.optString("tool")
             if (toolName.isBlank()) {
-                results.put(JSONObject().put("step", index).put("ok", false).put("error", JSONObject().put("code", "BAD_REQUEST").put("message", "step.tool is required")))
-                if (stopOnError) return ok(JSONObject().put("steps", results).put("executedCount", index).put("aborted", true))
+                results.put(
+                    JSONObject().put(
+                        "step",
+                        index
+                    ).put(
+                        "ok",
+                        false
+                    ).put(
+                        "error",
+                        JSONObject().put(
+                            "code",
+                            "BAD_REQUEST"
+                        ).put("message", "step.tool is required")
+                    )
+                )
+                if (stopOnError) {
+                    return ok(
+                        JSONObject().put(
+                            "steps",
+                            results
+                        ).put("executedCount", index).put("aborted", true)
+                    )
+                }
                 continue
             }
-            val resolvedArgs = BatchTemplateResolver.substitute(step.optJSONObject("arguments") ?: JSONObject(), keyed)
-            val snapshotFailure = if (transactional) ensureSnapshot(resolvedArgs, snapshots) else null
+            val resolvedArgs = BatchTemplateResolver.substitute(
+                step.optJSONObject("arguments") ?: JSONObject(),
+                keyed
+            )
+            val snapshotFailure = if (transactional) {
+                ensureSnapshot(
+                    resolvedArgs,
+                    snapshots
+                )
+            } else {
+                null
+            }
             if (snapshotFailure != null) {
-                results.put(JSONObject().put("step", index).put("tool", toolName).put("arguments", resolvedArgs).put("ok", false).put("result", snapshotFailure))
-                return ok(JSONObject()
-                    .put("steps", results)
-                    .put("executedCount", index)
-                    .put("aborted", true)
-                    .put("transactional", true)
-                    .put("rollback", rollbackSnapshots(snapshots))
-                    .put("hint", "The transaction was aborted because its rollback snapshot could not be created."))
+                results.put(
+                    JSONObject().put(
+                        "step",
+                        index
+                    ).put(
+                        "tool",
+                        toolName
+                    ).put("arguments", resolvedArgs).put("ok", false).put("result", snapshotFailure)
+                )
+                return ok(
+                    JSONObject()
+                        .put("steps", results)
+                        .put("executedCount", index)
+                        .put("aborted", true)
+                        .put("transactional", true)
+                        .put("rollback", rollbackSnapshots(snapshots))
+                        .put(
+                            "hint",
+                            "The transaction was aborted because its rollback snapshot could not be created."
+                        )
+                )
             }
             val resultKey = step.optString("resultKey", "").trim()
             val payload = try {
                 executeTool(toolName, resolvedArgs)
             } catch (error: Exception) {
-                JSONObject().put("ok", false).put("error", JSONObject().put("code", "STEP_EXCEPTION").put("message", error.message ?: error.javaClass.simpleName))
+                JSONObject().put("ok", false).put(
+                    "error",
+                    JSONObject().put("code", "STEP_EXCEPTION").put(
+                        "message",
+                        error.message ?: error.javaClass.simpleName
+                    )
+                )
             }
             val succeeded = payload.optBoolean("ok", true)
-            results.put(JSONObject().put("step", index).put("tool", toolName).put("resultKey", resultKey).put("arguments", resolvedArgs).put("ok", succeeded).put("result", payload))
+            results.put(
+                JSONObject().put(
+                    "step",
+                    index
+                ).put(
+                    "tool",
+                    toolName
+                ).put(
+                    "resultKey",
+                    resultKey
+                ).put("arguments", resolvedArgs).put("ok", succeeded).put("result", payload)
+            )
             if (resultKey.matches(Regex("^[a-zA-Z0-9_]+$"))) keyed[resultKey] = payload
             if (!succeeded && stopOnError) {
-                return ok(JSONObject()
-                    .put("steps", results)
-                    .put("executedCount", index + 1)
-                    .put("aborted", true)
-                    .put("transactional", transactional)
-                    .put("rollback", if (transactional) rollbackSnapshots(snapshots) else JSONArray())
-                    .put("hint", "stopOnError=true aborted the pipeline at the first failing step. Pass stopOnError=false to execute every step regardless."))
+                return ok(
+                    JSONObject()
+                        .put("steps", results)
+                        .put("executedCount", index + 1)
+                        .put("aborted", true)
+                        .put("transactional", transactional)
+                        .put(
+                            "rollback",
+                            if (transactional) rollbackSnapshots(snapshots) else JSONArray()
+                        )
+                        .put(
+                            "hint",
+                            "stopOnError=true aborted the pipeline at the first failing step. Pass stopOnError=false to execute every step regardless."
+                        )
+                )
             }
         }
         if (transactional) releaseSnapshots(snapshots)
-        return ok(JSONObject().put("steps", results).put("executedCount", results.length()).put("transactional", transactional).put("aborted", false))
+        return ok(
+            JSONObject().put(
+                "steps",
+                results
+            ).put(
+                "executedCount",
+                results.length()
+            ).put("transactional", transactional).put("aborted", false)
+        )
     }
 }
