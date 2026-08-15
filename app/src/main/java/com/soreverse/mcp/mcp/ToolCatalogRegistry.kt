@@ -15,12 +15,22 @@ class ToolCatalogRegistry(handlers: List<ToolHandler>) {
 
     fun leanNames(popularity: Map<String, Long>? = null, promotionSlots: Int = 5): List<String> {
         val base = handlers
-            .filter { it.meta.cls == ToolClass.CORE || it.meta.cls == ToolClass.META || it.meta.category == "lowlevel" }
+            .filter {
+                it.meta.cls == ToolClass.CORE || it.meta.cls == ToolClass.META ||
+                    it.meta.category == "lowlevel"
+            }
             .mapTo(linkedSetOf()) { it.meta.name }
         if (popularity.isNullOrEmpty() || promotionSlots <= 0) return base.toList()
         val promoted = handlers.withIndex()
-            .filter { it.value.meta.cls == ToolClass.EXTRA && popularity.containsKey(it.value.meta.name) }
-            .sortedWith(compareByDescending<IndexedValue<ToolHandler>> { popularity.getValue(it.value.meta.name) }.thenBy { it.index })
+            .filter {
+                it.value.meta.cls == ToolClass.EXTRA &&
+                    popularity.containsKey(it.value.meta.name)
+            }
+            .sortedWith(
+                compareByDescending<IndexedValue<ToolHandler>> {
+                    popularity.getValue(it.value.meta.name)
+                }.thenBy { it.index }
+            )
             .take(promotionSlots)
             .map { it.value.meta.name }
         base.addAll(promoted)

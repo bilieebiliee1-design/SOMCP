@@ -2,19 +2,19 @@ package com.soreverse.mcp.core
 
 import android.content.Context
 import android.content.Intent
-import org.json.JSONObject
-import java.io.File
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
-import java.net.URI
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.URI
 import java.util.concurrent.atomic.AtomicReference
 import java.util.regex.Pattern
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 
 class CloudflareTunnelManager(private val context: Context, private val settings: SettingsStore) {
 
@@ -38,7 +38,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         val publicUrl: String? = null,
         val targetPort: Int = 0,
         val message: String = "",
-        val pid: Int = 0,
+        val pid: Int = 0
     )
 
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -56,12 +56,16 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     private var process: Process? = null
     private var watchThread: Thread? = null
     private var healthThread: Thread? = null
+
     @Volatile private var stopRequested = false
+
     @Volatile private var terminalFailure = false
     private val generation = java.util.concurrent.atomic.AtomicInteger(0)
 
     @Volatile private var runningSinceMs = 0L
+
     @Volatile private var accumulatedRunningMs = 0L
+
     @Volatile private var lastKeepaliveRestartMs = 0L
     private val keepaliveRestarts = java.util.concurrent.atomic.AtomicInteger(0)
     private val probeFailures = java.util.concurrent.atomic.AtomicInteger(0)
@@ -82,7 +86,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         try {
             val m = Process::class.java.getMethod("getPid")
             (m.invoke(p) as Int)
-        } catch (_: Throwable) { 0 }
+        } catch (_: Throwable) {
+            0
+        }
     }
 
     /**
@@ -102,7 +108,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         publicUrl: String? = null,
         message: String? = null,
         pid: Int = 0,
-        targetPort: Int? = null,
+        targetPort: Int? = null
     ): TunnelStatus {
         val prev = _status.get()
         if (state == State.RUNNING && prev.state != State.RUNNING) {
@@ -117,7 +123,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             publicUrl = publicUrl ?: if (state == State.RUNNING) prev.publicUrl else null,
             targetPort = targetPort ?: prev.targetPort,
             message = message ?: prev.message,
-            pid = if (pid != 0) pid else prev.pid,
+            pid = if (pid != 0) pid else prev.pid
         )
         _status.set(next)
         return next
@@ -207,7 +213,12 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         startInternal(targetPort, mode, token, userInitiated = true)
 
     @Synchronized
-    private fun startInternal(targetPort: Int, mode: Mode, token: String, userInitiated: Boolean): TunnelStatus {
+    private fun startInternal(
+        targetPort: Int,
+        mode: Mode,
+        token: String,
+        userInitiated: Boolean
+    ): TunnelStatus {
         if (userInitiated) {
             stopRequested = false
             terminalFailure = false
@@ -231,16 +242,24 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         // we honour that choice and start the tunnel, logging a clear warning
         // about the exposure instead of refusing.
         if (settings.authEnabled && settings.accessToken.isBlank()) {
-            return fail(mode, targetPort, "Authentication is enabled but no access token is set. Set an access token or disable authentication before starting the tunnel.")
+            return fail(
+                mode,
+                targetPort,
+                "Authentication is enabled but no access token is set. Set an access token or disable authentication before starting the tunnel."
+            )
         }
         if (!settings.authEnabled) {
-            AppLog.w("Starting Cloudflare tunnel WITHOUT authentication: the MCP service will be reachable publicly with no token. Enable authentication in settings if this is not intended.")
+            AppLog.w(
+                "Starting Cloudflare tunnel WITHOUT authentication: the MCP service will be reachable publicly with no token. Enable authentication in settings if this is not intended."
+            )
         }
         // Already running on the same target with the same mode and a live
         // process — nothing to do. Avoids costly stop/restart churn from
         // keepalive or client retries when the tunnel is healthy.
         val cur = _status.get()
-        if (cur.state == State.RUNNING && cur.mode == mode && cur.targetPort == targetPort && process?.isAlive == true) {
+        if (cur.state == State.RUNNING && cur.mode == mode && cur.targetPort == targetPort &&
+            process?.isAlive == true
+        ) {
             return cur
         }
         val runGeneration = generation.incrementAndGet()
@@ -254,7 +273,11 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         totalRestarts.incrementAndGet()
         val bin = binary()
         if (bin == null) {
-            return fail(mode, targetPort, "cloudflared binary not found — download it from the tunnel settings page")
+            return fail(
+                mode,
+                targetPort,
+                "cloudflared binary not found — download it from the tunnel settings page"
+            )
         }
         transitionTo(State.STARTING, mode, publicUrl = null, message = "starting")
         publish()
@@ -266,7 +289,12 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             }
         } catch (e: Exception) {
             if (stopRequested || generation.get() != runGeneration) {
-                return transitionTo(State.STOPPED, mode = Mode.OFF, publicUrl = null, message = "stopped")
+                return transitionTo(
+                    State.STOPPED,
+                    mode = Mode.OFF,
+                    publicUrl = null,
+                    message = "stopped"
+                )
             }
             return fail(mode, targetPort, e.message ?: e.javaClass.simpleName)
         }
@@ -297,7 +325,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             // Same two-stage shutdown rationale as stop(): give the native
             // cloudflared child a brief orderly exit window before force-killing.
             runCatching { p.destroy() }
-            val exited = runCatching { p.waitFor(800, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrDefault(false)
+            val exited = runCatching {
+                p.waitFor(800, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
             if (!exited) {
                 runCatching { p.destroyForcibly() }
                 runCatching { p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }
@@ -307,7 +337,14 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     }
 
     private fun fail(mode: Mode, targetPort: Int, msg: String): TunnelStatus {
-        val s = transitionTo(State.FAILED, mode, publicUrl = null, message = msg, targetPort = targetPort)
+        val s =
+            transitionTo(
+                State.FAILED,
+                mode,
+                publicUrl = null,
+                message = msg,
+                targetPort = targetPort
+            )
         AppLog.w("tunnel: $msg")
         publish()
         return s
@@ -350,7 +387,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         if (p != null) {
             Thread({
                 runCatching { p.destroy() }
-                val exited = runCatching { p.waitFor(800, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrDefault(false)
+                val exited = runCatching {
+                    p.waitFor(800, java.util.concurrent.TimeUnit.MILLISECONDS)
+                }.getOrDefault(false)
                 if (!exited) runCatching { p.destroyForcibly() }
             }, "cloudflared-stop").apply { isDaemon = true }.start()
         }
@@ -362,7 +401,13 @@ class CloudflareTunnelManager(private val context: Context, private val settings
 
     fun resetTunnelStats() {
         accumulatedRunningMs = 0L
-        if (_status.get().state == State.RUNNING) runningSinceMs = System.currentTimeMillis() else runningSinceMs = 0L
+        if (_status.get().state ==
+            State.RUNNING
+        ) {
+            runningSinceMs = System.currentTimeMillis()
+        } else {
+            runningSinceMs = 0L
+        }
         keepaliveRestarts.set(0)
         probeFailures.set(0)
         probeOks.set(0)
@@ -372,7 +417,13 @@ class CloudflareTunnelManager(private val context: Context, private val settings
 
     fun tunnelStats(): JSONObject {
         val s = _status.get()
-        val currentRunningMs = if (s.state == State.RUNNING && runningSinceMs > 0) System.currentTimeMillis() - runningSinceMs else 0L
+        val currentRunningMs = if (s.state == State.RUNNING &&
+            runningSinceMs > 0
+        ) {
+            System.currentTimeMillis() - runningSinceMs
+        } else {
+            0L
+        }
         val totalRunningMs = accumulatedRunningMs + currentRunningMs
         return JSONObject().apply {
             put("state", s.state.name)
@@ -417,8 +468,13 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             """.trimIndent()
         )
         val cmd = mutableListOf(
-            bin.absolutePath, "tunnel", "--config", configFile.absolutePath,
-            "--no-autoupdate", "run", tunnel.tunnelId,
+            bin.absolutePath,
+            "tunnel",
+            "--config",
+            configFile.absolutePath,
+            "--no-autoupdate",
+            "run",
+            tunnel.tunnelId
         )
         val edges = edgeIps()
         if (stopRequested || generation.get() != runGeneration) return
@@ -438,7 +494,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             bin.absolutePath, "tunnel", "--no-autoupdate",
             "--edge-ip-version", settings.tunnelEdgeIpVersion,
             "--loglevel", settings.tunnelLogLevel,
-            "run", "--token", token,
+            "run", "--token", token
         )
         if (settings.tunnelProtocol != "auto") {
             val insertAt = cmd.indexOf("run")
@@ -454,7 +510,14 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         publicUrl?.let(::addHistoryUrl)
     }
 
-    private fun launch(bin: File, cmd: MutableList<String>, mode: Mode, url: String?, targetPort: Int, runGeneration: Int) {
+    private fun launch(
+        bin: File,
+        cmd: MutableList<String>,
+        mode: Mode,
+        url: String?,
+        targetPort: Int,
+        runGeneration: Int
+    ) {
         val safeCommand = cmd.mapIndexed { index, value ->
             if (index > 0 && cmd[index - 1] == "--token") "<redacted>" else value
         }
@@ -476,7 +539,14 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             return
         }
         process = p
-        transitionTo(State.STARTING, mode, publicUrl = url, message = "starting", targetPort = targetPort, pid = soReverseChildPid(p))
+        transitionTo(
+            State.STARTING,
+            mode,
+            publicUrl = url,
+            message = "starting",
+            targetPort = targetPort,
+            pid = soReverseChildPid(p)
+        )
         publish()
         val capturedUrl = url
         val t = Thread({
@@ -488,8 +558,15 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                         if (generation.get() != runGeneration || process !== p) return@forEach
                         parseTunnelLine(line, mode, runGeneration, p)?.let { detectedUrl ->
                             val current = _status.get()
-                            if (generation.get() == runGeneration && current.state in setOf(State.STARTING, State.RUNNING)) {
-                                transitionTo(State.RUNNING, mode, publicUrl = detectedUrl, message = "running")
+                            if (generation.get() == runGeneration &&
+                                current.state in setOf(State.STARTING, State.RUNNING)
+                            ) {
+                                transitionTo(
+                                    State.RUNNING,
+                                    mode,
+                                    publicUrl = detectedUrl,
+                                    message = "running"
+                                )
                                 publish()
                                 if (mode == Mode.NAMED) addHistoryUrl(detectedUrl)
                             }
@@ -507,11 +584,13 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                         State.STOPPED,
                         mode = Mode.OFF,
                         publicUrl = null,
-                        message = "process exited (code=$exit)",
+                        message = "process exited (code=$exit)"
                     )
                 }
                 if (generation.get() == runGeneration && wasRunning != State.STOPPED) {
-                    AppLog.w("cloudflare tunnel process exited code=$exit stopRequested=$stopRequested")
+                    AppLog.w(
+                        "cloudflare tunnel process exited code=$exit stopRequested=$stopRequested"
+                    )
                 }
                 if (generation.get() == runGeneration) publish()
             }
@@ -519,7 +598,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         t.isDaemon = true
         watchThread = t
         t.start()
-        AppLog.i("cloudflare tunnel ${mode.name.lowercase()} started -> ${capturedUrl ?: "(url pending)"} targeting :$targetPort")
+        AppLog.i(
+            "cloudflare tunnel ${mode.name.lowercase()} started -> ${capturedUrl ?: "(url pending)"} targeting :$targetPort"
+        )
         startHealthCheck(mode, targetPort, runGeneration)
     }
 
@@ -544,7 +625,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             // run(), and AMS killed com.soreverse.mcp. Catching it here and
             // breaking out of the loop lets the thread exit cleanly.
             try {
-                while (!stopRequested && generation.get() == runGeneration && Thread.currentThread().isInterrupted.not()) {
+                while (!stopRequested && generation.get() == runGeneration &&
+                    Thread.currentThread().isInterrupted.not()
+                ) {
                     Thread.sleep(probeIntervalMs)
                     if (stopRequested || generation.get() != runGeneration) break
                     val p = process ?: break
@@ -565,7 +648,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                             probeFailures.incrementAndGet()
                             if (downSince == 0L) downSince = System.currentTimeMillis()
                             val keep = settings.tunnelKeepAlive
-                            if (keep && System.currentTimeMillis() - lastRestartAt > 15_000 && System.currentTimeMillis() - downSince > 8_000) {
+                            if (keep && System.currentTimeMillis() - lastRestartAt > 15_000 &&
+                                System.currentTimeMillis() - downSince > 8_000
+                            ) {
                                 lastRestartAt = System.currentTimeMillis()
                                 lastKeepaliveRestartMs = lastRestartAt
                                 keepaliveRestarts.incrementAndGet()
@@ -584,7 +669,12 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                                 }
                                 AppLog.w("tunnel keepalive: local probe failed, restarting tunnel")
                                 try {
-                                    startInternal(targetPort, mode, settings.tunnelNamedToken, userInitiated = false)
+                                    startInternal(
+                                        targetPort,
+                                        mode,
+                                        settings.tunnelNamedToken,
+                                        userInitiated = false
+                                    )
                                     downSince = 0L
                                 } catch (e: Exception) {
                                     AppLog.w("tunnel keepalive restart failed: ${e.message}")
@@ -608,10 +698,21 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         }
     }.getOrDefault(false)
 
-    private val urlPattern: Pattern = Pattern.compile("https://[a-z0-9-]+\\.(trycloudflare\\.com|cfargotunnel\\.com)", Pattern.CASE_INSENSITIVE)
-    private val connPattern: Pattern = Pattern.compile("Registered tunnel connection|Registered tunnel connection connIndex=", Pattern.CASE_INSENSITIVE)
+    private val urlPattern: Pattern = Pattern.compile(
+        "https://[a-z0-9-]+\\.(trycloudflare\\.com|cfargotunnel\\.com)",
+        Pattern.CASE_INSENSITIVE
+    )
+    private val connPattern: Pattern = Pattern.compile(
+        "Registered tunnel connection|Registered tunnel connection connIndex=",
+        Pattern.CASE_INSENSITIVE
+    )
 
-    private fun parseTunnelLine(line: String, mode: Mode, runGeneration: Int, owner: Process): String? {
+    private fun parseTunnelLine(
+        line: String,
+        mode: Mode,
+        runGeneration: Int,
+        owner: Process
+    ): String? {
         if (generation.get() != runGeneration || process !== owner) return null
         val m = urlPattern.matcher(line)
         if (m.find()) return m.group()
@@ -630,10 +731,16 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         if (mode == Mode.NAMED && isTerminalNamedTunnelError(line)) {
             terminalFailure = true
             stopRequested = true
-            transitionTo(State.FAILED, mode, message = "permanent tunnel authorization failed; update the tunnel token and Cloudflare published application route")
+            transitionTo(
+                State.FAILED,
+                mode,
+                message = "permanent tunnel authorization failed; update the tunnel token and Cloudflare published application route"
+            )
             publish()
             runCatching { owner.destroy() }
-        } else if (line.contains("ERR", true) && (line.contains("tunnel") || line.contains("connect"))) {
+        } else if (line.contains("ERR", true) &&
+            (line.contains("tunnel") || line.contains("connect"))
+        ) {
             AppLog.w("tunnel error: $line")
         }
         return null
@@ -660,7 +767,12 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         return candidate.trimEnd('/')
     }
 
-    private data class QuickTunnel(val tunnelId: String, val hostname: String, val accountTag: String, val secret: String)
+    private data class QuickTunnel(
+        val tunnelId: String,
+        val hostname: String,
+        val accountTag: String,
+        val secret: String
+    )
 
     private fun registerQuickTunnel(): QuickTunnel {
         // Two attempts with a short fixed backoff. Earlier 3-attempt ×
@@ -677,13 +789,17 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                     .build()
                 client.newCall(req).execute().use { resp ->
                     val body = resp.body.string()
-                    if (!resp.isSuccessful) throw IllegalStateException("trycloudflare ${resp.code}: ${body.take(200)}")
+                    if (!resp.isSuccessful) {
+                        throw IllegalStateException(
+                            "trycloudflare ${resp.code}: ${body.take(200)}"
+                        )
+                    }
                     val result = JSONObject(body).getJSONObject("result")
                     return QuickTunnel(
                         tunnelId = result.getString("id"),
                         hostname = result.getString("hostname"),
                         accountTag = result.getString("account_tag"),
-                        secret = result.getString("secret"),
+                        secret = result.getString("secret")
                     )
                 }
             } catch (e: Exception) {
@@ -706,7 +822,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         // host lookup rather than N lookups serialised on the caller. Prior
         // version used InetAddress.getAllByName(h) in a loop, which on a
         // device with a flaky resolver could block the start path for ~10s.
-        val executor = java.util.concurrent.Executors.newFixedThreadPool(hosts.size.coerceAtLeast(1)) { r ->
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(
+            hosts.size.coerceAtLeast(1)
+        ) { r ->
             Thread(r, "clfl-dns").apply { isDaemon = true }
         }
         val futures = hosts.map { h ->

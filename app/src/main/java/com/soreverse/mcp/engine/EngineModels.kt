@@ -1,9 +1,9 @@
 package com.soreverse.mcp.engine
 
-import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
+import org.json.JSONObject
 
 data class Workspace(
     val id: String,
@@ -14,7 +14,7 @@ data class Workspace(
     val originalSha256: String,
     val analysisInputSource: String,
     val structureRecovery: JSONObject,
-    val edits: MutableMap<String, EditSession> = ConcurrentHashMap(),
+    val edits: MutableMap<String, EditSession> = ConcurrentHashMap()
 )
 
 internal data class SourceSummary(
@@ -22,7 +22,7 @@ internal data class SourceSummary(
     val bits: Int,
     val endian: String,
     val hasDebugInfo: Boolean,
-    val stripped: Boolean,
+    val stripped: Boolean
 )
 
 internal data class DisasmCursorState(
@@ -31,7 +31,7 @@ internal data class DisasmCursorState(
     val locator: String,
     val byteOffset: Int,
     val limit: Int,
-    val maxBytes: Int,
+    val maxBytes: Int
 )
 
 data class EditSession(
@@ -40,7 +40,7 @@ data class EditSession(
     var revision: Int = 0,
     val patches: MutableList<PatchRecord> = mutableListOf(),
     val snapshots: MutableList<Snapshot> = mutableListOf(),
-    val undone: MutableList<PatchRecord> = mutableListOf(),
+    val undone: MutableList<PatchRecord> = mutableListOf()
 ) {
     @Transient
     val lock: ReentrantLock = ReentrantLock()
@@ -53,7 +53,7 @@ internal data class EmulatorSession(
     val architecture: String,
     val data: ByteArray,
     val live: UnidbgEmulator.LiveSession? = null,
-    val createdAt: Long = System.currentTimeMillis(),
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 data class Snapshot(
@@ -63,7 +63,7 @@ data class Snapshot(
     val patchCount: Int,
     val dataCopy: ByteArray,
     val id: String = UUID.randomUUID().toString(),
-    val protected: Boolean = false,
+    val protected: Boolean = false
 )
 
 data class PatchRecord(
@@ -73,5 +73,5 @@ data class PatchRecord(
     val fileOffset: Int,
     val oldHex: String,
     val newHex: String,
-    val asm: String = "",
+    val asm: String = ""
 )

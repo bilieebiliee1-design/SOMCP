@@ -4,11 +4,11 @@ import android.util.Base64
 import com.lambdapioneer.argon2kt.Argon2Kt
 import com.lambdapioneer.argon2kt.Argon2Mode
 import java.io.ByteArrayOutputStream
-import org.json.JSONObject
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import org.json.JSONObject
 
 /**
  * Encrypts and decrypts backup files using Argon2id key derivation + AES-256-GCM.
@@ -42,10 +42,10 @@ object BackupCrypto {
     private const val SALT_SIZE = 16
     private const val NONCE_SIZE = 12
     private const val TAG_SIZE_BITS = 128
-    private const val ARGON2_MEMORY_KIB = 64 * 1024    // 64 MiB
+    private const val ARGON2_MEMORY_KIB = 64 * 1024 // 64 MiB
     private const val ARGON2_ITERATIONS = 3
     private const val ARGON2_PARALLELISM = 4
-    private const val ARGON2_KEY_LENGTH = 32            // 256 bits for AES-256
+    private const val ARGON2_KEY_LENGTH = 32 // 256 bits for AES-256
 
     private val random = SecureRandom()
     private val argon2 = Argon2Kt()
@@ -62,7 +62,11 @@ object BackupCrypto {
         val key = deriveKeyBinary(password, salt)
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
+        cipher.init(
+            Cipher.ENCRYPT_MODE,
+            SecretKeySpec(key, "AES"),
+            GCMParameterSpec(GCM_TAG_BITS, nonce)
+        )
         val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
 
         return ByteArrayOutputStream().apply {
@@ -105,7 +109,11 @@ object BackupCrypto {
         val key = deriveKeyBinary(password, salt)
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            SecretKeySpec(key, "AES"),
+            GCMParameterSpec(GCM_TAG_BITS, nonce)
+        )
         return cipher.doFinal(ciphertext).decodeToString()
     }
 
@@ -123,7 +131,7 @@ object BackupCrypto {
             mCostInKibibyte = 64 * 1024,
             tCostInIterations = 3,
             hashLengthInBytes = KEY_BYTES,
-            parallelism = 2,
+            parallelism = 2
         )
         return hash.rawHashAsByteArray()
     }
@@ -167,10 +175,9 @@ object BackupCrypto {
     }
 
     /** Check whether a JSON object is an encrypted backup (has the expected structure). */
-    fun isEncryptedBackup(obj: JSONObject): Boolean {
-        return obj.optInt("v", -1) == JSON_VERSION && obj.optString("alg", "") == ALGORITHM &&
-                obj.has("salt") && obj.has("nonce") && obj.has("ciphertext")
-    }
+    fun isEncryptedBackup(obj: JSONObject): Boolean =
+        obj.optInt("v", -1) == JSON_VERSION && obj.optString("alg", "") == ALGORITHM &&
+            obj.has("salt") && obj.has("nonce") && obj.has("ciphertext")
 
     private fun deriveKey(password: String, salt: ByteArray): ByteArray {
         val hash = argon2.hash(
@@ -180,7 +187,7 @@ object BackupCrypto {
             mCostInKibibyte = ARGON2_MEMORY_KIB,
             tCostInIterations = ARGON2_ITERATIONS,
             parallelism = ARGON2_PARALLELISM,
-            hashLengthInBytes = ARGON2_KEY_LENGTH,
+            hashLengthInBytes = ARGON2_KEY_LENGTH
         )
         return hash.rawHashAsByteArray()
     }
