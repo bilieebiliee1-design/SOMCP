@@ -2,8 +2,7 @@ package com.soreverse.mcp.core
 
 import okhttp3.Request
 
-internal fun sanitizeCredential(value: String): String =
-    value.filterNot { it == '\r' || it == '\n' || it.code == 0x7f }.trim()
+internal fun sanitizeCredential(value: String): String = value.filterNot { it == '\r' || it == '\n' || it.code == 0x7f }.trim()
 
 internal fun Request.Builder.safeHeader(name: String, value: String): Request.Builder {
     val normalizedName = name.trim()

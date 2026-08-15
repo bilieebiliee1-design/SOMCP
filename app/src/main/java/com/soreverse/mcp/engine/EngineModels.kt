@@ -17,13 +17,7 @@ data class Workspace(
     val edits: MutableMap<String, EditSession> = ConcurrentHashMap()
 )
 
-internal data class SourceSummary(
-    val architecture: String,
-    val bits: Int,
-    val endian: String,
-    val hasDebugInfo: Boolean,
-    val stripped: Boolean
-)
+internal data class SourceSummary(val architecture: String, val bits: Int, val endian: String, val hasDebugInfo: Boolean, val stripped: Boolean)
 
 internal data class DisasmCursorState(
     val workspaceId: String,

@@ -23,11 +23,7 @@ internal fun EngineRuntime.editOpen(workspaceId: String): JSONObject = guarded {
     )
 }
 
-internal fun EngineRuntime.editSnapshot(
-    workspaceId: String,
-    editSessionId: String,
-    label: String = ""
-): JSONObject = guarded {
+internal fun EngineRuntime.editSnapshot(workspaceId: String, editSessionId: String, label: String = ""): JSONObject = guarded {
     withSession(
         workspaceId,
         editSessionId,
@@ -62,11 +58,7 @@ internal fun EngineRuntime.editSnapshot(
     }
 }
 
-internal fun EngineRuntime.editRollback(
-    workspaceId: String,
-    editSessionId: String,
-    snapshotIndex: Int = -1
-): JSONObject = guarded {
+internal fun EngineRuntime.editRollback(workspaceId: String, editSessionId: String, snapshotIndex: Int = -1): JSONObject = guarded {
     withSession(
         workspaceId,
         editSessionId,
@@ -112,11 +104,7 @@ internal fun EngineRuntime.editRollback(
     }
 }
 
-internal fun EngineRuntime.editRollbackById(
-    workspaceId: String,
-    editSessionId: String,
-    snapshotId: String
-): JSONObject = guarded {
+internal fun EngineRuntime.editRollbackById(workspaceId: String, editSessionId: String, snapshotId: String): JSONObject = guarded {
     withSession(
         workspaceId,
         editSessionId,
@@ -140,11 +128,7 @@ internal fun EngineRuntime.editRollbackById(
     }
 }
 
-internal fun EngineRuntime.editDropSnapshotById(
-    workspaceId: String,
-    editSessionId: String,
-    snapshotId: String
-): JSONObject = guarded {
+internal fun EngineRuntime.editDropSnapshotById(workspaceId: String, editSessionId: String, snapshotId: String): JSONObject = guarded {
     withSession(
         workspaceId,
         editSessionId,
@@ -162,11 +146,7 @@ internal fun EngineRuntime.editDropSnapshotById(
     }
 }
 
-internal fun EngineRuntime.editUndo(
-    workspaceId: String,
-    editSessionId: String,
-    count: Int = 1
-): JSONObject = guarded {
+internal fun EngineRuntime.editUndo(workspaceId: String, editSessionId: String, count: Int = 1): JSONObject = guarded {
     withSession(
         workspaceId,
         editSessionId,
@@ -207,11 +187,7 @@ internal fun EngineRuntime.editUndo(
     }
 }
 
-internal fun EngineRuntime.editRedo(
-    workspaceId: String,
-    editSessionId: String,
-    count: Int = 1
-): JSONObject = guarded {
+internal fun EngineRuntime.editRedo(workspaceId: String, editSessionId: String, count: Int = 1): JSONObject = guarded {
     withSession(
         workspaceId,
         editSessionId,
@@ -253,43 +229,38 @@ internal fun EngineRuntime.editRedo(
     }
 }
 
-internal fun EngineRuntime.editReset(workspaceId: String, editSessionId: String): JSONObject =
-    guarded {
-        val ws =
-            workspaces[workspaceId]
-                ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
-        withSession(
-            workspaceId,
-            editSessionId,
-            onMissingWorkspace = { err("WORKSPACE_NOT_FOUND", "Workspace not found") },
-            onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }
-        ) { session ->
-            val beforePatches = session.patches.size
-            val beforeUndone = session.undone.size
-            val beforeSnapshots = session.snapshots.size
-            System.arraycopy(ws.data, 0, session.data, 0, session.data.size)
-            session.patches.clear()
-            session.undone.clear()
-            session.snapshots.clear()
-            session.revision = 0
-            pageStore.clear()
-            searchCache.clear()
-            ok(
-                JSONObject()
-                    .put("reset", true)
-                    .put("clearedPatches", beforePatches)
-                    .put("clearedUndone", beforeUndone)
-                    .put("clearedSnapshots", beforeSnapshots)
-                    .put("newTargetVersion", sha256(session.data))
-            )
-        }
+internal fun EngineRuntime.editReset(workspaceId: String, editSessionId: String): JSONObject = guarded {
+    val ws =
+        workspaces[workspaceId]
+            ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
+    withSession(
+        workspaceId,
+        editSessionId,
+        onMissingWorkspace = { err("WORKSPACE_NOT_FOUND", "Workspace not found") },
+        onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }
+    ) { session ->
+        val beforePatches = session.patches.size
+        val beforeUndone = session.undone.size
+        val beforeSnapshots = session.snapshots.size
+        System.arraycopy(ws.data, 0, session.data, 0, session.data.size)
+        session.patches.clear()
+        session.undone.clear()
+        session.snapshots.clear()
+        session.revision = 0
+        pageStore.clear()
+        searchCache.clear()
+        ok(
+            JSONObject()
+                .put("reset", true)
+                .put("clearedPatches", beforePatches)
+                .put("clearedUndone", beforeUndone)
+                .put("clearedSnapshots", beforeSnapshots)
+                .put("newTargetVersion", sha256(session.data))
+        )
     }
+}
 
-internal fun EngineRuntime.maybeAutoSnapshot(
-    session: EditSession,
-    trigger: String,
-    settings: SettingsStore
-) {
+internal fun EngineRuntime.maybeAutoSnapshot(session: EditSession, trigger: String, settings: SettingsStore) {
     if (!settings.autoSnapshotBeforeEdit) return
     if (session.snapshots.size >= settings.maxSnapshots) {
         val removable = session.snapshots.indexOfFirst { !it.protected }
@@ -309,11 +280,7 @@ internal fun EngineRuntime.maybeAutoSnapshot(
     )
 }
 
-internal fun EngineRuntime.maybeAutoPersist(
-    workspaceId: String,
-    session: EditSession,
-    settings: SettingsStore
-): JSONObject? {
+internal fun EngineRuntime.maybeAutoPersist(workspaceId: String, session: EditSession, settings: SettingsStore): JSONObject? {
     if (!settings.editAutoPersist) return null
     return runCatching {
         val dir = auditDir()
@@ -351,150 +318,150 @@ internal fun EngineRuntime.maybeAutoPersist(
     }
 }
 
-internal fun EngineRuntime.editCheck(workspaceId: String, editSessionId: String): JSONObject =
-    guarded {
-        val ws =
-            workspaces[workspaceId]
-                ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
-        withSession(
-            workspaceId,
-            editSessionId,
-            onMissingWorkspace = { err("WORKSPACE_NOT_FOUND", "Workspace not found") },
-            onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }
-        ) { session ->
-            val bytes = session.data.copyOf()
-            val failures = JSONArray()
-            val warnings = JSONArray()
-            runCatching { lief.parse(bytes) }.getOrElse {
-                return@withSession ok(
-                    JSONObject().put("status", "failed").put(
-                        "failures",
-                        JSONArray().put(
-                            JSONObject().put("code", "ELF_CORRUPTED").put(
-                                "message",
-                                it.message ?: "ELF parse failed"
-                            )
+internal fun EngineRuntime.editCheck(workspaceId: String, editSessionId: String): JSONObject = guarded {
+    val ws =
+        workspaces[workspaceId]
+            ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
+    withSession(
+        workspaceId,
+        editSessionId,
+        onMissingWorkspace = { err("WORKSPACE_NOT_FOUND", "Workspace not found") },
+        onMissingSession = { err("EDIT_SESSION_NOT_FOUND", "Edit session not found") }
+    ) { session ->
+        val bytes = session.data.copyOf()
+        val failures = JSONArray()
+        val warnings = JSONArray()
+        runCatching { lief.parse(bytes) }.getOrElse {
+            return@withSession ok(
+                JSONObject().put("status", "failed").put(
+                    "failures",
+                    JSONArray().put(
+                        JSONObject().put("code", "ELF_CORRUPTED").put(
+                            "message",
+                            it.message ?: "ELF parse failed"
                         )
-                    ).put(
-                        "warnings",
-                        JSONArray()
-                    ).put("claimedPatches", session.patches.size).put("effectivePatches", 0)
-                )
-            }
-            val settings = SettingsStore(context)
-            val claimed = session.patches.size
-            var emptyPatches = 0
-            var stalePatches = 0
-            if (settings.editCheckDeep) {
-                session.patches.forEachIndexed { idx, p ->
-                    if (p.newHex.isBlank()) {
-                        emptyPatches++
-                        failures.put(
+                    )
+                ).put(
+                    "warnings",
+                    JSONArray()
+                ).put("claimedPatches", session.patches.size).put("effectivePatches", 0)
+            )
+        }
+        val settings = SettingsStore(context)
+        val claimed = session.patches.size
+        var emptyPatches = 0
+        var stalePatches = 0
+        if (settings.editCheckDeep) {
+            session.patches.forEachIndexed { idx, p ->
+                if (p.newHex.isBlank()) {
+                    emptyPatches++
+                    failures.put(
+                        JSONObject().put(
+                            "code",
+                            "EMPTY_PATCH"
+                        ).put(
+                            "message",
+                            "Patch #$idx (${p.kind}) at ${p.fileOffset} has empty newHex — claimed but never written"
+                        ).put("index", idx).put("kind", p.kind).put("fileOffset", p.fileOffset)
+                    )
+                } else {
+                    val current = runCatching {
+                        val off = p.fileOffset
+                        val len = p.newHex.split(' ').filter { it.isNotBlank() }.size
+                        if (off in
+                            0..(bytes.size - len)
+                        ) {
+                            PatchByteUtils.hexBytes(
+                                bytes.copyOfRange(
+                                    off,
+                                    off + len
+                                )
+                            )
+                        } else {
+                            ""
+                        }
+                    }.getOrDefault("")
+                    if (current.isNotBlank() && current != p.newHex) {
+                        stalePatches++
+                        warnings.put(
                             JSONObject().put(
                                 "code",
-                                "EMPTY_PATCH"
+                                "STALE_PATCH"
                             ).put(
                                 "message",
-                                "Patch #$idx (${p.kind}) at ${p.fileOffset} has empty newHex — claimed but never written"
-                            ).put("index", idx).put("kind", p.kind).put("fileOffset", p.fileOffset)
+                                "Patch #$idx at ${hex(
+                                    p.fileOffset.toLong()
+                                )} was overwritten by a later edit"
+                            ).put("index", idx).put("expected", p.newHex).put("actual", current)
                         )
-                    } else {
-                        val current = runCatching {
-                            val off = p.fileOffset
-                            val len = p.newHex.split(' ').filter { it.isNotBlank() }.size
-                            if (off in
-                                0..(bytes.size - len)
-                            ) {
-                                PatchByteUtils.hexBytes(
-                                    bytes.copyOfRange(
-                                        off,
-                                        off + len
-                                    )
-                                )
-                            } else {
-                                ""
-                            }
-                        }.getOrDefault("")
-                        if (current.isNotBlank() && current != p.newHex) {
-                            stalePatches++
-                            warnings.put(
-                                JSONObject().put(
-                                    "code",
-                                    "STALE_PATCH"
-                                ).put(
-                                    "message",
-                                    "Patch #$idx at ${hex(
-                                        p.fileOffset.toLong()
-                                    )} was overwritten by a later edit"
-                                ).put("index", idx).put("expected", p.newHex).put("actual", current)
-                            )
-                        }
                     }
                 }
             }
-            val diffRanges = JSONArray()
-            var i = 0
-            while (i < ws.data.size && i < bytes.size && diffRanges.length() < 500) {
-                if (ws.data[i] == bytes[i]) {
-                    i++
-                    continue
-                }
-                val start = i
-                while (i < ws.data.size && i < bytes.size && ws.data[i] != bytes[i]) i++
-                diffRanges.put(
-                    JSONObject().put("fileOffset", hex(start.toLong())).put(
-                        "length",
-                        i - start
-                    )
+        }
+        val diffRanges = JSONArray()
+        var i = 0
+        while (i < ws.data.size && i < bytes.size && diffRanges.length() < 500) {
+            if (ws.data[i] == bytes[i]) {
+                i++
+                continue
+            }
+            val start = i
+            while (i < ws.data.size && i < bytes.size && ws.data[i] != bytes[i]) i++
+            diffRanges.put(
+                JSONObject().put("fileOffset", hex(start.toLong())).put(
+                    "length",
+                    i - start
                 )
-            }
-            val effective = diffRanges.length()
-            if (settings.editCheckDeep && claimed > 0 &&
-                effective == 0
-            ) {
-                warnings.put(
-                    JSONObject().put(
-                        "code",
-                        "NO_EFFECTIVE_CHANGES"
-                    ).put(
-                        "message",
-                        "Session claims $claimed patch(es) but zero effective byte ranges differ from the original SO"
-                    )
-                )
-            }
-            if (settings.editCheckDeep &&
-                emptyPatches > 0
-            ) {
-                warnings.put(
-                    JSONObject().put(
-                        "code",
-                        "EMPTY_PATCHES_SUMMARY"
-                    ).put(
-                        "message",
-                        "$emptyPatches of $claimed patch(es) have empty newHex (no-op writes)"
-                    ).put("emptyPatchCount", emptyPatches)
-                )
-            }
-            val status = if (failures.length() >
-                0
-            ) {
-                "failed"
-            } else if (warnings.length() > 0) {
-                "warning"
-            } else {
-                "ok"
-            }
-            ok(
-                JSONObject()
-                    .put("status", status)
-                    .put("failures", failures)
-                    .put("warnings", warnings)
-                    .put("claimedPatches", claimed)
-                    .put("effectivePatches", effective)
-                    .put("emptyPatches", emptyPatches)
-                    .put("stalePatches", stalePatches)
-                    .put("diffRangeCount", effective)
-                    .put("targetVersion", sha256(bytes))
             )
         }
+        val effective = diffRanges.length()
+        if (settings.editCheckDeep &&
+            claimed > 0 &&
+            effective == 0
+        ) {
+            warnings.put(
+                JSONObject().put(
+                    "code",
+                    "NO_EFFECTIVE_CHANGES"
+                ).put(
+                    "message",
+                    "Session claims $claimed patch(es) but zero effective byte ranges differ from the original SO"
+                )
+            )
+        }
+        if (settings.editCheckDeep &&
+            emptyPatches > 0
+        ) {
+            warnings.put(
+                JSONObject().put(
+                    "code",
+                    "EMPTY_PATCHES_SUMMARY"
+                ).put(
+                    "message",
+                    "$emptyPatches of $claimed patch(es) have empty newHex (no-op writes)"
+                ).put("emptyPatchCount", emptyPatches)
+            )
+        }
+        val status = if (failures.length() >
+            0
+        ) {
+            "failed"
+        } else if (warnings.length() > 0) {
+            "warning"
+        } else {
+            "ok"
+        }
+        ok(
+            JSONObject()
+                .put("status", status)
+                .put("failures", failures)
+                .put("warnings", warnings)
+                .put("claimedPatches", claimed)
+                .put("effectivePatches", effective)
+                .put("emptyPatches", emptyPatches)
+                .put("stalePatches", stalePatches)
+                .put("diffRangeCount", effective)
+                .put("targetVersion", sha256(bytes))
+        )
     }
+}

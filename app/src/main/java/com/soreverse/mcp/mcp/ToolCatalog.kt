@@ -5,7 +5,6 @@ import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.doubleValue
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.intValue
-import com.soreverse.mcp.core.obj
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.core.str
 import org.json.JSONArray
@@ -846,7 +845,22 @@ object ToolCatalog {
         ) {
             objectSchema(
                 props {
-                    "action".oneOf("Rizin operation", "capabilities", "command", "analyze", "functions", "cfg", "xrefs", "search_bytes", "crypto", "esil", "diff", "asm", "disasm", "decompile")
+                    "action".oneOf(
+                        "Rizin operation",
+                        "capabilities",
+                        "command",
+                        "analyze",
+                        "functions",
+                        "cfg",
+                        "xrefs",
+                        "search_bytes",
+                        "crypto",
+                        "esil",
+                        "diff",
+                        "asm",
+                        "disasm",
+                        "decompile"
+                    )
                     "workspaceId" str "Workspace ID"
                     "editSessionId" str "Edit session ID"
                     "workspaceIdB" str "Workspace B ID (diff)"
@@ -981,7 +995,20 @@ object ToolCatalog {
         ) {
             objectSchema(
                 props {
-                    "action".oneOf("LIEF operation", "capabilities", "dispatch", "parse", "parse_any", "list", "patch_address", "add_export", "remove_symbol", "build", "fix_sections", "report")
+                    "action".oneOf(
+                        "LIEF operation",
+                        "capabilities",
+                        "dispatch",
+                        "parse",
+                        "parse_any",
+                        "list",
+                        "patch_address",
+                        "add_export",
+                        "remove_symbol",
+                        "build",
+                        "fix_sections",
+                        "report"
+                    )
                     "workspaceId" str "Workspace ID"
                     "editSessionId" str "Edit session ID"
                     "subView".oneOf(
@@ -1135,7 +1162,51 @@ object ToolCatalog {
                     "trace" bool "Enable trace"
                     "addr" str "Memory dump VA hex"
                     "size" int "Dump size"
-                    "op".oneOf("Dispatcher operation", "status", "roots", "methods", "session_open", "session_list", "session_close", "session_call", "session_call_address", "session_dump", "session_memory_maps", "session_registers", "session_modules", "session_exports", "session_trace_code", "session_breakpoint_add", "session_debugger_status", "session_breakpoint_remove", "session_single_step", "session_emu_stop", "session_memory_write", "session_memory_map", "session_memory_protect", "session_memory_unmap", "reflect_roots", "reflect_methods", "reflect_invoke", "native_schemas", "native_tool", "call", "dump", "modules", "exports", "imports", "debugger_plan", "memory_map_plan", "registers_plan", "breakpoints_plan", "trace_plan", "framework_matrix", "stub_template", "hook_template", "env_template")
+                    "op".oneOf(
+                        "Dispatcher operation",
+                        "status",
+                        "roots",
+                        "methods",
+                        "session_open",
+                        "session_list",
+                        "session_close",
+                        "session_call",
+                        "session_call_address",
+                        "session_dump",
+                        "session_memory_maps",
+                        "session_registers",
+                        "session_modules",
+                        "session_exports",
+                        "session_trace_code",
+                        "session_breakpoint_add",
+                        "session_debugger_status",
+                        "session_breakpoint_remove",
+                        "session_single_step",
+                        "session_emu_stop",
+                        "session_memory_write",
+                        "session_memory_map",
+                        "session_memory_protect",
+                        "session_memory_unmap",
+                        "reflect_roots",
+                        "reflect_methods",
+                        "reflect_invoke",
+                        "native_schemas",
+                        "native_tool",
+                        "call",
+                        "dump",
+                        "modules",
+                        "exports",
+                        "imports",
+                        "debugger_plan",
+                        "memory_map_plan",
+                        "registers_plan",
+                        "breakpoints_plan",
+                        "trace_plan",
+                        "framework_matrix",
+                        "stub_template",
+                        "hook_template",
+                        "env_template"
+                    )
                     "method" str
                         "Dispatcher method/symbol name. For native_tool, use an upstream Unidbg MCP tool name returned by native_schemas."
                     "args" arr
@@ -1346,7 +1417,25 @@ object ToolCatalog {
         ) {
             objectSchema(
                 props {
-                    "action".oneOf("Debug action", "trace_code", "trace_start", "trace_events", "trace_stop", "trace_clear", "hook_start", "hook_list", "hook_stop", "breakpoint_add", "breakpoint_remove", "status", "single_step", "stop", "debugger_plan", "trace_plan", "breakpoints_plan")
+                    "action".oneOf(
+                        "Debug action",
+                        "trace_code",
+                        "trace_start",
+                        "trace_events",
+                        "trace_stop",
+                        "trace_clear",
+                        "hook_start",
+                        "hook_list",
+                        "hook_stop",
+                        "breakpoint_add",
+                        "breakpoint_remove",
+                        "status",
+                        "single_step",
+                        "stop",
+                        "debugger_plan",
+                        "trace_plan",
+                        "breakpoints_plan"
+                    )
                     "workspaceId" str "Workspace ID"
                     "editSessionId" str "Edit session ID"
                     "emulatorSessionId" str "Live Unidbg emulator session ID"
@@ -1742,7 +1831,17 @@ object ToolCatalog {
         ) {
             objectSchema(
                 props {
-                    "action".oneOf("status | tunnel_start | tunnel_stop | tunnel_status | tunnel_stats | apk_status | apk_probe | apk_ping", "status", "tunnel_start", "tunnel_stop", "tunnel_status", "tunnel_stats", "apk_status", "apk_probe", "apk_ping")
+                    "action".oneOf(
+                        "status | tunnel_start | tunnel_stop | tunnel_status | tunnel_stats | apk_status | apk_probe | apk_ping",
+                        "status",
+                        "tunnel_start",
+                        "tunnel_stop",
+                        "tunnel_status",
+                        "tunnel_stats",
+                        "apk_status",
+                        "apk_probe",
+                        "apk_ping"
+                    )
                     "mode".oneOf("Tunnel mode: quick | named (tunnel_start)", "quick", "named")
                     "targetPort" int "Tunnel target port (tunnel_start)"
                     "publicUrl" str
@@ -1882,7 +1981,22 @@ object ToolCatalog {
         ) {
             objectSchema(
                 props {
-                    "action".oneOf("help (default) | tools | describe | stats | batch | continue | health | count | workflows | suggest | errors | report | capabilities", "help", "tools", "describe", "stats", "batch", "continue", "health", "count", "workflows", "suggest", "errors", "report", "capabilities")
+                    "action".oneOf(
+                        "help (default) | tools | describe | stats | batch | continue | health | count | workflows | suggest | errors | report | capabilities",
+                        "help",
+                        "tools",
+                        "describe",
+                        "stats",
+                        "batch",
+                        "continue",
+                        "health",
+                        "count",
+                        "workflows",
+                        "suggest",
+                        "errors",
+                        "report",
+                        "capabilities"
+                    )
                     "category" str "Category filter (tools)"
                     "query" str "Search query (tools)"
                     "tools" arr "Array of tool names (describe)"
@@ -1975,17 +2089,12 @@ object ToolCatalog {
 
     fun description(name: String, zh: Boolean): String = registry.description(name, zh)
 
-    fun categoryDescriptions(zh: Boolean): List<Pair<String, String>> =
-        ToolCatalogPresentation.categoryDescriptions(zh)
+    fun categoryDescriptions(zh: Boolean): List<Pair<String, String>> = ToolCatalogPresentation.categoryDescriptions(zh)
 
-    fun grouped(
-        zh: Boolean,
-        includeApk: List<String> = emptyList()
-    ): List<Pair<String, List<Pair<String, String>>>> =
+    fun grouped(zh: Boolean, includeApk: List<String> = emptyList()): List<Pair<String, List<Pair<String, String>>>> =
         ToolCatalogPresentation.grouped(zh, includeApk)
 
-    fun toolDescriptor(handler: ToolHandler, includeCategory: Boolean): JSONObject =
-        ToolCatalogPresentation.toolDescriptor(handler, includeCategory)
+    fun toolDescriptor(handler: ToolHandler, includeCategory: Boolean): JSONObject = ToolCatalogPresentation.toolDescriptor(handler, includeCategory)
 
     fun categoryOf(name: String): String? = registry.categoryOf(name)
 }

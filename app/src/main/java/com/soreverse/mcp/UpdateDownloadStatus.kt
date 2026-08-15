@@ -31,7 +31,11 @@ internal fun UpdateDownloadStatus(
         if (phase == "probing") {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             Text(
-                if (zh) "正在测速 $probeCompleted/$probeTotal · $probeAvailable 个可用（点选任一线路可手动切换）" else "Testing sources $probeCompleted/$probeTotal · $probeAvailable available (tap one to switch)",
+                if (zh) {
+                    "正在测速 $probeCompleted/$probeTotal · $probeAvailable 个可用（点选任一线路可手动切换）"
+                } else {
+                    "Testing sources $probeCompleted/$probeTotal · $probeAvailable available (tap one to switch)"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

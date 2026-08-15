@@ -130,41 +130,37 @@ internal fun appLightColors(accent: Color, highContrast: Boolean) = lightColorSc
     onErrorContainer = Color(0xFF93000A)
 )
 
-internal fun appDarkColors(accent: Color, pureBlack: Boolean, highContrast: Boolean) =
-    darkColorScheme(
-        primary = accent,
-        onPrimary = Color.White,
-        primaryContainer = accent.copy(alpha = 0.18f),
-        onPrimaryContainer = Color(0xFFE8F1FF),
-        secondary = Color(0xFF2C2C2E),
-        onSecondary = Color(0xFFF5F5F7),
-        secondaryContainer = Color(0xFF3A3A3C),
-        onSecondaryContainer = Color(0xFFF5F5F7),
-        tertiary = Color(0xFF5E5CE6),
-        onTertiary = Color.White,
-        background = if (pureBlack) Color(0xFF000000) else Color(0xFF0B0B0D),
-        onBackground = if (highContrast) Color(0xFFFFFFFF) else Color(0xFFF5F5F7),
-        surface = if (pureBlack) Color(0xFF1C1C1E) else Color(0xFF161618),
-        onSurface = if (highContrast) Color(0xFFFFFFFF) else Color(0xFFF5F5F7),
-        surfaceVariant = Color(0xFF2C2C2E),
-        onSurfaceVariant = if (highContrast) Color(0xFFD1D1D6) else Color(0xFF8E8E93),
-        surfaceContainer = if (pureBlack) Color(0xFF1C1C1E) else Color(0xFF161618),
-        surfaceContainerHigh = Color(0xFF2C2C2E),
-        surfaceContainerHighest = Color(0xFF3A3A3C),
-        outline = if (highContrast) Color(0xFFAEAEB2) else Color(0xFF3A3A3C),
-        outlineVariant = Color(0xFF2C2C2E),
-        error = Color(0xFFFF453A),
-        onError = Color.White,
-        errorContainer = Color(0xFF93000A),
-        onErrorContainer = Color(0xFFFFDAD6)
-    )
+internal fun appDarkColors(accent: Color, pureBlack: Boolean, highContrast: Boolean) = darkColorScheme(
+    primary = accent,
+    onPrimary = Color.White,
+    primaryContainer = accent.copy(alpha = 0.18f),
+    onPrimaryContainer = Color(0xFFE8F1FF),
+    secondary = Color(0xFF2C2C2E),
+    onSecondary = Color(0xFFF5F5F7),
+    secondaryContainer = Color(0xFF3A3A3C),
+    onSecondaryContainer = Color(0xFFF5F5F7),
+    tertiary = Color(0xFF5E5CE6),
+    onTertiary = Color.White,
+    background = if (pureBlack) Color(0xFF000000) else Color(0xFF0B0B0D),
+    onBackground = if (highContrast) Color(0xFFFFFFFF) else Color(0xFFF5F5F7),
+    surface = if (pureBlack) Color(0xFF1C1C1E) else Color(0xFF161618),
+    onSurface = if (highContrast) Color(0xFFFFFFFF) else Color(0xFFF5F5F7),
+    surfaceVariant = Color(0xFF2C2C2E),
+    onSurfaceVariant = if (highContrast) Color(0xFFD1D1D6) else Color(0xFF8E8E93),
+    surfaceContainer = if (pureBlack) Color(0xFF1C1C1E) else Color(0xFF161618),
+    surfaceContainerHigh = Color(0xFF2C2C2E),
+    surfaceContainerHighest = Color(0xFF3A3A3C),
+    outline = if (highContrast) Color(0xFFAEAEB2) else Color(0xFF3A3A3C),
+    outlineVariant = Color(0xFF2C2C2E),
+    error = Color(0xFFFF453A),
+    onError = Color.White,
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6)
+)
 
-internal fun statusSuccess(dark: Boolean = false): Color =
-    if (dark) Color(0xFF30D158) else Color(0xFF34C759)
-internal fun statusError(dark: Boolean = false): Color =
-    if (dark) Color(0xFFFF453A) else Color(0xFFFF3B30)
-internal fun statusWarning(dark: Boolean = false): Color =
-    if (dark) Color(0xFFFF9F0A) else Color(0xFFFF9500)
+internal fun statusSuccess(dark: Boolean = false): Color = if (dark) Color(0xFF30D158) else Color(0xFF34C759)
+internal fun statusError(dark: Boolean = false): Color = if (dark) Color(0xFFFF453A) else Color(0xFFFF3B30)
+internal fun statusWarning(dark: Boolean = false): Color = if (dark) Color(0xFFFF9F0A) else Color(0xFFFF9500)
 
 internal object AppleColors {
     val systemBlue = AppPalette.blue

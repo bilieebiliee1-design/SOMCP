@@ -42,10 +42,7 @@ internal data class BlutterRunnerDescriptor(
 }
 
 internal object BlutterRunnerMatcher {
-    fun select(
-        requirement: BlutterRunnerRequirement,
-        runners: List<BlutterRunnerDescriptor>
-    ): BlutterRunnerDescriptor? = runners
+    fun select(requirement: BlutterRunnerRequirement, runners: List<BlutterRunnerDescriptor>): BlutterRunnerDescriptor? = runners
         .asSequence()
         .filter {
             it.abi == requirement.abi &&
@@ -79,8 +76,7 @@ internal class BlutterRunnerRegistry(private val context: Context) {
         parseRunners(manifest.optJSONArray("runners"), "embedded")
     }
 
-    fun select(requirement: BlutterRunnerRequirement): BlutterRunnerDescriptor? =
-        BlutterRunnerMatcher.select(requirement, runners)
+    fun select(requirement: BlutterRunnerRequirement): BlutterRunnerDescriptor? = BlutterRunnerMatcher.select(requirement, runners)
 
     fun capabilities(): JSONObject = JSONObject()
         .put("schemaVersion", manifest.optInt("schemaVersion", 2))
@@ -93,10 +89,9 @@ internal class BlutterRunnerRegistry(private val context: Context) {
         .put("fullyOffline", true)
         .put("runnerCount", runners.size)
 
-    private fun loadManifest(): JSONObject =
-        context.assets.open("blutter/runners.json").bufferedReader().use {
-            JSONObject(it.readText())
-        }
+    private fun loadManifest(): JSONObject = context.assets.open("blutter/runners.json").bufferedReader().use {
+        JSONObject(it.readText())
+    }
 
     private fun parseRunners(array: JSONArray?, source: String): List<BlutterRunnerDescriptor> {
         if (array == null) return emptyList()
@@ -105,7 +100,8 @@ internal class BlutterRunnerRegistry(private val context: Context) {
             val id = item.optString("runnerId")
             val abi = item.optString("abi")
             val sha256 = item.optString("sha256")
-            if (id.isBlank() || abi.isBlank() ||
+            if (id.isBlank() ||
+                abi.isBlank() ||
                 !sha256.matches(Regex("[a-f0-9]{64}"))
             ) {
                 return@mapNotNull null

@@ -15,18 +15,10 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
 
-internal class BlutterEmbeddedBackend(
-    private val context: Context,
-    private val store: BlutterResultStore
-) {
+internal class BlutterEmbeddedBackend(private val context: Context, private val store: BlutterResultStore) {
     private val active = ConcurrentHashMap<String, ActiveJob>()
 
-    fun start(
-        jobId: String,
-        runner: BlutterRunnerDescriptor,
-        libraries: FlutterLibraries,
-        options: JSONObject
-    ) {
+    fun start(jobId: String, runner: BlutterRunnerDescriptor, libraries: FlutterLibraries, options: JSONObject) {
         val jobDir = File(context.noBackupFilesDir, "blutter/v1/jobs/$jobId/input").apply {
             mkdirs()
         }
@@ -138,14 +130,7 @@ internal class BlutterEmbeddedBackend(
                 }
             }
 
-            override fun onCompleted(
-                callbackJobId: String,
-                exitCode: Int,
-                errorCode: String,
-                message: String,
-                resultBytes: Long,
-                resultSha256: String
-            ) {
+            override fun onCompleted(callbackJobId: String, exitCode: Int, errorCode: String, message: String, resultBytes: Long, resultSha256: String) {
                 if (callbackJobId != jobId || !active.containsKey(jobId)) return
                 if (exitCode != 0 || errorCode.isNotBlank()) {
                     finishFailure(
@@ -183,7 +168,9 @@ internal class BlutterEmbeddedBackend(
             for (kind in listOf("libraries", "classes", "functions", "objects")) {
                 val page = result.optJSONObject(kind) ?: error("Missing result page: $kind")
                 check(
-                    page.has("items") && page.has("total") && page.has("hasMore") &&
+                    page.has("items") &&
+                        page.has("total") &&
+                        page.has("hasMore") &&
                         page.has("nextCursor")
                 ) { "Invalid result page: $kind" }
                 validateEntities(page.optJSONArray("items"), kind)
@@ -233,12 +220,7 @@ internal class BlutterEmbeddedBackend(
             finish()
         }
 
-        private fun finishFailure(
-            code: String,
-            message: String,
-            recoverable: Boolean,
-            status: String = "failed"
-        ) {
+        private fun finishFailure(code: String, message: String, recoverable: Boolean, status: String = "failed") {
             fail(jobId, code, message, "runner_execution", recoverable, status)
             finish()
         }
@@ -250,14 +232,7 @@ internal class BlutterEmbeddedBackend(
         }
     }
 
-    private fun fail(
-        jobId: String,
-        code: String,
-        message: String,
-        stage: String,
-        recoverable: Boolean,
-        status: String = "failed"
-    ) {
+    private fun fail(jobId: String, code: String, message: String, stage: String, recoverable: Boolean, status: String = "failed") {
         store.update(
             jobId,
             status,
@@ -269,12 +244,7 @@ internal class BlutterEmbeddedBackend(
         )
     }
 
-    private fun digest(
-        libapp: File,
-        libflutter: File,
-        runnerSha256: String,
-        options: String
-    ): String {
+    private fun digest(libapp: File, libflutter: File, runnerSha256: String, options: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
         listOf(libapp, libflutter).forEach { file ->
             file.inputStream().use { input ->
@@ -291,12 +261,10 @@ internal class BlutterEmbeddedBackend(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun fileJson(name: String, bytes: ByteArray): JSONObject =
-        JSONObject().put("name", name).put("size", bytes.size).put("sha256", sha256(bytes))
-    private fun sha256(bytes: ByteArray): String =
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
-            "%02x".format(it)
-        }
+    private fun fileJson(name: String, bytes: ByteArray): JSONObject = JSONObject().put("name", name).put("size", bytes.size).put("sha256", sha256(bytes))
+    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+        "%02x".format(it)
+    }
     private fun validateEntities(items: org.json.JSONArray?, kind: String) {
         require(items != null) { "Missing items for $kind" }
         for (index in 0 until items.length()) {
@@ -323,10 +291,7 @@ internal class BlutterEmbeddedBackend(
         }
     }
 
-    private data class ActiveJob(
-        val connection: ServiceConnection,
-        var runner: IBlutterRunner? = null
-    )
+    private data class ActiveJob(val connection: ServiceConnection, var runner: IBlutterRunner? = null)
 
     private companion object {
         const val MAX_RESULT_BYTES = 512L * 1024L * 1024L

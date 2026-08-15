@@ -3,7 +3,6 @@ package com.soreverse.mcp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -55,38 +54,37 @@ internal fun parseRequestFields(raw: String): List<RequestField> {
     }
 }
 
-internal fun serializeRequestFields(fields: List<RequestField>, typedValues: Boolean): String =
-    buildJsonObject {
-        fields.filter { it.key.isNotBlank() }.forEach { field ->
-            val value = field.value.trim()
-            val parsed = if (!typedValues) {
-                JsonPrimitive(field.value)
-            } else {
-                when {
-                    value.equals("null", true) -> JsonNull
+internal fun serializeRequestFields(fields: List<RequestField>, typedValues: Boolean): String = buildJsonObject {
+    fields.filter { it.key.isNotBlank() }.forEach { field ->
+        val value = field.value.trim()
+        val parsed = if (!typedValues) {
+            JsonPrimitive(field.value)
+        } else {
+            when {
+                value.equals("null", true) -> JsonNull
 
-                    value.equals("true", true) -> JsonPrimitive(true)
+                value.equals("true", true) -> JsonPrimitive(true)
 
-                    value.equals("false", true) -> JsonPrimitive(false)
+                value.equals("false", true) -> JsonPrimitive(false)
 
-                    value.toLongOrNull() != null -> JsonPrimitive(value.toLong())
+                value.toLongOrNull() != null -> JsonPrimitive(value.toLong())
 
-                    value.toDoubleOrNull() != null -> JsonPrimitive(value.toDouble())
+                value.toDoubleOrNull() != null -> JsonPrimitive(value.toDouble())
 
-                    value.startsWith("{") -> runCatching {
-                        Json.parseToJsonElement(value) as JsonObject
-                    }.getOrElse { JsonPrimitive(field.value) }
+                value.startsWith("{") -> runCatching {
+                    Json.parseToJsonElement(value) as JsonObject
+                }.getOrElse { JsonPrimitive(field.value) }
 
-                    value.startsWith("[") -> runCatching {
-                        Json.parseToJsonElement(value) as JsonArray
-                    }.getOrElse { JsonPrimitive(field.value) }
+                value.startsWith("[") -> runCatching {
+                    Json.parseToJsonElement(value) as JsonArray
+                }.getOrElse { JsonPrimitive(field.value) }
 
-                    else -> JsonPrimitive(field.value)
-                }
+                else -> JsonPrimitive(field.value)
             }
-            put(field.key.trim(), parsed)
         }
-    }.toString()
+        put(field.key.trim(), parsed)
+    }
+}.toString()
 
 @Composable
 private fun RequestFieldsEditor(
@@ -205,7 +203,12 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
             }
         }
         GlassGroup(
-            footer = if (t.zh) "兼容 OpenAI / Anthropic 及多数中转站。自定义 headers/body 用于服务商差异字段。" else "OpenAI/Anthropic compatible. Use custom headers/body for vendor-specific fields."
+            footer =
+            if (t.zh) {
+                "兼容 OpenAI / Anthropic 及多数中转站。自定义 headers/body 用于服务商差异字段。"
+            } else {
+                "OpenAI/Anthropic compatible. Use custom headers/body for vendor-specific fields."
+            }
         ) {
             OutlinedTextField(
                 value = endpoint,
@@ -393,7 +396,12 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
         }
         GlassGroup(
             title = if (t.zh) "自定义请求" else "Custom request",
-            footer = if (t.zh) "同名字段覆盖默认请求，不同名字段增量加入。请求体会自动识别数字、布尔值、null、对象和数组。" else "Matching keys override defaults; new keys are appended. Body values detect numbers, booleans, null, objects, and arrays."
+            footer =
+            if (t.zh) {
+                "同名字段覆盖默认请求，不同名字段增量加入。请求体会自动识别数字、布尔值、null、对象和数组。"
+            } else {
+                "Matching keys override defaults; new keys are appended. Body values detect numbers, booleans, null, objects, and arrays."
+            }
         ) {
             RequestFieldsEditor(
                 title = if (t.zh) "请求头" else "Headers",

@@ -294,7 +294,7 @@ internal fun ElfOverviewPanel(detail: SoDetailUi, zh: Boolean, onCopy: (String) 
                         ReferenceReportLine(
                             "• ${text.removePrefix("• ")}",
                             divider =
-                                i < factors.length() - 1
+                            i < factors.length() - 1
                         )
                     }
                 }
@@ -351,14 +351,16 @@ internal fun ElfOverviewPanel(detail: SoDetailUi, zh: Boolean, onCopy: (String) 
                         text,
                         fontSize = 12.sp,
                         lineHeight = 22.sp,
-                        color = if (id == "dyn_reg" || id == "init_array" ||
+                        color = if (id == "dyn_reg" ||
+                            id == "init_array" ||
                             text.contains("⚠")
                         ) {
                             Color(0xFFD73A49)
                         } else {
                             Color(0xFF444444)
                         },
-                        fontWeight = if (id == "dyn_reg" || id == "init_array" ||
+                        fontWeight = if (id == "dyn_reg" ||
+                            id == "init_array" ||
                             text.contains("⚠")
                         ) {
                             FontWeight.Bold
@@ -554,14 +556,7 @@ private fun OverviewAlert(title: String, body: String) {
 }
 
 @Composable
-private fun OverviewKv(
-    label: String,
-    value: String,
-    mono: Boolean = false,
-    boldValue: Boolean = false,
-    maxLines: Int = 3,
-    onClick: (() -> Unit)? = null
-) {
+private fun OverviewKv(label: String, value: String, mono: Boolean = false, boldValue: Boolean = false, maxLines: Int = 3, onClick: (() -> Unit)? = null) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -590,12 +585,7 @@ private fun OverviewKv(
 }
 
 @Composable
-private fun OverviewMetric(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    accent: Color = MaterialTheme.colorScheme.primary
-) {
+private fun OverviewMetric(label: String, value: String, modifier: Modifier = Modifier, accent: Color = MaterialTheme.colorScheme.primary) {
     Column(
         modifier
             .clip(RoundedCornerShape(10.dp))
@@ -653,11 +643,7 @@ private fun StatusToneBadge(text: String, tone: String, selected: Boolean = fals
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun SecurityFeatureCloud(
-    security: org.json.JSONArray,
-    selectedId: String?,
-    onSelect: (String) -> Unit
-) {
+private fun SecurityFeatureCloud(security: org.json.JSONArray, selectedId: String?, onSelect: (String) -> Unit) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -772,13 +758,7 @@ private fun SectionTitleColored(text: String, color: Color) {
 }
 
 @Composable
-private fun FeasibilityFactorRow(
-    title: String,
-    detail: String,
-    weight: Double,
-    tone: String,
-    zh: Boolean
-) {
+private fun FeasibilityFactorRow(title: String, detail: String, weight: Double, tone: String, zh: Boolean) {
     val color = toneColor(tone)
     Row(
         Modifier

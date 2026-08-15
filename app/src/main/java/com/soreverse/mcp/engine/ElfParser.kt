@@ -8,7 +8,9 @@ import kotlin.math.min
 class ElfParser(private val data: ByteArray) {
     fun parse(): ElfFile {
         require(
-            data.size >= 16 && data[0] == 0x7f.toByte() && data[1] == 'E'.code.toByte() &&
+            data.size >= 16 &&
+                data[0] == 0x7f.toByte() &&
+                data[1] == 'E'.code.toByte() &&
                 data[2] == 'L'.code.toByte() &&
                 data[3] == 'F'.code.toByte()
         ) {
@@ -167,12 +169,7 @@ class ElfParser(private val data: ByteArray) {
         return data.copyOfRange(start, end)
     }
 
-    private fun extractStrings(
-        bytes: ByteArray,
-        base: Long,
-        section: String,
-        out: MutableList<StringInfo>
-    ) {
+    private fun extractStrings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>) {
         var start = 0
         var i = 0
         while (i <= bytes.size) {
@@ -184,14 +181,7 @@ class ElfParser(private val data: ByteArray) {
         }
     }
 
-    private fun emitStringCandidate(
-        bytes: ByteArray,
-        start: Int,
-        end: Int,
-        base: Long,
-        section: String,
-        out: MutableList<StringInfo>
-    ) {
+    private fun emitStringCandidate(bytes: ByteArray, start: Int, end: Int, base: Long, section: String, out: MutableList<StringInfo>) {
         if (end - start < 4) return
         val raw = bytes.copyOfRange(start, end)
         val text = runCatching {
@@ -247,8 +237,7 @@ class ElfParser(private val data: ByteArray) {
         private val order = if (little) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
         fun u8(o: Int): Int = bytes[o].toInt() and 0xff
         fun u16(o: Int): Int = ByteBuffer.wrap(bytes, o, 2).order(order).short.toInt() and 0xffff
-        fun u32(o: Int): Long =
-            ByteBuffer.wrap(bytes, o, 4).order(order).int.toLong() and 0xffffffffL
+        fun u32(o: Int): Long = ByteBuffer.wrap(bytes, o, 4).order(order).int.toLong() and 0xffffffffL
         fun s32(o: Int): Int = ByteBuffer.wrap(bytes, o, 4).order(order).int
         fun u64(o: Int): Long = ByteBuffer.wrap(bytes, o, 8).order(order).long
         fun s64(o: Int): Long = ByteBuffer.wrap(bytes, o, 8).order(order).long

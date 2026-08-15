@@ -26,17 +26,14 @@ internal fun EngineRuntime.setWorkDirectory(uri: Uri) {
     AppLog.i("Work directory selected: ${WorkDirectory.displayPath(uri)}")
 }
 
-internal fun EngineRuntime.listAvailableSos(
-    prefix: String = "",
-    limit: Int = 50,
-    cursor: String = ""
-): JSONObject = guarded {
+internal fun EngineRuntime.listAvailableSos(prefix: String = "", limit: Int = 50, cursor: String = ""): JSONObject = guarded {
     val dir = workDir ?: return@guarded err("SO_NOT_FOUND", "No work directory selected")
     val currentSources = ensureSources(dir)
     val boundedLimit = limit.coerceIn(1, 500)
     val start = cursor.removePrefix("source:").toIntOrNull()?.coerceAtLeast(0) ?: 0
     val filtered = currentSources.filter {
-        prefix.isBlank() || it.path.startsWith(prefix) ||
+        prefix.isBlank() ||
+            it.path.startsWith(prefix) ||
             it.name.startsWith(prefix)
     }
     val items = JSONArray()
@@ -105,7 +102,8 @@ internal fun EngineRuntime.open(path: String, temporary: Boolean): JSONObject = 
             it.value
     }
     val exportedFunctions = elf.dynSymbols.filter {
-        it.type == "FUNC" && !it.imported &&
+        it.type == "FUNC" &&
+            !it.imported &&
             it.value > 0
     }.distinctBy { it.name to it.value }
     val analyzedFunctions = if (NativeEngine.active().available()) {
@@ -250,7 +248,8 @@ internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSON
             path
         )
     }
-    if (bytes.size < 4 || bytes[0] != 0x50.toByte() ||
+    if (bytes.size < 4 ||
+        bytes[0] != 0x50.toByte() ||
         bytes[1] != 0x4b.toByte()
     ) {
         return@guarded err("APK_INVALID", "Input is not a ZIP/APK file", "path", path)
@@ -262,11 +261,7 @@ internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSON
     }
 }
 
-internal fun EngineRuntime.openUrl(
-    url: String,
-    outputName: String = "",
-    temporary: Boolean = false
-): JSONObject = guarded {
+internal fun EngineRuntime.openUrl(url: String, outputName: String = "", temporary: Boolean = false): JSONObject = guarded {
     val dir =
         workDir
             ?: return@guarded err(
@@ -288,7 +283,9 @@ internal fun EngineRuntime.openUrl(
     }
     runCatching { java.net.InetAddress.getAllByName(parsed.host) }.getOrNull()?.let { addresses ->
         if (addresses.any {
-                it.isLoopbackAddress || it.isAnyLocalAddress || it.isLinkLocalAddress ||
+                it.isLoopbackAddress ||
+                    it.isAnyLocalAddress ||
+                    it.isLinkLocalAddress ||
                     it.isSiteLocalAddress ||
                     it.isMulticastAddress
             }
@@ -358,7 +355,9 @@ internal fun EngineRuntime.openUrl(
             }
         }.toByteArray()
     }
-    if (bytes.size < 4 || bytes[0] != 0x7f.toByte() || bytes[1] != 'E'.code.toByte() ||
+    if (bytes.size < 4 ||
+        bytes[0] != 0x7f.toByte() ||
+        bytes[1] != 'E'.code.toByte() ||
         bytes[2] != 'L'.code.toByte() ||
         bytes[3] != 'F'.code.toByte()
     ) {
@@ -464,7 +463,8 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     // resolveLocalSoSource() File().exists() probe for it (avoids treating
     // "apk:...!..." / "content://apk/..." as a real path).
     val isApkEmbedded = path.trim().let {
-        it.contains('!') || it.startsWith("content://apk/") ||
+        it.contains('!') ||
+            it.startsWith("content://apk/") ||
             it.startsWith("apk:")
     }
     val src = findSource(path) ?: (if (isApkEmbedded) null else resolveLocalSoSource(path)) ?: run {
@@ -503,7 +503,9 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
             ).readSource(src)
     }
     require(
-        original.size >= 4 && original[0] == 0x7f.toByte() && original[1] == 'E'.code.toByte() &&
+        original.size >= 4 &&
+            original[0] == 0x7f.toByte() &&
+            original[1] == 'E'.code.toByte() &&
             original[2] == 'L'.code.toByte() &&
             original[3] == 'F'.code.toByte()
     ) {
@@ -527,12 +529,7 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     return ws
 }
 
-internal data class AnalysisInput(
-    val data: ByteArray,
-    val source: String,
-    val facts: JSONObject,
-    val elf: ElfFile
-)
+internal data class AnalysisInput(val data: ByteArray, val source: String, val facts: JSONObject, val elf: ElfFile)
 
 internal fun EngineRuntime.prepareAnalysisInput(original: ByteArray): AnalysisInput {
     val before = lief.parse(original)
@@ -676,15 +673,15 @@ internal fun EngineRuntime.findSource(rawPath: String): SoSource? {
     }
     candidates.distinct().forEach { candidate ->
         sources.firstOrNull {
-            it.path == candidate || it.name == candidate ||
+            it.path == candidate ||
+                it.name == candidate ||
                 it.apkEntry == candidate
         }?.let { return it }
     }
     return sources.firstOrNull { it.path.endsWith("/$path") }
 }
 
-private fun String.isSameOrChildOf(root: String): Boolean =
-    this == root || this.startsWith(root.trimEnd('/') + "/")
+private fun String.isSameOrChildOf(root: String): Boolean = this == root || this.startsWith(root.trimEnd('/') + "/")
 
 /**
  * Parse an APK-embedded SO reference into (apkHint, entry) and match it against
@@ -866,5 +863,4 @@ internal fun EngineRuntime.sourceSummary(dir: WorkDirectory, src: SoSource): Sou
     }
 }
 
-internal fun EngineRuntime.sourceKey(src: SoSource): String =
-    "${src.path}|${src.size}|${src.modified}"
+internal fun EngineRuntime.sourceKey(src: SoSource): String = "${src.path}|${src.size}|${src.modified}"

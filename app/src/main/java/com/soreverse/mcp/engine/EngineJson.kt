@@ -187,10 +187,8 @@ internal object EngineJson {
             elf.programHeaders.size
         ).put("dynamicEntries", elf.dynamicEntries.size).put("strings", elf.strings.size)
     )
-    fun sectionLocator(file: String, s: SectionInfo, index: Int): String =
-        "so_section:$file!${sectionKey(s, index)}"
-    fun sectionKey(s: SectionInfo, index: Int): String =
-        "${s.name}@${hex(s.offset)}#${index.coerceAtLeast(0)}"
+    fun sectionLocator(file: String, s: SectionInfo, index: Int): String = "so_section:$file!${sectionKey(s, index)}"
+    fun sectionKey(s: SectionInfo, index: Int): String = "${s.name}@${hex(s.offset)}#${index.coerceAtLeast(0)}"
 
     private fun hex(v: Long) = "0x${v.toString(16)}"
 }

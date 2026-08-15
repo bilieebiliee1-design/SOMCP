@@ -14,8 +14,11 @@ object PublicReachability {
 
     fun probe(url: String, zh: Boolean, callback: (String) -> Unit) {
         Thread {
-            val body = """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"android-probe","version":"1.0"}}}"""
-                .toRequestBody("application/json".toMediaType())
+            val bodyJson =
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"," +
+                    "\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{}," +
+                    "\"clientInfo\":{\"name\":\"android-probe\",\"version\":\"1.0\"}}}"
+            val body = bodyJson.toRequestBody("application/json".toMediaType())
             val req = Request.Builder()
                 .url(url)
                 .post(body)

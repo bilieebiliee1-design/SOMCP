@@ -14,13 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-internal fun launchSoScan(
-    context: Context,
-    settings: SettingsStore,
-    state: AnalyzeUiState,
-    scope: CoroutineScope,
-    zh: Boolean
-): Job? {
+internal fun launchSoScan(context: Context, settings: SettingsStore, state: AnalyzeUiState, scope: CoroutineScope, zh: Boolean): Job? {
     if (state.scanning) return null
     state.scanning = true
     state.message = if (zh) "正在扫描 SO 文件…" else "Scanning SO files…"
@@ -43,14 +37,7 @@ internal fun launchSoScan(
     }
 }
 
-internal fun launchBasicAnalysis(
-    context: Context,
-    path: String,
-    name: String,
-    state: AnalyzeUiState,
-    scope: CoroutineScope,
-    zh: Boolean
-): Job? {
+internal fun launchBasicAnalysis(context: Context, path: String, name: String, state: AnalyzeUiState, scope: CoroutineScope, zh: Boolean): Job? {
     if (state.analyzingSoPath != null || state.deepAnalyzingPath != null) return null
     state.analyzingSoPath = path
     state.message = if (zh) "正在分析 $name…" else "Analyzing $name…"
@@ -102,7 +89,8 @@ internal fun launchDeepAnalysis(
         )
         return null
     }
-    if (settings.aiApiKey.isBlank() || settings.aiEndpoint.isBlank() ||
+    if (settings.aiApiKey.isBlank() ||
+        settings.aiEndpoint.isBlank() ||
         settings.aiModel.isBlank()
     ) {
         state.deepMessages = state.deepMessages + DeepChatMessage(
@@ -216,11 +204,7 @@ internal fun launchDeepAnalysis(
     }.also { state.deepJob = it }
 }
 
-internal fun buildDeepTurnRequest(
-    request: String,
-    messages: List<DeepChatMessage>,
-    historySoftLimit: Int
-): String {
+internal fun buildDeepTurnRequest(request: String, messages: List<DeepChatMessage>, historySoftLimit: Int): String {
     if (request.isBlank()) return request
     val history = messages
         .takeLast(6)

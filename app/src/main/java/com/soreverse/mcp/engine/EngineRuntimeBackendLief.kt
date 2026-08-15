@@ -24,7 +24,24 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                     .put(
                         "supported",
                         JSONArray(
-                            listOf("full_rz_core_command_gateway", "authenticated_unsafe_mutating_file_shell_debugger_commands", "persistent_patch_edit_sessions", "disassemble", "assemble", "arm32_thumb_disassemble", "arm32_thumb_assemble", "analyze", "functions", "cfg", "xrefs", "search_bytes", "crypto_scan", "esil_step", "diff", "decompile_probe")
+                            listOf(
+                                "full_rz_core_command_gateway",
+                                "authenticated_unsafe_mutating_file_shell_debugger_commands",
+                                "persistent_patch_edit_sessions",
+                                "disassemble",
+                                "assemble",
+                                "arm32_thumb_disassemble",
+                                "arm32_thumb_assemble",
+                                "analyze",
+                                "functions",
+                                "cfg",
+                                "xrefs",
+                                "search_bytes",
+                                "crypto_scan",
+                                "esil_step",
+                                "diff",
+                                "decompile_probe"
+                            )
                         )
                     )
                     .put(
@@ -48,7 +65,31 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                     .put(
                         "supported",
                         JSONArray(
-                            listOf("parse_any_official_json", "native_snapshot", "native_get", "native_list", "parse_elf", "parse_pe", "parse_macho", "parse_dex", "parse_art", "parse_oat", "parse_vdex", "object_path_dispatch", "sections", "symbols", "relocations", "program_headers", "dynamic_entries", "get_set_section_content", "patch_address", "add_exported_function", "remove_symbol", "fix_sections", "build")
+                            listOf(
+                                "parse_any_official_json",
+                                "native_snapshot",
+                                "native_get",
+                                "native_list",
+                                "parse_elf",
+                                "parse_pe",
+                                "parse_macho",
+                                "parse_dex",
+                                "parse_art",
+                                "parse_oat",
+                                "parse_vdex",
+                                "object_path_dispatch",
+                                "sections",
+                                "symbols",
+                                "relocations",
+                                "program_headers",
+                                "dynamic_entries",
+                                "get_set_section_content",
+                                "patch_address",
+                                "add_exported_function",
+                                "remove_symbol",
+                                "fix_sections",
+                                "build"
+                            )
                         )
                     )
                     .put(
@@ -72,7 +113,39 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                     .put(
                         "supported",
                         JSONArray(
-                            listOf("upstream_native_schemas", "upstream_native_tool_dispatch", "load_so", "session_open", "session_list", "session_close", "session_call", "session_call_address", "session_dump", "session_memory_maps", "session_registers", "session_modules", "session_exports", "session_memory_write", "session_memory_map", "session_memory_protect", "session_memory_unmap", "session_trace_code", "session_breakpoint_add", "reflect_roots", "reflect_methods", "reflect_invoke", "object_handle_chaining", "JNI_OnLoad", "call_export", "call_Java_native", "dump_memory", "modules", "exports", "imports", "unidbg_batch_cli_pipeline")
+                            listOf(
+                                "upstream_native_schemas",
+                                "upstream_native_tool_dispatch",
+                                "load_so",
+                                "session_open",
+                                "session_list",
+                                "session_close",
+                                "session_call",
+                                "session_call_address",
+                                "session_dump",
+                                "session_memory_maps",
+                                "session_registers",
+                                "session_modules",
+                                "session_exports",
+                                "session_memory_write",
+                                "session_memory_map",
+                                "session_memory_protect",
+                                "session_memory_unmap",
+                                "session_trace_code",
+                                "session_breakpoint_add",
+                                "reflect_roots",
+                                "reflect_methods",
+                                "reflect_invoke",
+                                "object_handle_chaining",
+                                "JNI_OnLoad",
+                                "call_export",
+                                "call_Java_native",
+                                "dump_memory",
+                                "modules",
+                                "exports",
+                                "imports",
+                                "unidbg_batch_cli_pipeline"
+                            )
                         )
                     )
                     .put(
@@ -135,7 +208,21 @@ internal fun EngineRuntime.liefDispatch(
             JSONObject().put(
                 "methods",
                 JSONArray(
-                    listOf("parseAny", "nativeSnapshot", "nativeGet", "nativeList", "toJson", "snapshot", "getSectionContent", "setSectionContent", "patchAddress", "addExportedFunction", "removeSymbol", "fixSections", "build")
+                    listOf(
+                        "parseAny",
+                        "nativeSnapshot",
+                        "nativeGet",
+                        "nativeList",
+                        "toJson",
+                        "snapshot",
+                        "getSectionContent",
+                        "setSectionContent",
+                        "patchAddress",
+                        "addExportedFunction",
+                        "removeSymbol",
+                        "fixSections",
+                        "build"
+                    )
                 )
             ).put(
                 "settableObjectPaths",
@@ -650,12 +737,7 @@ private fun EngineRuntime.resolveJsonObjectPath(root: Any, objectPath: String): 
     return current ?: JSONObject.NULL
 }
 
-private fun EngineRuntime.validateLiefDispatch(
-    elf: ElfFile,
-    objectPath: String,
-    method: String,
-    args: JSONArray
-): JSONObject {
+private fun EngineRuntime.validateLiefDispatch(elf: ElfFile, objectPath: String, method: String, args: JSONArray): JSONObject {
     val issues = JSONArray()
     if (objectPath.isNotBlank()) {
         val value = resolveLiefObjectPath(elf, objectPath)
@@ -709,11 +791,7 @@ private fun EngineRuntime.validateLiefDispatch(
     )
 }
 
-private fun EngineRuntime.withMutationHints(
-    payload: JSONObject,
-    workspaceId: String,
-    editSessionId: String
-): JSONObject = payload
+private fun EngineRuntime.withMutationHints(payload: JSONObject, workspaceId: String, editSessionId: String): JSONObject = payload
     .put("mutation", true)
     .put("workspaceId", workspaceId)
     .put(
@@ -731,11 +809,7 @@ private fun EngineRuntime.withMutationHints(
         "Use session_history(action=rollback, workspaceId=$workspaceId, editSessionId=$editSessionId) if validation fails"
     )
 
-internal fun EngineRuntime.xansoDispatch(
-    workspaceId: String,
-    editSessionId: String = "",
-    op: String
-): JSONObject = guarded {
+internal fun EngineRuntime.xansoDispatch(workspaceId: String, editSessionId: String = "", op: String): JSONObject = guarded {
     return@guarded when (op) {
         "status", "roots", "capabilities" -> ok(
             JSONObject()
@@ -774,11 +848,7 @@ internal fun EngineRuntime.xansoDispatch(
     }
 }
 
-internal fun EngineRuntime.xansoBuildSections(
-    workspaceId: String,
-    editSessionId: String = "",
-    force: Boolean = false
-): JSONObject = guarded {
+internal fun EngineRuntime.xansoBuildSections(workspaceId: String, editSessionId: String = "", force: Boolean = false): JSONObject = guarded {
     val original = dataFor(workspaceId, editSessionId)
     if (original.size <
         5
@@ -819,7 +889,8 @@ internal fun EngineRuntime.xansoBuildSections(
         )
     }
     val alreadyStructured =
-        beforeElf.sections.isNotEmpty() && beforeElf.programHeaders.isNotEmpty() &&
+        beforeElf.sections.isNotEmpty() &&
+            beforeElf.programHeaders.isNotEmpty() &&
             beforeElf.dynamicEntries.isNotEmpty()
     if (alreadyStructured && !force) {
         return@guarded ok(
@@ -893,12 +964,7 @@ internal fun EngineRuntime.xansoBuildSections(
     )
 }
 
-internal fun EngineRuntime.liefPatchAddress(
-    workspaceId: String,
-    editSessionId: String,
-    va: Long,
-    patch: ByteArray
-): JSONObject = guarded {
+internal fun EngineRuntime.liefPatchAddress(workspaceId: String, editSessionId: String, va: Long, patch: ByteArray): JSONObject = guarded {
     if (!lief.available()) {
         return@guarded err(
             "LIEF_UNAVAILABLE",
@@ -928,12 +994,7 @@ internal fun EngineRuntime.liefPatchAddress(
     )
 }
 
-internal fun EngineRuntime.liefAddExportedFunction(
-    workspaceId: String,
-    editSessionId: String,
-    addr: Long,
-    name: String
-): JSONObject = guarded {
+internal fun EngineRuntime.liefAddExportedFunction(workspaceId: String, editSessionId: String, addr: Long, name: String): JSONObject = guarded {
     if (!lief.available()) {
         return@guarded err(
             "LIEF_UNAVAILABLE",
@@ -974,11 +1035,7 @@ internal fun EngineRuntime.liefAddExportedFunction(
     )
 }
 
-internal fun EngineRuntime.liefRemoveSymbol(
-    workspaceId: String,
-    editSessionId: String,
-    name: String
-): JSONObject = guarded {
+internal fun EngineRuntime.liefRemoveSymbol(workspaceId: String, editSessionId: String, name: String): JSONObject = guarded {
     if (!lief.available()) {
         return@guarded err(
             "LIEF_UNAVAILABLE",

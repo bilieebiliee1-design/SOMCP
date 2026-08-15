@@ -8,5 +8,4 @@ import com.soreverse.mcp.service.McpForegroundService
 
 internal fun activeServer(context: Context): McpHttpServer? = McpForegroundService.currentServer
 
-internal fun activeBridge(context: Context): ApkMcpBridge =
-    activeServer(context)?.apkBridge ?: ApkMcpBridge(SettingsStore(context))
+internal fun activeBridge(context: Context): ApkMcpBridge = activeServer(context)?.apkBridge ?: ApkMcpBridge(SettingsStore(context))

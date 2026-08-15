@@ -48,10 +48,12 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         .build()
 
     private val _status = AtomicReference(TunnelStatus())
-    fun status(): TunnelStatus = _status.get()
+    val status: TunnelStatus
+        get() = _status.get()
 
     private val _binaryState = AtomicReference(BinaryState.UNKNOWN)
-    fun binaryState(): BinaryState = _binaryState.get()
+    val binaryState: BinaryState
+        get() = _binaryState.get()
 
     private var process: Process? = null
     private var watchThread: Thread? = null
@@ -209,16 +211,10 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         }
     }
 
-    fun start(targetPort: Int, mode: Mode, token: String): TunnelStatus =
-        startInternal(targetPort, mode, token, userInitiated = true)
+    fun start(targetPort: Int, mode: Mode, token: String): TunnelStatus = startInternal(targetPort, mode, token, userInitiated = true)
 
     @Synchronized
-    private fun startInternal(
-        targetPort: Int,
-        mode: Mode,
-        token: String,
-        userInitiated: Boolean
-    ): TunnelStatus {
+    private fun startInternal(targetPort: Int, mode: Mode, token: String, userInitiated: Boolean): TunnelStatus {
         if (userInitiated) {
             stopRequested = false
             terminalFailure = false
@@ -257,7 +253,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         // process — nothing to do. Avoids costly stop/restart churn from
         // keepalive or client retries when the tunnel is healthy.
         val cur = _status.get()
-        if (cur.state == State.RUNNING && cur.mode == mode && cur.targetPort == targetPort &&
+        if (cur.state == State.RUNNING &&
+            cur.mode == mode &&
+            cur.targetPort == targetPort &&
             process?.isAlive == true
         ) {
             return cur
@@ -510,14 +508,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         publicUrl?.let(::addHistoryUrl)
     }
 
-    private fun launch(
-        bin: File,
-        cmd: MutableList<String>,
-        mode: Mode,
-        url: String?,
-        targetPort: Int,
-        runGeneration: Int
-    ) {
+    private fun launch(bin: File, cmd: MutableList<String>, mode: Mode, url: String?, targetPort: Int, runGeneration: Int) {
         val safeCommand = cmd.mapIndexed { index, value ->
             if (index > 0 && cmd[index - 1] == "--token") "<redacted>" else value
         }
@@ -625,7 +616,8 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             // run(), and AMS killed com.soreverse.mcp. Catching it here and
             // breaking out of the loop lets the thread exit cleanly.
             try {
-                while (!stopRequested && generation.get() == runGeneration &&
+                while (!stopRequested &&
+                    generation.get() == runGeneration &&
                     Thread.currentThread().isInterrupted.not()
                 ) {
                     Thread.sleep(probeIntervalMs)
@@ -648,7 +640,8 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                             probeFailures.incrementAndGet()
                             if (downSince == 0L) downSince = System.currentTimeMillis()
                             val keep = settings.tunnelKeepAlive
-                            if (keep && System.currentTimeMillis() - lastRestartAt > 15_000 &&
+                            if (keep &&
+                                System.currentTimeMillis() - lastRestartAt > 15_000 &&
                                 System.currentTimeMillis() - downSince > 8_000
                             ) {
                                 lastRestartAt = System.currentTimeMillis()
@@ -707,12 +700,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         Pattern.CASE_INSENSITIVE
     )
 
-    private fun parseTunnelLine(
-        line: String,
-        mode: Mode,
-        runGeneration: Int,
-        owner: Process
-    ): String? {
+    private fun parseTunnelLine(line: String, mode: Mode, runGeneration: Int, owner: Process): String? {
         if (generation.get() != runGeneration || process !== owner) return null
         val m = urlPattern.matcher(line)
         if (m.find()) return m.group()
@@ -746,14 +734,13 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         return null
     }
 
-    private fun isTerminalNamedTunnelError(line: String): Boolean =
-        line.contains("Unauthorized", true) ||
-            line.contains("Tunnel not found", true) ||
-            line.contains("invalid token", true) ||
-            line.contains("token is invalid", true) ||
-            line.contains("failed to authenticate", true) ||
-            line.contains("authentication failed", true) ||
-            line.contains("forbidden", true)
+    private fun isTerminalNamedTunnelError(line: String): Boolean = line.contains("Unauthorized", true) ||
+        line.contains("Tunnel not found", true) ||
+        line.contains("invalid token", true) ||
+        line.contains("token is invalid", true) ||
+        line.contains("failed to authenticate", true) ||
+        line.contains("authentication failed", true) ||
+        line.contains("forbidden", true)
 
     private fun normalizePublicUrl(value: String): String? {
         val raw = value.trim()
@@ -767,12 +754,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         return candidate.trimEnd('/')
     }
 
-    private data class QuickTunnel(
-        val tunnelId: String,
-        val hostname: String,
-        val accountTag: String,
-        val secret: String
-    )
+    private data class QuickTunnel(val tunnelId: String, val hostname: String, val accountTag: String, val secret: String)
 
     private fun registerQuickTunnel(): QuickTunnel {
         // Two attempts with a short fixed backoff. Earlier 3-attempt ×
