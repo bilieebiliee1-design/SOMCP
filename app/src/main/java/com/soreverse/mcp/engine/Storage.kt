@@ -13,7 +13,6 @@ import java.util.zip.ZipInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.withContext
 
 data class SoSource(
     val path: String,
@@ -99,9 +98,7 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
      * Single-pass scan that returns SO sources AND fingerprints simultaneously,
      * avoiding the need for a separate [fingerprint] walk.
      */
-    fun listSosWithFingerprint(
-        options: ScanOptions = ScanOptions()
-    ): Pair<List<SoSource>, List<FileFingerprint>> {
+    fun listSosWithFingerprint(options: ScanOptions = ScanOptions()): Pair<List<SoSource>, List<FileFingerprint>> {
         val sources = mutableListOf<SoSource>()
         val fingerprints = mutableListOf<FileFingerprint>()
         val apkPaths = mutableListOf<Pair<String, Uri>>()
@@ -142,8 +139,7 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
         return sorted to sortedFp
     }
 
-    fun cachedSummary(source: SoSource): CachedSourceSummary? =
-        cache.sourceSummary(treeKey, source.path, source.size, source.modified)
+    fun cachedSummary(source: SoSource): CachedSourceSummary? = cache.sourceSummary(treeKey, source.path, source.size, source.modified)
 
     fun putCachedSummary(source: SoSource, summary: CachedSourceSummary) {
         cache.putSourceSummary(treeKey, source.path, source.size, source.modified, summary)
@@ -235,7 +231,9 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
     internal fun readElfSummary(uri: Uri): SourceSummary? {
         // Read ELF header (64 bytes max — covers both 32-bit and 64-bit)
         val header = readByteRange(uri, 0L, 64) ?: return null
-        if (header.size < 52 || header[0] != 0x7f.toByte() || header[1] != 'E'.code.toByte() ||
+        if (header.size < 52 ||
+            header[0] != 0x7f.toByte() ||
+            header[1] != 'E'.code.toByte() ||
             header[2] != 'L'.code.toByte() ||
             header[3] != 'F'.code.toByte()
         ) {
@@ -284,7 +282,8 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
             shstrndx = headerBuf.getShort(0x32).toInt() and 0xFFFF
         }
 
-        if (shoff <= 0 || shnum <= 0 ||
+        if (shoff <= 0 ||
+            shnum <= 0 ||
             shentsize <= 0
         ) {
             return SourceSummary(architecture, bits, endian, false, true)
@@ -330,7 +329,8 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
                     0xFFFFFFFFL
                 )
         }
-        if (shstrtabOff <= 0 || shstrtabSize <= 0 ||
+        if (shstrtabOff <= 0 ||
+            shstrtabSize <= 0 ||
             shstrtabSize > 1024 * 1024
         ) {
             return SourceSummary(architecture, bits, endian, false, true)
@@ -412,11 +412,7 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
         )
     }
 
-    fun writeRootFile(
-        displayName: String,
-        bytes: ByteArray,
-        mimeType: String = "application/octet-stream"
-    ): SoSource {
+    fun writeRootFile(displayName: String, bytes: ByteArray, mimeType: String = "application/octet-stream"): SoSource {
         val safeName = displayName.substringAfterLast('/').substringAfterLast('\\').ifBlank {
             "downloaded.so"
         }
@@ -583,13 +579,7 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
         error("Entry not found: $entryName")
     }
 
-    private fun walk(
-        dirUri: Uri,
-        prefix: String,
-        depth: Int,
-        options: ScanOptions,
-        onFile: (Uri, String, String, Long, Long) -> Unit
-    ) {
+    private fun walk(dirUri: Uri, prefix: String, depth: Int, options: ScanOptions, onFile: (Uri, String, String, Long, Long) -> Unit) {
         val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
         val documentId = if (dirUri == treeUri) {
             treeDocumentId

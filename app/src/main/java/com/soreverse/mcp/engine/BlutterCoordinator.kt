@@ -5,7 +5,6 @@ import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.core.str
 import java.io.File
-import java.util.zip.ZipInputStream
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -15,36 +14,35 @@ internal class BlutterCoordinator(
     private val registry: BlutterRunnerRegistry = BlutterRunnerRegistry(context)
 ) {
     private val embedded = BlutterEmbeddedBackend(context, store)
-    fun handle(args: JSONObject, workDirectory: WorkDirectory? = null): JSONObject =
-        when (args.str("action", "inspect")) {
-            "inspect" -> inspect(args, workDirectory)
+    fun handle(args: JSONObject, workDirectory: WorkDirectory? = null): JSONObject = when (args.str("action", "inspect")) {
+        "inspect" -> inspect(args, workDirectory)
 
-            "analyze" -> analyze(args, workDirectory)
+        "analyze" -> analyze(args, workDirectory)
 
-            "status" -> status(args.str("jobId"))
+        "status" -> status(args.str("jobId"))
 
-            "result" -> result(
-                args.str("jobId"),
-                args.optString("kind").takeIf {
-                    it.isNotBlank()
-                },
-                args.optString("cursor").takeIf { it.isNotBlank() },
-                args.optInt("limit", 1000)
-            )
+        "result" -> result(
+            args.str("jobId"),
+            args.optString("kind").takeIf {
+                it.isNotBlank()
+            },
+            args.optString("cursor").takeIf { it.isNotBlank() },
+            args.optInt("limit", 1000)
+        )
 
-            "cancel" -> cancel(args.str("jobId"))
+        "cancel" -> cancel(args.str("jobId"))
 
-            "packages" -> ok(registry.capabilities())
+        "packages" -> ok(registry.capabilities())
 
-            "prune" -> ok(store.prune(args.optLong("olderThanMillis", 7L * 24 * 60 * 60 * 1000)))
+        "prune" -> ok(store.prune(args.optLong("olderThanMillis", 7L * 24 * 60 * 60 * 1000)))
 
-            else -> err(
-                "UNKNOWN_ACTION",
-                "Unsupported flutter_blutter action",
-                "action",
-                args.str("action")
-            )
-        }
+        else -> err(
+            "UNKNOWN_ACTION",
+            "Unsupported flutter_blutter action",
+            "action",
+            args.str("action")
+        )
+    }
 
     private fun inspect(args: JSONObject, workDirectory: WorkDirectory?): JSONObject {
         val path = args.str("path")
@@ -232,18 +230,17 @@ internal class BlutterCoordinator(
 
     private fun status(jobId: String): JSONObject = store.get(jobId)?.let { ok(it) }
         ?: err("JOB_NOT_FOUND", "Blutter job was not found", "jobId", jobId)
-    private fun result(jobId: String, kind: String?, cursor: String?, limit: Int): JSONObject =
-        runCatching {
-            store.result(jobId, kind, cursor, limit)?.let { ok(it) }
-                ?: err("RESULT_NOT_FOUND", "Blutter result is not available", "jobId", jobId)
-        }.getOrElse {
-            err(
-                "INVALID_RESULT_REQUEST",
-                it.message ?: "Invalid result request",
-                "jobId",
-                jobId
-            )
-        }
+    private fun result(jobId: String, kind: String?, cursor: String?, limit: Int): JSONObject = runCatching {
+        store.result(jobId, kind, cursor, limit)?.let { ok(it) }
+            ?: err("RESULT_NOT_FOUND", "Blutter result is not available", "jobId", jobId)
+    }.getOrElse {
+        err(
+            "INVALID_RESULT_REQUEST",
+            it.message ?: "Invalid result request",
+            "jobId",
+            jobId
+        )
+    }
     private fun cancel(jobId: String): JSONObject {
         embedded.cancel(jobId)
         return if (store.cancel(
@@ -263,10 +260,7 @@ internal class BlutterCoordinator(
         }
     }
 
-    private fun resolveLibraries(
-        args: JSONObject,
-        workDirectory: WorkDirectory?
-    ): FlutterLibraries {
+    private fun resolveLibraries(args: JSONObject, workDirectory: WorkDirectory?): FlutterLibraries {
         val path = args.str("path")
         val file = File(path)
         if (file.isDirectory) {

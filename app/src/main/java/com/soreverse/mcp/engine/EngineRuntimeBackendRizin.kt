@@ -8,19 +8,18 @@ import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal fun EngineRuntime.rzAnalyze(workspaceId: String, editSessionId: String = ""): JSONObject =
-    guarded {
-        val bytes = dataFor(workspaceId, editSessionId)
-        val elf = elfFor(workspaceId, editSessionId)
-        if (!NativeEngine.active().available()) {
-            return@guarded err(
-                "RIZIN_UNAVAILABLE",
-                "Rizin native backend not loaded for this ABI"
-            )
-        }
-        val result = NativeEngine.active().analyze(bytes, elf.architecture)
-        ok(JSONObject(result).put("workspaceId", workspaceId).put("architecture", elf.architecture))
+internal fun EngineRuntime.rzAnalyze(workspaceId: String, editSessionId: String = ""): JSONObject = guarded {
+    val bytes = dataFor(workspaceId, editSessionId)
+    val elf = elfFor(workspaceId, editSessionId)
+    if (!NativeEngine.active().available()) {
+        return@guarded err(
+            "RIZIN_UNAVAILABLE",
+            "Rizin native backend not loaded for this ABI"
+        )
     }
+    val result = NativeEngine.active().analyze(bytes, elf.architecture)
+    ok(JSONObject(result).put("workspaceId", workspaceId).put("architecture", elf.architecture))
+}
 
 internal fun EngineRuntime.rzFunctions(
     workspaceId: String,
@@ -107,11 +106,7 @@ internal fun EngineRuntime.rzFunctions(
     ).put("source", "lief-dynsym-fallback").put("warning", warning)
 }
 
-internal fun EngineRuntime.rzCfg(
-    workspaceId: String,
-    editSessionId: String,
-    locator: String
-): JSONObject = guarded {
+internal fun EngineRuntime.rzCfg(workspaceId: String, editSessionId: String, locator: String): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) {
@@ -148,12 +143,7 @@ internal fun EngineRuntime.rzCfg(
     ok(payload)
 }
 
-internal fun EngineRuntime.rzXrefs(
-    workspaceId: String,
-    editSessionId: String,
-    locator: String,
-    direction: String = "to"
-): JSONObject = guarded {
+internal fun EngineRuntime.rzXrefs(workspaceId: String, editSessionId: String, locator: String, direction: String = "to"): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) {
@@ -170,7 +160,9 @@ internal fun EngineRuntime.rzXrefs(
     )
     val bareName = name.removePrefix("sym.imp.").removePrefix("sym.")
     val sym = (elf.symbols + elf.dynSymbols).firstOrNull {
-        it.name == name || it.name == bareName || it.name == "sym.imp.$bareName" ||
+        it.name == name ||
+            it.name == bareName ||
+            it.name == "sym.imp.$bareName" ||
             it.name == "sym.$bareName"
     }
     val importHints = rizinImportStubHints(workspaceId, editSessionId, elf)
@@ -207,8 +199,11 @@ internal fun EngineRuntime.rzXrefs(
             )}:${item.optString("direction")}"
     }
     val relocations = elf.relocations.filter {
-        it.symbol == bareName || it.symbol == name || it.symbol == "sym.imp.$bareName" ||
-            (LocatorParser.hex(locator) != null && it.offset == atVa) || it.offset == atVa
+        it.symbol == bareName ||
+            it.symbol == name ||
+            it.symbol == "sym.imp.$bareName" ||
+            (LocatorParser.hex(locator) != null && it.offset == atVa) ||
+            it.offset == atVa
     }
     val gotSlots = relocations.map { it.offset }.toMutableSet()
     if (direction == "to" || direction == "both") {
@@ -306,14 +301,9 @@ internal fun EngineRuntime.rzXrefs(
     )
 }
 
-private fun EngineRuntime.setOfNotNull(vararg values: Long?): Set<Long> =
-    values.filterNotNull().toSet()
+private fun EngineRuntime.setOfNotNull(vararg values: Long?): Set<Long> = values.filterNotNull().toSet()
 
-private fun EngineRuntime.aarch64ComputedXrefs(
-    bytes: ByteArray,
-    elf: ElfFile,
-    targets: Set<Long>
-): List<JSONObject> {
+private fun EngineRuntime.aarch64ComputedXrefs(bytes: ByteArray, elf: ElfFile, targets: Set<Long>): List<JSONObject> {
     if (targets.isEmpty()) return emptyList()
     val found = ArrayList<JSONObject>()
     elf.sections.filter { it.flags and 0x4L != 0L && it.size >= 8 }.forEach { section ->
@@ -372,11 +362,7 @@ private fun EngineRuntime.aarch64ComputedXrefs(
 }
 
 /** Direct AArch64 BL/B (imm26) call/jump edges to exact targets (function body or PLT stub). */
-private fun EngineRuntime.aarch64BranchXrefs(
-    bytes: ByteArray,
-    elf: ElfFile,
-    targets: Set<Long>
-): List<JSONObject> {
+private fun EngineRuntime.aarch64BranchXrefs(bytes: ByteArray, elf: ElfFile, targets: Set<Long>): List<JSONObject> {
     if (targets.isEmpty()) return emptyList()
     val found = ArrayList<JSONObject>()
     elf.sections.filter { it.flags and 0x4L != 0L && it.size >= 4 }.forEach { section ->
@@ -417,13 +403,7 @@ private fun EngineRuntime.aarch64BranchXrefs(
  * Recover call sites that load a GOT slot then BLR:
  * ADRP+LDR Xt, [Xn, #off] ... BLR Xt  where the GOT slot belongs to [gotSlots].
  */
-private fun EngineRuntime.aarch64GotBlrXrefs(
-    bytes: ByteArray,
-    elf: ElfFile,
-    gotSlots: Set<Long>,
-    symbolVa: Long,
-    symbolName: String
-): List<JSONObject> {
+private fun EngineRuntime.aarch64GotBlrXrefs(bytes: ByteArray, elf: ElfFile, gotSlots: Set<Long>, symbolVa: Long, symbolName: String): List<JSONObject> {
     if (gotSlots.isEmpty()) return emptyList()
     val found = ArrayList<JSONObject>()
     elf.sections.filter { it.flags and 0x4L != 0L && it.size >= 8 }.forEach { section ->
@@ -490,13 +470,7 @@ private fun EngineRuntime.aarch64GotBlrXrefs(
     return found
 }
 
-internal fun EngineRuntime.rzSearchBytes(
-    workspaceId: String,
-    editSessionId: String,
-    pattern: String,
-    fromVa: Long = 0,
-    toVa: Long = 0
-): JSONObject = guarded {
+internal fun EngineRuntime.rzSearchBytes(workspaceId: String, editSessionId: String, pattern: String, fromVa: Long = 0, toVa: Long = 0): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) {
@@ -537,10 +511,7 @@ internal fun EngineRuntime.rzSearchBytes(
     )
 }
 
-internal fun EngineRuntime.rzScanCrypto(
-    workspaceId: String,
-    editSessionId: String = ""
-): JSONObject = guarded {
+internal fun EngineRuntime.rzScanCrypto(workspaceId: String, editSessionId: String = ""): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) {
@@ -553,12 +524,7 @@ internal fun EngineRuntime.rzScanCrypto(
     ok(JSONObject(result).put("workspaceId", workspaceId).put("architecture", elf.architecture))
 }
 
-internal fun EngineRuntime.rzEsilStep(
-    workspaceId: String,
-    editSessionId: String,
-    locator: String,
-    stepCount: Int = 1
-): JSONObject = guarded {
+internal fun EngineRuntime.rzEsilStep(workspaceId: String, editSessionId: String, locator: String, stepCount: Int = 1): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) {
@@ -593,12 +559,7 @@ internal fun EngineRuntime.rzEsilStep(
     )
 }
 
-internal fun EngineRuntime.rzDiff(
-    workspaceIdA: String,
-    editSessionIdA: String,
-    workspaceIdB: String,
-    editSessionIdB: String
-): JSONObject = guarded {
+internal fun EngineRuntime.rzDiff(workspaceIdA: String, editSessionIdA: String, workspaceIdB: String, editSessionIdB: String): JSONObject = guarded {
     if (!NativeEngine.active().available()) {
         return@guarded err(
             "RIZIN_UNAVAILABLE",
@@ -631,12 +592,7 @@ internal fun EngineRuntime.rzDiff(
     )
 }
 
-internal fun EngineRuntime.rzCommand(
-    workspaceId: String,
-    editSessionId: String = "",
-    command: String,
-    unsafe: Boolean = false
-): JSONObject = guarded {
+internal fun EngineRuntime.rzCommand(workspaceId: String, editSessionId: String = "", command: String, unsafe: Boolean = false): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) {
@@ -656,7 +612,8 @@ internal fun EngineRuntime.rzCommand(
     // Align low-level axt/axtj with high-level analyze_xrefs / rizin_api xrefs enrichment.
     parseAxtCommand(command)?.let { (va, asJson) ->
         val enriched = rzXrefs(workspaceId, editSessionId, hex(va), "to")
-        if (enriched.optBoolean("ok", false) || enriched.has("xrefs") ||
+        if (enriched.optBoolean("ok", false) ||
+            enriched.has("xrefs") ||
             enriched.optJSONObject("data") != null
         ) {
             val data = enriched.optJSONObject("data") ?: enriched
@@ -780,12 +737,7 @@ private fun EngineRuntime.parseAxtCommand(command: String): Pair<Long, Boolean>?
     return null
 }
 
-internal fun EngineRuntime.rzDecompile(
-    workspaceId: String,
-    editSessionId: String = "",
-    locator: String = "",
-    strict: Boolean = true
-): JSONObject = guarded {
+internal fun EngineRuntime.rzDecompile(workspaceId: String, editSessionId: String = "", locator: String = "", strict: Boolean = true): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) {
@@ -834,13 +786,7 @@ private fun EngineRuntime.rizinFunctionKind(elf: ElfFile, item: JSONObject): Str
     }
 }
 
-private fun EngineRuntime.fallbackByteSearch(
-    bytes: ByteArray,
-    elf: ElfFile,
-    pattern: String,
-    fromVa: Long,
-    toVa: Long
-): JSONArray {
+private fun EngineRuntime.fallbackByteSearch(bytes: ByteArray, elf: ElfFile, pattern: String, fromVa: Long, toVa: Long): JSONArray {
     val parsed = parseHexPattern(pattern) ?: return JSONArray()
     val start = if (fromVa >
         0
@@ -966,14 +912,7 @@ private fun EngineRuntime.normalizeCfgAddressField(obj: JSONObject, field: Strin
         obj.put("${field}Valid", true)
     }
 }
-private fun EngineRuntime.enrichDecompilePayload(
-    payload: JSONObject,
-    bytes: ByteArray,
-    elf: ElfFile,
-    va: Long,
-    name: String,
-    locator: String
-): JSONObject {
+private fun EngineRuntime.enrichDecompilePayload(payload: JSONObject, bytes: ByteArray, elf: ElfFile, va: Long, name: String, locator: String): JSONObject {
     // Keep pseudocode exactly as emitted by the decompiler. Boundary repair happens in native analysis before pdg.
     // Post-pass only DETECTS real content crossing; never hard-clips text.
     val rawPseudo = payload.optString("pseudocode")
@@ -1149,13 +1088,15 @@ private fun EngineRuntime.auditPseudocodeBoundary(
         val inImage =
             sectionFor(elf, addr) != null ||
                 elf.programHeaders.any {
-                    it.type == 1L && addr >= it.vaddr &&
+                    it.type == 1L &&
+                        addr >= it.vaddr &&
                         addr < it.vaddr + maxOf(it.memsz, it.filesz)
                 }
         if (!inImage) continue
         if (hardEnd > startVa && addr >= hardEnd) {
             outOfBounds += addr
-        } else if (endVa > startVa && addr >= endVa &&
+        } else if (endVa > startVa &&
+            addr >= endVa &&
             (nextBoundary == 0L || addr < nextBoundary)
         ) {
             outOfBounds += addr
@@ -1191,7 +1132,8 @@ private fun EngineRuntime.auditPseudocodeBoundary(
         )
     }
     val externalCodeRefs = allExplicitAddrs.filter { addr ->
-        addr !in codeSites && addr >= 0x1000 &&
+        addr !in codeSites &&
+            addr >= 0x1000 &&
             (sectionFor(elf, addr)?.let { it.flags and 0x4L != 0L } == true) &&
             (addr < startVa || (hardEnd > startVa && addr >= hardEnd))
     }.distinct().sorted()
@@ -1211,22 +1153,17 @@ private fun EngineRuntime.auditPseudocodeBoundary(
         .put("warnings", warnings)
         .put("coverage", coverage)
 }
-internal fun EngineRuntime.resolveRizinFunctionAddress(
-    bytes: ByteArray,
-    elf: ElfFile,
-    name: String
-): Long? = rizinFunctions(bytes, elf)
+internal fun EngineRuntime.resolveRizinFunctionAddress(bytes: ByteArray, elf: ElfFile, name: String): Long? = rizinFunctions(bytes, elf)
     .firstOrNull { it.optString("name") == name }
     ?.optLong("addr", -1L)
     ?.takeIf { it >= 0 }
     ?.and(-2L)
 
-internal fun EngineRuntime.rizinFunctionSize(bytes: ByteArray, elf: ElfFile, start: Long): Int? =
-    rizinFunctions(bytes, elf)
-        .firstOrNull { (it.optLong("addr", -1L) and -2L) == start }
-        ?.optLong("size", 0L)
-        ?.toInt()
-        ?.takeIf { it > 0 }
+internal fun EngineRuntime.rizinFunctionSize(bytes: ByteArray, elf: ElfFile, start: Long): Int? = rizinFunctions(bytes, elf)
+    .firstOrNull { (it.optLong("addr", -1L) and -2L) == start }
+    ?.optLong("size", 0L)
+    ?.toInt()
+    ?.takeIf { it > 0 }
 
 internal fun EngineRuntime.rizinFunctions(bytes: ByteArray, elf: ElfFile): List<JSONObject> {
     if (!NativeEngine.active().available()) return emptyList()
@@ -1255,11 +1192,7 @@ internal fun EngineRuntime.decompileWithContext(
         .put("sourceSection", sectionFor(elf, va)?.name ?: JSONObject.NULL)
 }
 
-internal fun EngineRuntime.rizinImportStubHints(
-    workspaceId: String,
-    editSessionId: String,
-    elf: ElfFile
-): Map<Long, String> {
+internal fun EngineRuntime.rizinImportStubHints(workspaceId: String, editSessionId: String, elf: ElfFile): Map<Long, String> {
     if (!NativeEngine.active().available()) return emptyMap()
     val bytes =
         runCatching { dataFor(workspaceId, editSessionId) }.getOrNull() ?: return emptyMap()

@@ -25,7 +25,11 @@ internal fun SettingsBlutterPage(t: UiText) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    if (t.zh) "当前发行版只打包这一套完整分析 Runner，以控制安装包体积。分析完全在手机本地完成，不需要 Python、网络、ADB 或远端服务。" else "This release embeds one full analysis runner to control package size. Analysis runs locally without Python, network, ADB, or remote services.",
+                    if (t.zh) {
+                        "当前发行版只打包这一套完整分析 Runner，以控制安装包体积。分析完全在手机本地完成，不需要 Python、网络、ADB 或远端服务。"
+                    } else {
+                        "This release embeds one full analysis runner to control package size. Analysis runs locally without Python, network, ADB, or remote services."
+                    },
                     modifier = Modifier.padding(top = 10.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
@@ -39,7 +43,11 @@ internal fun SettingsBlutterPage(t: UiText) {
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    if (t.zh) "仅当目标 APK 的 snapshot hash、ABI 和压缩指针模式与内置 Runner 精确匹配时才会启动分析。其他 Flutter/Dart 版本会明确返回不支持，不会尝试错误解析。" else "Analysis starts only when snapshot hash, ABI, and compressed-pointer mode exactly match the embedded runner. Other Flutter/Dart versions return an explicit unsupported-version error.",
+                    if (t.zh) {
+                        "仅当目标 APK 的 snapshot hash、ABI 和压缩指针模式与内置 Runner 精确匹配时才会启动分析。其他 Flutter/Dart 版本会明确返回不支持，不会尝试错误解析。"
+                    } else {
+                        "Analysis starts only when snapshot hash, ABI, and compressed-pointer mode exactly match the embedded runner. Other Flutter/Dart versions return an explicit unsupported-version error."
+                    },
                     modifier = Modifier.padding(top = 8.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall

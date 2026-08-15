@@ -14,14 +14,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -45,13 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.SettingsStore
 
 @Composable
-internal fun NumberSettingRow(
-    label: String,
-    value: String,
-    onValue: (String) -> Unit,
-    onApply: (Int) -> Unit,
-    suffix: String = ""
-) {
+internal fun NumberSettingRow(label: String, value: String, onValue: (String) -> Unit, onApply: (Int) -> Unit, suffix: String = "") {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.controlRadius)
     Row(
@@ -81,14 +72,7 @@ internal fun NumberSettingRow(
 }
 
 @Composable
-internal fun DecimalSettingRow(
-    label: String,
-    value: String,
-    suffix: String,
-    supporting: String,
-    onValue: (String) -> Unit,
-    onApply: (Float) -> Unit
-) {
+internal fun DecimalSettingRow(label: String, value: String, suffix: String, supporting: String, onValue: (String) -> Unit, onApply: (Float) -> Unit) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.controlRadius)
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp)) {
@@ -127,11 +111,7 @@ internal fun DecimalSettingRow(
 }
 
 @Composable
-internal fun ChipRow(
-    items: List<Pair<String, String>>,
-    selected: String,
-    onSelected: (String) -> Unit
-) {
+internal fun ChipRow(items: List<Pair<String, String>>, selected: String, onSelected: (String) -> Unit) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -182,10 +162,7 @@ internal fun SecondaryActionButton(text: String, onClick: () -> Unit, modifier: 
 }
 
 @Composable
-internal fun SurfacePanel(
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit
-) {
+internal fun SurfacePanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(LocalUiMetrics.current.cardRadius)
     Column(
         modifier
@@ -309,29 +286,44 @@ internal fun keepAliveAdvice(zh: Boolean): String {
     return when {
         brand.contains(
             "xiaomi"
-        ) || brand.contains(
-            "redmi"
-        ) -> if (zh) "$base\n小米/红米/HyperOS：安全中心 -> 自启动；省电策略 -> 无限制。" else "$base\nMIUI/HyperOS: Security -> Autostart; Battery saver -> No restrictions."
+        ) ||
+            brand.contains(
+                "redmi"
+            ) -> if (zh) "$base\n小米/红米/HyperOS：安全中心 -> 自启动；省电策略 -> 无限制。" else "$base\nMIUI/HyperOS: Security -> Autostart; Battery saver -> No restrictions."
 
         brand.contains(
             "huawei"
-        ) || brand.contains(
-            "honor"
-        ) -> if (zh) "$base\n华为/荣耀：手机管家 -> 应用启动管理 -> 手动管理并允许后台活动。" else "$base\nHuawei/Honor: Phone Manager -> App launch -> Manage manually and allow background activity."
+        ) ||
+            brand.contains(
+                "honor"
+            ) ->
+            if (zh) {
+                "$base\n华为/荣耀：手机管家 -> 应用启动管理 -> 手动管理并允许后台活动。"
+            } else {
+                "$base\nHuawei/Honor: Phone Manager -> App launch -> Manage manually and allow background activity."
+            }
 
         brand.contains(
             "oppo"
-        ) || brand.contains(
-            "realme"
-        ) || brand.contains(
-            "oneplus"
-        ) -> if (zh) "$base\nOPPO/realme/OnePlus：电池 -> 后台耗电管理 -> 允许。" else "$base\nOPPO/realme/OnePlus: Battery -> Background power usage -> Allow."
+        ) ||
+            brand.contains(
+                "realme"
+            ) ||
+            brand.contains(
+                "oneplus"
+            ) -> if (zh) "$base\nOPPO/realme/OnePlus：电池 -> 后台耗电管理 -> 允许。" else "$base\nOPPO/realme/OnePlus: Battery -> Background power usage -> Allow."
 
         brand.contains(
             "vivo"
-        ) || brand.contains(
-            "iqoo"
-        ) -> if (zh) "$base\nvivo/iQOO：电池 -> 后台高耗电 -> 允许；权限 -> 自启动。" else "$base\nvivo/iQOO: Battery -> Background high power usage -> Allow; Permissions -> Autostart."
+        ) ||
+            brand.contains(
+                "iqoo"
+            ) ->
+            if (zh) {
+                "$base\nvivo/iQOO：电池 -> 后台高耗电 -> 允许；权限 -> 自启动。"
+            } else {
+                "$base\nvivo/iQOO: Battery -> Background high power usage -> Allow; Permissions -> Autostart."
+            }
 
         else -> base
     }
@@ -352,9 +344,24 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
             )
             Text(
                 when {
-                    settings.tunnelMode != "off" -> if (t.zh) "Cloudflare 隧道已配置：公网访问必须启用 Token。" else "Cloudflare Tunnel is configured: public access requires a token."
-                    bindHost == "127.0.0.1" -> if (t.zh) "仅本机：Token 可选，适合本机客户端或 adb forward。" else "Local only: token is optional for local clients or adb forward."
-                    else -> if (t.zh) "局域网：强烈建议启用 Token。" else "LAN access: enabling a token is strongly recommended."
+                    settings.tunnelMode != "off" ->
+                        if (t.zh) {
+                            "Cloudflare 隧道已配置：公网访问必须启用 Token。"
+                        } else {
+                            "Cloudflare Tunnel is configured: public access requires a token."
+                        }
+                    bindHost == "127.0.0.1" ->
+                        if (t.zh) {
+                            "仅本机：Token 可选，适合本机客户端或 adb forward。"
+                        } else {
+                            "Local only: token is optional for local clients or adb forward."
+                        }
+                    else ->
+                        if (t.zh) {
+                            "局域网：强烈建议启用 Token。"
+                        } else {
+                            "LAN access: enabling a token is strongly recommended."
+                        }
                 },
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                 style = MaterialTheme.typography.bodySmall,

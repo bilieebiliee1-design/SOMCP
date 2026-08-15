@@ -28,11 +28,7 @@ internal fun loadWorkspaces(context: Context): List<WorkspaceUi> {
     }
 }
 
-internal fun deepReportSnapshot(
-    path: String,
-    model: String,
-    messages: List<DeepChatMessage>
-): JSONObject = JSONObject()
+internal fun deepReportSnapshot(path: String, model: String, messages: List<DeepChatMessage>): JSONObject = JSONObject()
     .put("path", path)
     .put("model", model)
     .put(
@@ -119,11 +115,7 @@ internal fun restoreDeepReport(state: AnalyzeUiState, snapshot: JSONObject) {
     state.showDeepReport = true
 }
 
-internal fun loadSoSources(
-    context: Context,
-    limit: Int,
-    zh: Boolean = false
-): Pair<List<SoSourceUi>, String> {
+internal fun loadSoSources(context: Context, limit: Int, zh: Boolean = false): Pair<List<SoSourceUi>, String> {
     val payload = runCatching {
         EngineProvider.get(context).listAvailableSos(limit = limit.coerceIn(20, 500))
     }.getOrElse {
@@ -156,11 +148,7 @@ internal fun loadSoSources(
     return sources to "${sources.size}$more"
 }
 
-internal fun openSoForUi(
-    context: Context,
-    path: String,
-    zh: Boolean = false
-): Pair<SoDetailUi?, String> {
+internal fun openSoForUi(context: Context, path: String, zh: Boolean = false): Pair<SoDetailUi?, String> {
     val engine = EngineProvider.get(context)
     val opened = engine.open(path, temporary = true)
     if (!opened.optBoolean("ok", true)) {
@@ -176,7 +164,8 @@ internal fun openSoForUi(
             val counts = opened.optJSONObject("counts") ?: JSONObject()
             val overview = analyzed.optJSONObject("overview")
                 ?: analyzed.takeIf {
-                    it.has("securityFeatures") || it.has("entropy") ||
+                    it.has("securityFeatures") ||
+                        it.has("entropy") ||
                         it.has("difficulty")
                 }
                 ?: engine.overview(workspaceId)

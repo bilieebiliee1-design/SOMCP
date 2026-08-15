@@ -26,8 +26,7 @@ internal data class FlutterFingerprint(
         .put("evidence", JSONArray(evidence))
 
     companion object {
-        fun unknown(): FlutterFingerprint =
-            FlutterFingerprint(null, null, emptyList(), emptyList(), null, null, null, 0.0, emptyList())
+        fun unknown(): FlutterFingerprint = FlutterFingerprint(null, null, emptyList(), emptyList(), null, null, null, 0.0, emptyList())
     }
 }
 

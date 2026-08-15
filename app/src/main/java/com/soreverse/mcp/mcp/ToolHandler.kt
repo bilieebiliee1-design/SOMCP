@@ -36,21 +36,13 @@ data class ToolMeta(
 
 // ToolClass is defined in ToolCatalog.kt and reused here to avoid a redeclaration.
 
-open class ToolContext(
-    open val context: Context,
-    open val settings: SettingsStore,
-    open val engine: NativeSoEngine
-)
+open class ToolContext(open val context: Context, open val settings: SettingsStore, open val engine: NativeSoEngine)
 
 /**
  * A handler that forwards to a [NativeSoEngine] method via a lambda. Most SO
  * tools are thin adapters over engine methods, so this removes per-tool
  * ceremony while keeping the engine dependency explicit and injectable.
  */
-class EngineToolHandler(
-    override val meta: ToolMeta,
-    private val invoke: (NativeSoEngine, JSONObject, SettingsStore) -> JSONObject
-) : ToolHandler {
-    override fun handle(ctx: ToolContext, args: JSONObject): JSONObject =
-        invoke(ctx.engine, args, ctx.settings)
+class EngineToolHandler(override val meta: ToolMeta, private val invoke: (NativeSoEngine, JSONObject, SettingsStore) -> JSONObject) : ToolHandler {
+    override fun handle(ctx: ToolContext, args: JSONObject): JSONObject = invoke(ctx.engine, args, ctx.settings)
 }

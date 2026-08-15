@@ -175,9 +175,11 @@ object BackupCrypto {
     }
 
     /** Check whether a JSON object is an encrypted backup (has the expected structure). */
-    fun isEncryptedBackup(obj: JSONObject): Boolean =
-        obj.optInt("v", -1) == JSON_VERSION && obj.optString("alg", "") == ALGORITHM &&
-            obj.has("salt") && obj.has("nonce") && obj.has("ciphertext")
+    fun isEncryptedBackup(obj: JSONObject): Boolean = obj.optInt("v", -1) == JSON_VERSION &&
+        obj.optString("alg", "") == ALGORITHM &&
+        obj.has("salt") &&
+        obj.has("nonce") &&
+        obj.has("ciphertext")
 
     private fun deriveKey(password: String, salt: ByteArray): ByteArray {
         val hash = argon2.hash(

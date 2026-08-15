@@ -9,7 +9,10 @@ object HexCodec {
 
     fun bytes(value: String): ByteArray? {
         val clean = value.filterNot {
-            it == ' ' || it == '\n' || it == '\r' || it == '\t' ||
+            it == ' ' ||
+                it == '\n' ||
+                it == '\r' ||
+                it == '\t' ||
                 it == ','
         }
         if (clean.isBlank() || clean.length % 2 != 0) return null

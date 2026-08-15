@@ -7,11 +7,8 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -32,23 +29,12 @@ import org.json.JSONObject
 sealed interface RikkaPart {
     data class Text(val text: String) : RikkaPart
     data class Reasoning(val text: String) : RikkaPart
-    data class Tool(
-        val id: String,
-        val name: String,
-        val arguments: String,
-        val result: String? = null,
-        val index: Int = 0
-    ) : RikkaPart
+    data class Tool(val id: String, val name: String, val arguments: String, val result: String? = null, val index: Int = 0) : RikkaPart
 }
 
 internal data class RikkaMessage(val role: String, val parts: List<RikkaPart>)
 
-internal data class RikkaTool(
-    val name: String,
-    val description: String,
-    val schema: JSONObject,
-    val execute: suspend (JSONObject) -> String
-)
+internal data class RikkaTool(val name: String, val description: String, val schema: JSONObject, val execute: suspend (JSONObject) -> String)
 
 internal class RikkaAgentEngine(
     private val client: OkHttpClient,
@@ -158,10 +144,7 @@ internal class RikkaAgentEngine(
         error("Maximum tool steps exceeded")
     }
 
-    private fun stream(
-        messages: List<RikkaMessage>,
-        tools: List<RikkaTool>
-    ): Flow<List<RikkaPart>> = if (provider ==
+    private fun stream(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> = if (provider ==
         "anthropic"
     ) {
         streamAnthropic(messages, tools)
@@ -169,10 +152,7 @@ internal class RikkaAgentEngine(
         streamOpenAi(messages, tools)
     }
 
-    private fun streamOpenAi(
-        messages: List<RikkaMessage>,
-        tools: List<RikkaTool>
-    ): Flow<List<RikkaPart>> = callbackFlow {
+    private fun streamOpenAi(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> = callbackFlow {
         val body = buildOpenAiBody(messages, tools)
         val request = requestBuilder(openAiUrl())
             .safeHeader("Authorization", "Bearer $apiKey")
@@ -183,12 +163,7 @@ internal class RikkaAgentEngine(
         val source = EventSources.createFactory(client).newEventSource(
             request,
             object : EventSourceListener() {
-                override fun onEvent(
-                    eventSource: EventSource,
-                    id: String?,
-                    type: String?,
-                    data: String
-                ) {
+                override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                     if (data == "[DONE]") {
                         close()
                         return
@@ -246,11 +221,7 @@ internal class RikkaAgentEngine(
                     }.onFailure { close(it) }
                 }
 
-                override fun onFailure(
-                    eventSource: EventSource,
-                    t: Throwable?,
-                    response: Response?
-                ) {
+                override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                     close(eventSourceFailure(t, response))
                 }
 
@@ -262,10 +233,7 @@ internal class RikkaAgentEngine(
         awaitClose { source.cancel() }
     }.buffer(Channel.UNLIMITED)
 
-    private fun streamAnthropic(
-        messages: List<RikkaMessage>,
-        tools: List<RikkaTool>
-    ): Flow<List<RikkaPart>> = callbackFlow {
+    private fun streamAnthropic(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> = callbackFlow {
         val request = requestBuilder(anthropicUrl())
             .safeHeader("x-api-key", apiKey)
             .header("anthropic-version", "2023-06-01")
@@ -281,12 +249,7 @@ internal class RikkaAgentEngine(
         val source = EventSources.createFactory(client).newEventSource(
             request,
             object : EventSourceListener() {
-                override fun onEvent(
-                    eventSource: EventSource,
-                    id: String?,
-                    type: String?,
-                    data: String
-                ) {
+                override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                     runCatching {
                         val root = json.parseToJsonElement(data).jsonObject
                         when (root["type"]?.jsonPrimitive?.contentOrNull) {
@@ -347,11 +310,7 @@ internal class RikkaAgentEngine(
                     }.onFailure { close(it) }
                 }
 
-                override fun onFailure(
-                    eventSource: EventSource,
-                    t: Throwable?,
-                    response: Response?
-                ) {
+                override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                     close(eventSourceFailure(t, response))
                 }
 
@@ -381,77 +340,174 @@ internal class RikkaAgentEngine(
         return IllegalStateException(message, t)
     }
 
-    private fun mergeParts(current: List<RikkaPart>, deltas: List<RikkaPart>): List<RikkaPart> =
-        deltas.fold(current) { parts, delta ->
-            when (delta) {
-                is RikkaPart.Text -> if (parts.lastOrNull() is RikkaPart.Text) {
-                    parts.dropLast(1) +
-                        RikkaPart.Text((parts.last() as RikkaPart.Text).text + delta.text)
-                } else {
-                    parts +
-                        delta
-                }
+    private fun mergeParts(current: List<RikkaPart>, deltas: List<RikkaPart>): List<RikkaPart> = deltas.fold(current) { parts, delta ->
+        when (delta) {
+            is RikkaPart.Text -> if (parts.lastOrNull() is RikkaPart.Text) {
+                parts.dropLast(1) +
+                    RikkaPart.Text((parts.last() as RikkaPart.Text).text + delta.text)
+            } else {
+                parts +
+                    delta
+            }
 
-                is RikkaPart.Reasoning -> if (parts.lastOrNull() is RikkaPart.Reasoning) {
-                    parts.dropLast(1) +
-                        RikkaPart.Reasoning((parts.last() as RikkaPart.Reasoning).text + delta.text)
-                } else {
-                    parts +
-                        delta
-                }
+            is RikkaPart.Reasoning -> if (parts.lastOrNull() is RikkaPart.Reasoning) {
+                parts.dropLast(1) +
+                    RikkaPart.Reasoning((parts.last() as RikkaPart.Reasoning).text + delta.text)
+            } else {
+                parts +
+                    delta
+            }
 
-                is RikkaPart.Tool -> {
-                    val target = parts.indexOfLast {
-                        it is RikkaPart.Tool &&
-                            (it.index == delta.index || (delta.id.isNotBlank() && it.id == delta.id))
-                    }
-                    if (target < 0) {
-                        parts + delta
-                    } else {
-                        parts.toMutableList().apply {
-                            val old = this[target] as RikkaPart.Tool
-                            this[target] = old.copy(
-                                id = delta.id.ifBlank { old.id },
-                                name = delta.name.ifBlank { old.name },
-                                arguments = old.arguments + delta.arguments,
-                                result = delta.result ?: old.result
-                            )
-                        }
+            is RikkaPart.Tool -> {
+                val target = parts.indexOfLast {
+                    it is RikkaPart.Tool &&
+                        (it.index == delta.index || (delta.id.isNotBlank() && it.id == delta.id))
+                }
+                if (target < 0) {
+                    parts + delta
+                } else {
+                    parts.toMutableList().apply {
+                        val old = this[target] as RikkaPart.Tool
+                        this[target] = old.copy(
+                            id = delta.id.ifBlank { old.id },
+                            name = delta.name.ifBlank { old.name },
+                            arguments = old.arguments + delta.arguments,
+                            result = delta.result ?: old.result
+                        )
                     }
                 }
             }
         }
+    }
 
-    private fun buildOpenAiBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) =
-        buildJsonObject {
-            put("model", model)
-            put("stream", true)
-            put("temperature", temperature)
-            putJsonArray("messages") {
-                messages.forEach { message ->
+    private fun buildOpenAiBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) = buildJsonObject {
+        put("model", model)
+        put("stream", true)
+        put("temperature", temperature)
+        putJsonArray("messages") {
+            messages.forEach { message ->
+                add(
+                    buildJsonObject {
+                        put("role", message.role)
+                        put(
+                            "content",
+                            message.parts.filterIsInstance<RikkaPart.Text>().joinToString("") {
+                                it.text
+                            }
+                        )
+                        val calls = message.parts.filterIsInstance<RikkaPart.Tool>()
+                        if (message.role == "assistant" && calls.isNotEmpty()) {
+                            putJsonArray("tool_calls") {
+                                calls.forEach { call ->
+                                    add(
+                                        buildJsonObject {
+                                            put("id", call.id)
+                                            put("type", "function")
+                                            put(
+                                                "function",
+                                                buildJsonObject {
+                                                    put("name", call.name)
+                                                    put("arguments", call.arguments)
+                                                }
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+                message.parts.filterIsInstance<RikkaPart.Tool>().filter {
+                    it.result != null
+                }.forEach { call ->
+                    add(
+                        buildJsonObject {
+                            put("role", "tool")
+                            put("tool_call_id", call.id)
+                            put("content", call.result.orEmpty())
+                        }
+                    )
+                }
+            }
+        }
+        putJsonArray("tools") {
+            tools.forEach { tool ->
+                add(
+                    buildJsonObject {
+                        put("type", "function")
+                        put(
+                            "function",
+                            buildJsonObject {
+                                put("name", tool.name)
+                                put("description", tool.description)
+                                put(
+                                    "parameters",
+                                    json.parseToJsonElement(tool.schema.toString())
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+        }
+        customBody.forEach { (key, value) -> put(key, value) }
+    }
+
+    private fun buildAnthropicBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) = buildJsonObject {
+        put("model", model)
+        put("stream", true)
+        put("max_tokens", 16_384)
+        put("temperature", temperature)
+        put(
+            "system",
+            messages.firstOrNull {
+                it.role == "system"
+            }?.parts?.filterIsInstance<RikkaPart.Text>()?.joinToString("") { it.text }.orEmpty()
+        )
+        putJsonArray("messages") {
+            messages.filter { it.role != "system" }.forEach { message ->
+                if (message.role != "assistant") {
                     add(
                         buildJsonObject {
                             put("role", message.role)
-                            put(
-                                "content",
-                                message.parts.filterIsInstance<RikkaPart.Text>().joinToString("") {
-                                    it.text
+                            putJsonArray("content") {
+                                message.parts.filterIsInstance<RikkaPart.Text>().forEach {
+                                    add(
+                                        buildJsonObject {
+                                            put("type", "text")
+                                            put("text", it.text)
+                                        }
+                                    )
                                 }
-                            )
-                            val calls = message.parts.filterIsInstance<RikkaPart.Tool>()
-                            if (message.role == "assistant" && calls.isNotEmpty()) {
-                                putJsonArray("tool_calls") {
-                                    calls.forEach { call ->
-                                        add(
+                            }
+                        }
+                    )
+                } else {
+                    add(
+                        buildJsonObject {
+                            put("role", "assistant")
+                            putJsonArray("content") {
+                                message.parts.forEach { part ->
+                                    when (part) {
+                                        is RikkaPart.Text -> add(
                                             buildJsonObject {
-                                                put("id", call.id)
-                                                put("type", "function")
+                                                put("type", "text")
+                                                put("text", part.text)
+                                            }
+                                        )
+
+                                        is RikkaPart.Reasoning -> Unit
+
+                                        is RikkaPart.Tool -> add(
+                                            buildJsonObject {
+                                                put("type", "tool_use")
+                                                put("id", part.id)
+                                                put("name", part.name)
                                                 put(
-                                                    "function",
-                                                    buildJsonObject {
-                                                        put("name", call.name)
-                                                        put("arguments", call.arguments)
-                                                    }
+                                                    "input",
+                                                    runCatching {
+                                                        json.parseToJsonElement(part.arguments)
+                                                    }.getOrElse { JsonObject(emptyMap()) }
                                                 )
                                             }
                                         )
@@ -460,147 +516,46 @@ internal class RikkaAgentEngine(
                             }
                         }
                     )
-                    message.parts.filterIsInstance<RikkaPart.Tool>().filter {
-                        it.result != null
-                    }.forEach { call ->
-                        add(
-                            buildJsonObject {
-                                put("role", "tool")
-                                put("tool_call_id", call.id)
-                                put("content", call.result.orEmpty())
-                            }
-                        )
+                    val completed = message.parts.filterIsInstance<RikkaPart.Tool>().filter {
+                        it.result !=
+                            null
                     }
-                }
-            }
-            putJsonArray("tools") {
-                tools.forEach { tool ->
-                    add(
-                        buildJsonObject {
-                            put("type", "function")
-                            put(
-                                "function",
-                                buildJsonObject {
-                                    put("name", tool.name)
-                                    put("description", tool.description)
-                                    put(
-                                        "parameters",
-                                        json.parseToJsonElement(tool.schema.toString())
-                                    )
-                                }
-                            )
-                        }
-                    )
-                }
-            }
-            customBody.forEach { (key, value) -> put(key, value) }
-        }
-
-    private fun buildAnthropicBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) =
-        buildJsonObject {
-            put("model", model)
-            put("stream", true)
-            put("max_tokens", 16_384)
-            put("temperature", temperature)
-            put(
-                "system",
-                messages.firstOrNull {
-                    it.role == "system"
-                }?.parts?.filterIsInstance<RikkaPart.Text>()?.joinToString("") { it.text }.orEmpty()
-            )
-            putJsonArray("messages") {
-                messages.filter { it.role != "system" }.forEach { message ->
-                    if (message.role != "assistant") {
+                    if (completed.isNotEmpty()) {
                         add(
                             buildJsonObject {
-                                put("role", message.role)
+                                put("role", "user")
                                 putJsonArray("content") {
-                                    message.parts.filterIsInstance<RikkaPart.Text>().forEach { part ->
+                                    completed.forEach { part ->
                                         add(
                                             buildJsonObject {
-                                                put("type", "text")
-                                                put("text", part.text)
+                                                put("type", "tool_result")
+                                                put("tool_use_id", part.id)
+                                                put("content", part.result.orEmpty())
                                             }
                                         )
                                     }
                                 }
                             }
                         )
-                    } else {
-                        add(
-                            buildJsonObject {
-                                put("role", "assistant")
-                                putJsonArray("content") {
-                                    message.parts.forEach { part ->
-                                        when (part) {
-                                            is RikkaPart.Text -> add(
-                                                buildJsonObject {
-                                                    put("type", "text")
-                                                    put("text", part.text)
-                                                }
-                                            )
-
-                                            is RikkaPart.Reasoning -> Unit
-
-                                            is RikkaPart.Tool -> add(
-                                                buildJsonObject {
-                                                    put("type", "tool_use")
-                                                    put("id", part.id)
-                                                    put("name", part.name)
-                                                    put(
-                                                        "input",
-                                                        runCatching {
-                                                            json.parseToJsonElement(part.arguments)
-                                                        }.getOrElse { JsonObject(emptyMap()) }
-                                                    )
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        )
-                        val completed = message.parts.filterIsInstance<RikkaPart.Tool>().filter {
-                            it.result !=
-                                null
-                        }
-                        if (completed.isNotEmpty()) {
-                            add(
-                                buildJsonObject {
-                                    put("role", "user")
-                                    putJsonArray("content") {
-                                        completed.forEach { part ->
-                                            add(
-                                                buildJsonObject {
-                                                    put("type", "tool_result")
-                                                    put("tool_use_id", part.id)
-                                                    put("content", part.result.orEmpty())
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            )
-                        }
                     }
                 }
             }
-            putJsonArray("tools") {
-                tools.forEach { tool ->
-                    add(
-                        buildJsonObject {
-                            put("name", tool.name)
-                            put("description", tool.description)
-                            put("input_schema", json.parseToJsonElement(tool.schema.toString()))
-                        }
-                    )
-                }
-            }
-            customBody.forEach { (key, value) -> put(key, value) }
         }
+        putJsonArray("tools") {
+            tools.forEach { tool ->
+                add(
+                    buildJsonObject {
+                        put("name", tool.name)
+                        put("description", tool.description)
+                        put("input_schema", json.parseToJsonElement(tool.schema.toString()))
+                    }
+                )
+            }
+        }
+        customBody.forEach { (key, value) -> put(key, value) }
+    }
 
-    private fun requestBuilder(url: String) =
-        Request.Builder().url(url).header("Accept", "text/event-stream")
+    private fun requestBuilder(url: String) = Request.Builder().url(url).header("Accept", "text/event-stream")
 
     private fun Request.Builder.applyCustomHeaders() = apply {
         customHeaders.forEach { (name, value) -> safeHeader(name, value) }

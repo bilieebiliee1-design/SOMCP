@@ -74,26 +74,23 @@ object CrashReporter {
         }
     }
 
-    fun readReport(context: Context, token: String): String? =
-        validatedToken(token)?.let { safeToken ->
-            runCatching { reportFile(context, safeToken).readText() }.getOrNull()
-        }
+    fun readReport(context: Context, token: String): String? = validatedToken(token)?.let { safeToken ->
+        runCatching { reportFile(context, safeToken).readText() }.getOrNull()
+    }
 
-    fun markReady(context: Context, token: String): Boolean =
-        validatedToken(token)?.let { safeToken ->
-            runCatching {
-                readyFile(context, safeToken).writeText("ready")
-                true
-            }.getOrDefault(false)
-        } ?: false
+    fun markReady(context: Context, token: String): Boolean = validatedToken(token)?.let { safeToken ->
+        runCatching {
+            readyFile(context, safeToken).writeText("ready")
+            true
+        }.getOrDefault(false)
+    } ?: false
 
-    fun confirmExit(context: Context, token: String): Boolean =
-        validatedToken(token)?.let { safeToken ->
-            runCatching {
-                ackFile(context, safeToken).writeText("confirmed")
-                true
-            }.getOrDefault(false)
-        } ?: false
+    fun confirmExit(context: Context, token: String): Boolean = validatedToken(token)?.let { safeToken ->
+        runCatching {
+            ackFile(context, safeToken).writeText("confirmed")
+            true
+        }.getOrDefault(false)
+    } ?: false
 
     private fun buildReport(thread: Thread, throwable: Throwable): String = buildString {
         appendLine("SOMCP crash report")
@@ -158,12 +155,9 @@ object CrashReporter {
             it.all { char -> char.isLetterOrDigit() || char == '-' }
     }
 
-    private fun reportFile(context: Context, token: String) =
-        File(context.filesDir, "$FILE_PREFIX$token.txt")
+    private fun reportFile(context: Context, token: String) = File(context.filesDir, "$FILE_PREFIX$token.txt")
 
-    private fun readyFile(context: Context, token: String) =
-        File(context.filesDir, "$READY_PREFIX$token")
+    private fun readyFile(context: Context, token: String) = File(context.filesDir, "$READY_PREFIX$token")
 
-    private fun ackFile(context: Context, token: String) =
-        File(context.filesDir, "$ACK_PREFIX$token")
+    private fun ackFile(context: Context, token: String) = File(context.filesDir, "$ACK_PREFIX$token")
 }

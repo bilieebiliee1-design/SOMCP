@@ -84,11 +84,7 @@ internal fun ToolSummary(t: UiText, apkTools: List<String> = emptyList()) {
     }
 }
 
-private data class ToolGroup(
-    val category: String,
-    val color: Color,
-    val items: List<Pair<String, String>>
-)
+private data class ToolGroup(val category: String, val color: Color, val items: List<Pair<String, String>>)
 
 private val groupColor: Map<String, Color> = mapOf(
     "workspace" to AppleColors.systemGreen,

@@ -45,13 +45,12 @@ class DeepAnalysisService(private val appContext: Context) {
         if (resetWorkspace) _workspaceId.value = ""
     }
 
-    suspend fun listModels(settings: SettingsStore): Result<List<String>> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                requireModelCatalogConfigured(settings)
-                fetchModelCatalog(settings)
-            }.onFailure { Log.e("SOMCP-DeepAnalysis", "Model listing failed", it) }
-        }
+    suspend fun listModels(settings: SettingsStore): Result<List<String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireModelCatalogConfigured(settings)
+            fetchModelCatalog(settings)
+        }.onFailure { Log.e("SOMCP-DeepAnalysis", "Model listing failed", it) }
+    }
 
     private fun fetchModelCatalog(settings: SettingsStore): List<String> {
         val client = OkHttpClient.Builder()
@@ -147,23 +146,14 @@ class DeepAnalysisService(private val appContext: Context) {
             pagination?.optString("next")?.takeIf { it.startsWith("http") }
         ).firstOrNull()
         val hasMore = root?.optBoolean("has_more", false) == true ||
-            nextValue != null || nextUrl != null
+            nextValue != null ||
+            nextUrl != null
         return ModelPage(models, hasMore, nextValue, nextUrl)
     }
 
-    private data class ModelPage(
-        val models: List<String>,
-        val hasMore: Boolean,
-        val cursor: String?,
-        val nextUrl: String?
-    )
+    private data class ModelPage(val models: List<String>, val hasMore: Boolean, val cursor: String?, val nextUrl: String?)
 
-    suspend fun analyze(
-        path: String,
-        settings: SettingsStore,
-        zh: Boolean,
-        request: String = ""
-    ): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun analyze(path: String, settings: SettingsStore, zh: Boolean, request: String = ""): Result<String> = withContext(Dispatchers.IO) {
         _reportDraft.value = ""
         var lastFailure: Throwable? = null
         repeat(3) { attempt ->
@@ -189,12 +179,7 @@ class DeepAnalysisService(private val appContext: Context) {
         )
     }
 
-    private suspend fun analyzeOnce(
-        path: String,
-        settings: SettingsStore,
-        zh: Boolean,
-        request: String
-    ): Result<String> = withContext(Dispatchers.IO) {
+    private suspend fun analyzeOnce(path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             if (!McpForegroundService.isRunning()) {
                 error(
@@ -289,7 +274,12 @@ class DeepAnalysisService(private val appContext: Context) {
         ).find(message)?.groupValues?.getOrNull(1)
         val retryAfter = retryAfterSeconds(error)
         return when {
-            status == "504" -> if (zh) "模型服务网关超时（504）。已自动重试仍未恢复，请等待约 $retryAfter 秒后再试。" else "Model gateway timed out (504). Automatic retry did not recover; try again in about ${retryAfter}s."
+            status == "504" ->
+                if (zh) {
+                    "模型服务网关超时（504）。已自动重试仍未恢复，请等待约 $retryAfter 秒后再试。"
+                } else {
+                    "Model gateway timed out (504). Automatic retry did not recover; try again in about ${retryAfter}s."
+                }
 
             status == "429" -> if (zh) "模型服务请求过于频繁（429），请等待约 $retryAfter 秒后重试。" else "Model service rate limit reached (429). Retry in about ${retryAfter}s."
 

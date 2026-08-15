@@ -42,13 +42,7 @@ internal class BlutterResultStore(context: Context) {
     }
 
     @Synchronized
-    fun update(
-        jobId: String,
-        status: String,
-        stage: String,
-        error: JSONObject? = null,
-        resultKey: String? = null
-    ) {
+    fun update(jobId: String, status: String, stage: String, error: JSONObject? = null, resultKey: String? = null) {
         requireValidJobId(jobId)
         val state = readState(jobId) ?: return
         state.put("status", status).put("stage", stage).put("updatedAt", System.currentTimeMillis())

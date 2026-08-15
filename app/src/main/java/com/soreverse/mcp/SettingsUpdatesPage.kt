@@ -146,7 +146,11 @@ internal fun SettingsUpdatesPage(
 
                         is UpdateDownloadEvent.VerifySkipped -> {
                             verifyNote =
-                                if (t.zh) "已跳过 SHA-256 校验（${event.reason}），文件为有效 APK，可安装。" else "SHA-256 check skipped (${event.reason}); file is a valid APK and installable."
+                                if (t.zh) {
+                                    "已跳过 SHA-256 校验（${event.reason}），文件为有效 APK，可安装。"
+                                } else {
+                                    "SHA-256 check skipped (${event.reason}); file is a valid APK and installable."
+                                }
                         }
                     }
                 }
@@ -176,7 +180,11 @@ internal fun SettingsUpdatesPage(
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                 )
                 Text(
-                    if (t.zh) "只检查 bilieebiliee1-design/SOMCP 的正式 Release。普通构建、提交、分支和标签均不会被视为更新。" else "Only stable releases from bilieebiliee1-design/SOMCP are checked. Builds, commits, branches and tags do not count as updates.",
+                    if (t.zh) {
+                        "只检查 bilieebiliee1-design/SOMCP 的正式 Release。普通构建、提交、分支和标签均不会被视为更新。"
+                    } else {
+                        "Only stable releases from bilieebiliee1-design/SOMCP are checked. Builds, commits, branches and tags do not count as updates."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

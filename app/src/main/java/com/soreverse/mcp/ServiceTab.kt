@@ -69,13 +69,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun ServiceTab(
-    t: UiText,
-    settings: SettingsStore,
-    onOpenApkBridge: () -> Unit,
-    onOpenKeepAlive: () -> Unit,
-    onOpenTunnel: () -> Unit
-) {
+internal fun ServiceTab(t: UiText, settings: SettingsStore, onOpenApkBridge: () -> Unit, onOpenKeepAlive: () -> Unit, onOpenTunnel: () -> Unit) {
     val context = LocalContext.current
     var treeUri by remember { mutableStateOf(settings.treeUri) }
     var port by remember { mutableStateOf(settings.port.toString()) }
@@ -124,7 +118,7 @@ internal fun ServiceTab(
             portStatus = portStatusText(typedPort, running && typedPort == settings.port, t.zh)
             val currentEndpoints = filteredEndpoints(context, settings, typedPort)
             if (currentEndpoints != endpoints) endpoints = currentEndpoints
-            val ts = activeServer(context)?.tunnel?.status()
+            val ts = activeServer(context)?.tunnel?.status
             val url = ts?.publicUrl?.takeIf {
                 it.isNotBlank() &&
                     ts.state == CloudflareTunnelManager.State.RUNNING
@@ -206,7 +200,8 @@ internal fun ServiceTab(
         if (running) {
             McpForegroundService.stop(context)
             running = false
-        } else if (treeUri == null || (settings.apkMcpMergeTools && apkConnected != true) ||
+        } else if (treeUri == null ||
+            (settings.apkMcpMergeTools && apkConnected != true) ||
             !keepAliveReady
         ) {
             showStartDiagnosis = true
@@ -397,22 +392,10 @@ internal fun ServiceTab(
     }
 }
 
-private data class ReadinessItem(
-    val label: String,
-    val value: String,
-    val ok: Boolean,
-    val onClick: () -> Unit
-)
+private data class ReadinessItem(val label: String, val value: String, val ok: Boolean, val onClick: () -> Unit)
 
 @Composable
-private fun PowerSurface(
-    t: UiText,
-    running: Boolean,
-    port: Int,
-    compact: Boolean,
-    onPower: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+private fun PowerSurface(t: UiText, running: Boolean, port: Int, compact: Boolean, onPower: () -> Unit, modifier: Modifier = Modifier) {
     val statusColor = if (running) statusSuccess() else MaterialTheme.colorScheme.primary
     val shape = RoundedCornerShape(if (compact) 28.dp else 32.dp)
     val interaction = remember { MutableInteractionSource() }
@@ -731,13 +714,7 @@ private fun EndpointCell(
 }
 
 @Composable
-private fun AddressRow(
-    label: String,
-    value: String,
-    copyEnabled: Boolean,
-    onCopy: () -> Unit,
-    onUnavailableClick: (() -> Unit)? = null
-) {
+private fun AddressRow(label: String, value: String, copyEnabled: Boolean, onCopy: () -> Unit, onUnavailableClick: (() -> Unit)? = null) {
     EndpointCell(
         label = label,
         value = value,
@@ -775,13 +752,7 @@ private fun setupPromptTitle(target: SetupTarget, zh: Boolean): String = when (t
     SetupTarget.KeepAlive -> if (zh) "保活状态" else "Keep-alive status"
 }
 
-private fun setupPromptBody(
-    target: SetupTarget,
-    zh: Boolean,
-    dirReady: Boolean,
-    apkReady: Boolean,
-    keepAliveReady: Boolean
-): String = when (target) {
+private fun setupPromptBody(target: SetupTarget, zh: Boolean, dirReady: Boolean, apkReady: Boolean, keepAliveReady: Boolean): String = when (target) {
     SetupTarget.Directory -> if (zh) {
         if (dirReady) "目录已设置。是否重新选择用于扫描、打开和导出 SO 的目录？" else "目录尚未设置，SO 浏览器和读盘工具将不可用。是否继续设置？"
     } else if (dirReady) {
@@ -808,12 +779,7 @@ private fun setupPromptBody(
 }
 
 @Composable
-private fun QuickLinkCard(
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+private fun QuickLinkCard(title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(18.dp)
     Column(
         modifier

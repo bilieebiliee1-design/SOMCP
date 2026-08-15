@@ -9,11 +9,7 @@ import kotlin.math.min
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal fun EngineRuntime.analysisReport(
-    workspaceId: String,
-    editSessionId: String = "",
-    writeToFile: Boolean = true
-): JSONObject = guarded {
+internal fun EngineRuntime.analysisReport(workspaceId: String, editSessionId: String = "", writeToFile: Boolean = true): JSONObject = guarded {
     val resolvedId = resolveWorkspaceId(workspaceId, "")
     val ws =
         workspaces[resolvedId]
@@ -117,92 +113,90 @@ internal fun EngineRuntime.analysisReport(
     )
 }
 
-internal fun EngineRuntime.editAudit(workspaceId: String, editSessionId: String): JSONObject =
-    guarded {
-        val ws =
-            workspaces[workspaceId]
-                ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
-        val session =
-            ws.edits[editSessionId]
-                ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
-        val patchesArr = JSONArray()
-        session.patches.forEachIndexed { idx, p ->
-            patchesArr.put(PatchByteUtils.patchJson(p).put("index", idx).put("active", true))
-        }
-        val undoneArr = JSONArray()
-        session.undone.forEachIndexed { idx, p ->
-            undoneArr.put(PatchByteUtils.patchJson(p).put("index", idx).put("active", false))
-        }
-        val snapshotsArr = JSONArray()
-        session.snapshots.forEachIndexed { idx, s ->
-            snapshotsArr.put(
-                JSONObject()
-                    .put("index", idx)
-                    .put("revision", s.revision)
-                    .put("sha256", s.sha256)
-                    .put("patchCount", s.patchCount)
-                    .put("timeMillis", s.timeMillis)
-            )
-        }
-        val byKind = JSONObject()
-        session.patches.groupBy { it.kind }.forEach { (kind, list) -> byKind.put(kind, list.size) }
-        ok(
+internal fun EngineRuntime.editAudit(workspaceId: String, editSessionId: String): JSONObject = guarded {
+    val ws =
+        workspaces[workspaceId]
+            ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
+    val session =
+        ws.edits[editSessionId]
+            ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
+    val patchesArr = JSONArray()
+    session.patches.forEachIndexed { idx, p ->
+        patchesArr.put(PatchByteUtils.patchJson(p).put("index", idx).put("active", true))
+    }
+    val undoneArr = JSONArray()
+    session.undone.forEachIndexed { idx, p ->
+        undoneArr.put(PatchByteUtils.patchJson(p).put("index", idx).put("active", false))
+    }
+    val snapshotsArr = JSONArray()
+    session.snapshots.forEachIndexed { idx, s ->
+        snapshotsArr.put(
             JSONObject()
-                .put("workspaceId", workspaceId)
-                .put("editSessionId", editSessionId)
-                .put("revision", session.revision)
-                .put("activePatchCount", session.patches.size)
-                .put("undonePatchCount", session.undone.size)
-                .put("snapshotCount", session.snapshots.size)
-                .put("patchesByKind", byKind)
-                .put("patches", patchesArr)
-                .put("undonePatches", undoneArr)
-                .put("snapshots", snapshotsArr)
-                .put("currentTargetVersion", sha256(session.data))
+                .put("index", idx)
+                .put("revision", s.revision)
+                .put("sha256", s.sha256)
+                .put("patchCount", s.patchCount)
+                .put("timeMillis", s.timeMillis)
         )
     }
+    val byKind = JSONObject()
+    session.patches.groupBy { it.kind }.forEach { (kind, list) -> byKind.put(kind, list.size) }
+    ok(
+        JSONObject()
+            .put("workspaceId", workspaceId)
+            .put("editSessionId", editSessionId)
+            .put("revision", session.revision)
+            .put("activePatchCount", session.patches.size)
+            .put("undonePatchCount", session.undone.size)
+            .put("snapshotCount", session.snapshots.size)
+            .put("patchesByKind", byKind)
+            .put("patches", patchesArr)
+            .put("undonePatches", undoneArr)
+            .put("snapshots", snapshotsArr)
+            .put("currentTargetVersion", sha256(session.data))
+    )
+}
 
-internal fun EngineRuntime.listBuildOutputs(prefix: String = "", limit: Int = 200): JSONObject =
-    guarded {
-        val settings = SettingsStore(context)
-        val dir = context.getExternalFilesDir(null) ?: context.filesDir
-        val boundedLimit = limit.coerceIn(1, settings.maxBuildOutputs)
-        val items = JSONArray()
-        if (dir.exists()) {
-            dir.listFiles { f ->
-                f.isFile &&
-                    (f.name.endsWith(".so", true) || f.name.endsWith(".patch-report.json", true))
-            }
-                ?.sortedByDescending { it.lastModified() }
-                ?.asSequence()
-                ?.filter { prefix.isBlank() || it.name.startsWith(prefix, ignoreCase = true) }
-                ?.take(boundedLimit)
-                ?.forEach { f ->
-                    val isReport = f.name.endsWith(".patch-report.json", true)
-                    items.put(
-                        JSONObject()
-                            .put("name", f.name)
-                            .put("path", f.absolutePath)
-                            .put("openPath", f.absolutePath)
-                            .put("size", f.length())
-                            .put("modified", f.lastModified())
-                            .put("kind", if (isReport) "patch-report" else "so")
-                            .put("canOpen", !isReport)
-                    )
-                }
+internal fun EngineRuntime.listBuildOutputs(prefix: String = "", limit: Int = 200): JSONObject = guarded {
+    val settings = SettingsStore(context)
+    val dir = context.getExternalFilesDir(null) ?: context.filesDir
+    val boundedLimit = limit.coerceIn(1, settings.maxBuildOutputs)
+    val items = JSONArray()
+    if (dir.exists()) {
+        dir.listFiles { f ->
+            f.isFile &&
+                (f.name.endsWith(".so", true) || f.name.endsWith(".patch-report.json", true))
         }
-        val count = items.length()
-        ok(
-            JSONObject()
-                .put("items", items)
-                .put(
-                    "usage",
-                    "Pass the path/openPath of any item with kind=so to so_open. patch-report items are JSON sidecars from build_so."
+            ?.sortedByDescending { it.lastModified() }
+            ?.asSequence()
+            ?.filter { prefix.isBlank() || it.name.startsWith(prefix, ignoreCase = true) }
+            ?.take(boundedLimit)
+            ?.forEach { f ->
+                val isReport = f.name.endsWith(".patch-report.json", true)
+                items.put(
+                    JSONObject()
+                        .put("name", f.name)
+                        .put("path", f.absolutePath)
+                        .put("openPath", f.absolutePath)
+                        .put("size", f.length())
+                        .put("modified", f.lastModified())
+                        .put("kind", if (isReport) "patch-report" else "so")
+                        .put("canOpen", !isReport)
                 )
-                .put("directory", dir.absolutePath)
-                .put("pagination", pagination(false, null, count, boundedLimit, count))
-        )
+            }
     }
+    val count = items.length()
+    ok(
+        JSONObject()
+            .put("items", items)
+            .put(
+                "usage",
+                "Pass the path/openPath of any item with kind=so to so_open. patch-report items are JSON sidecars from build_so."
+            )
+            .put("directory", dir.absolutePath)
+            .put("pagination", pagination(false, null, count, boundedLimit, count))
+    )
+}
 
 internal fun EngineRuntime.auditDir(): File {
     val dir = File(context.getExternalFilesDir(null) ?: context.filesDir, "audits")
@@ -216,79 +210,78 @@ internal fun EngineRuntime.reportDir(): File {
     return dir
 }
 
-internal fun EngineRuntime.persistAudit(workspaceId: String, editSessionId: String): JSONObject =
-    guarded {
-        val settings = SettingsStore(context)
-        if (!settings.auditPersist) {
-            return@guarded ok(
-                JSONObject().put("persisted", false).put("reason", "auditPersist disabled")
-            )
-        }
-        val ws =
-            workspaces[workspaceId]
-                ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
-        val session =
-            ws.edits[editSessionId]
-                ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
-        val dir = auditDir()
-        val existing =
-            dir.listFiles { f -> f.isFile && f.name.startsWith("$editSessionId-") }?.toList()
-                ?: emptyList()
-        if (existing.size >=
-            settings.maxAudits
-        ) {
-            existing.sortedBy {
-                it.lastModified()
-            }.take(existing.size - settings.maxAudits + 1).forEach { it.delete() }
-        }
-        val ts = System.currentTimeMillis()
-        val file = File(dir, "$editSessionId-$ts.json")
-        val payload = JSONObject()
-            .put("workspaceId", workspaceId)
-            .put("editSessionId", editSessionId)
-            .put("sourcePath", ws.source.path)
-            .put("sourceSha256", sha256(ws.data))
-            .put("persistedAt", ts)
-            .put("revision", session.revision)
-            .put("activePatchCount", session.patches.size)
-            .put("undonePatchCount", session.undone.size)
-            .put("snapshotCount", session.snapshots.size)
-            .put("currentTargetVersion", sha256(session.data))
-            .put(
-                "patches",
-                session.patches.mapIndexed { i, p ->
-                    PatchByteUtils.patchJson(p).put("index", i).put("active", true)
-                }.toJsonArray()
-            )
-            .put(
-                "undonePatches",
-                session.undone.mapIndexed { i, p ->
-                    PatchByteUtils.patchJson(p).put("index", i).put("active", false)
-                }.toJsonArray()
-            )
-            .put(
-                "snapshots",
-                session.snapshots.mapIndexed { i, s ->
-                    JSONObject().put(
-                        "index",
-                        i
-                    ).put(
-                        "revision",
-                        s.revision
-                    ).put(
-                        "sha256",
-                        s.sha256
-                    ).put("patchCount", s.patchCount).put("timeMillis", s.timeMillis)
-                }.toJsonArray()
-            )
-        file.writeText(payload.toString(2))
-        ok(
-            JSONObject().put(
-                "persisted",
-                true
-            ).put("path", file.absolutePath).put("size", file.length()).put("persistedAt", ts)
+internal fun EngineRuntime.persistAudit(workspaceId: String, editSessionId: String): JSONObject = guarded {
+    val settings = SettingsStore(context)
+    if (!settings.auditPersist) {
+        return@guarded ok(
+            JSONObject().put("persisted", false).put("reason", "auditPersist disabled")
         )
     }
+    val ws =
+        workspaces[workspaceId]
+            ?: return@guarded err("WORKSPACE_NOT_FOUND", "Workspace not found")
+    val session =
+        ws.edits[editSessionId]
+            ?: return@guarded err("EDIT_SESSION_NOT_FOUND", "Edit session not found")
+    val dir = auditDir()
+    val existing =
+        dir.listFiles { f -> f.isFile && f.name.startsWith("$editSessionId-") }?.toList()
+            ?: emptyList()
+    if (existing.size >=
+        settings.maxAudits
+    ) {
+        existing.sortedBy {
+            it.lastModified()
+        }.take(existing.size - settings.maxAudits + 1).forEach { it.delete() }
+    }
+    val ts = System.currentTimeMillis()
+    val file = File(dir, "$editSessionId-$ts.json")
+    val payload = JSONObject()
+        .put("workspaceId", workspaceId)
+        .put("editSessionId", editSessionId)
+        .put("sourcePath", ws.source.path)
+        .put("sourceSha256", sha256(ws.data))
+        .put("persistedAt", ts)
+        .put("revision", session.revision)
+        .put("activePatchCount", session.patches.size)
+        .put("undonePatchCount", session.undone.size)
+        .put("snapshotCount", session.snapshots.size)
+        .put("currentTargetVersion", sha256(session.data))
+        .put(
+            "patches",
+            session.patches.mapIndexed { i, p ->
+                PatchByteUtils.patchJson(p).put("index", i).put("active", true)
+            }.toJsonArray()
+        )
+        .put(
+            "undonePatches",
+            session.undone.mapIndexed { i, p ->
+                PatchByteUtils.patchJson(p).put("index", i).put("active", false)
+            }.toJsonArray()
+        )
+        .put(
+            "snapshots",
+            session.snapshots.mapIndexed { i, s ->
+                JSONObject().put(
+                    "index",
+                    i
+                ).put(
+                    "revision",
+                    s.revision
+                ).put(
+                    "sha256",
+                    s.sha256
+                ).put("patchCount", s.patchCount).put("timeMillis", s.timeMillis)
+            }.toJsonArray()
+        )
+    file.writeText(payload.toString(2))
+    ok(
+        JSONObject().put(
+            "persisted",
+            true
+        ).put("path", file.absolutePath).put("size", file.length()).put("persistedAt", ts)
+    )
+}
 
 internal fun EngineRuntime.listAudits(prefix: String = "", limit: Int = 100): JSONObject = guarded {
     val settings = SettingsStore(context)
@@ -297,7 +290,8 @@ internal fun EngineRuntime.listAudits(prefix: String = "", limit: Int = 100): JS
     val items = JSONArray()
     if (dir.exists()) {
         dir.listFiles { f ->
-            f.isFile && f.name.endsWith(".json") &&
+            f.isFile &&
+                f.name.endsWith(".json") &&
                 (prefix.isBlank() || f.name.startsWith(prefix))
         }
             ?.sortedByDescending { it.lastModified() }
@@ -441,11 +435,7 @@ internal fun EngineRuntime.diff(
     ok(result)
 }
 
-internal fun EngineRuntime.writePatchReport(
-    workspaceId: String,
-    session: EditSession,
-    output: File
-): File {
+internal fun EngineRuntime.writePatchReport(workspaceId: String, session: EditSession, output: File): File {
     val report = File(output.parentFile, "${output.nameWithoutExtension}.patch-report.json")
     val ws = workspaces[workspaceId]
     val emptyPatches = session.patches.count { it.newHex.isBlank() }

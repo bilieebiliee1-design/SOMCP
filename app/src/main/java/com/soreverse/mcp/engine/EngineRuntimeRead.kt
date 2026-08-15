@@ -113,11 +113,7 @@ internal fun EngineRuntime.list(
     page("items", all, limit, cursor)
 }
 
-internal fun EngineRuntime.readElf(
-    workspaceId: String,
-    editSessionId: String,
-    pathHint: String = ""
-): JSONObject = guarded {
+internal fun EngineRuntime.readElf(workspaceId: String, editSessionId: String, pathHint: String = ""): JSONObject = guarded {
     val resolvedWorkspaceId = resolveWorkspaceId(workspaceId, pathHint)
     val elf = elfFor(resolvedWorkspaceId, editSessionId)
     ok(
@@ -159,13 +155,7 @@ internal fun EngineRuntime.readElf(
     )
 }
 
-internal fun EngineRuntime.hexdump(
-    workspaceId: String,
-    editSessionId: String,
-    locator: String,
-    byteOffset: Int,
-    maxBytes: Int
-): JSONObject = guarded {
+internal fun EngineRuntime.hexdump(workspaceId: String, editSessionId: String, locator: String, byteOffset: Int, maxBytes: Int): JSONObject = guarded {
     val elf = elfFor(workspaceId, editSessionId)
     val bytes = dataFor(workspaceId, editSessionId)
     val sec =
@@ -735,12 +725,7 @@ internal fun EngineRuntime.disasm(
     )
 }
 
-internal fun EngineRuntime.outline(
-    workspaceId: String,
-    editSessionId: String,
-    locator: String,
-    limit: Int
-): JSONObject = guarded {
+internal fun EngineRuntime.outline(workspaceId: String, editSessionId: String, locator: String, limit: Int): JSONObject = guarded {
     val elf = elfFor(workspaceId, editSessionId)
     val name = LocatorParser.target(locator, "so_function")
     val sym =
@@ -802,13 +787,7 @@ internal fun EngineRuntime.outline(
     )
 }
 
-internal fun EngineRuntime.xrefSymbol(
-    workspaceId: String,
-    editSessionId: String,
-    locator: String,
-    refDirection: String,
-    limit: Int
-): JSONObject = guarded {
+internal fun EngineRuntime.xrefSymbol(workspaceId: String, editSessionId: String, locator: String, refDirection: String, limit: Int): JSONObject = guarded {
     val elf = elfFor(workspaceId, editSessionId)
     val symbol = LocatorParser.target(locator, "so_symbol")
     val incoming = JSONArray()
@@ -835,12 +814,7 @@ internal fun EngineRuntime.xrefSymbol(
     )
 }
 
-internal fun EngineRuntime.xrefString(
-    workspaceId: String,
-    editSessionId: String,
-    locator: String,
-    limit: Int
-): JSONObject = guarded {
+internal fun EngineRuntime.xrefString(workspaceId: String, editSessionId: String, locator: String, limit: Int): JSONObject = guarded {
     val elf = elfFor(workspaceId, editSessionId)
     val targetOffset =
         locator.substringAfterLast('!').toLongOrNull(16)
@@ -956,11 +930,7 @@ internal fun EngineRuntime.search(
     page("hits", hits, limit, cursor).put("workspaceId", resolvedWorkspaceId)
 }
 
-internal fun EngineRuntime.readStats(
-    workspaceId: String,
-    editSessionId: String = "",
-    pathHint: String = ""
-): JSONObject = guarded {
+internal fun EngineRuntime.readStats(workspaceId: String, editSessionId: String = "", pathHint: String = ""): JSONObject = guarded {
     val resolvedId = resolveWorkspaceId(workspaceId, pathHint)
     val data = if (editSessionId.isNotBlank()) {
         workspaces[resolvedId]?.edits?.get(editSessionId)?.data
@@ -983,7 +953,8 @@ internal fun EngineRuntime.readStats(
             !it.imported
     }
     val exportedFunctions = elf.dynSymbols.count {
-        it.type == "FUNC" && !it.imported &&
+        it.type == "FUNC" &&
+            !it.imported &&
             it.value > 0
     }
     val analyzedFunctions = rizinFunctions(data, elf).size
@@ -1072,11 +1043,7 @@ internal fun EngineRuntime.assembleRaw(
     )
 }
 
-internal fun EngineRuntime.analyze(
-    workspaceId: String,
-    editSessionId: String,
-    pathHint: String = ""
-): JSONObject = guarded {
+internal fun EngineRuntime.analyze(workspaceId: String, editSessionId: String, pathHint: String = ""): JSONObject = guarded {
     val resolvedWorkspaceId = resolveWorkspaceId(workspaceId, pathHint)
     val elf = elfFor(resolvedWorkspaceId, editSessionId)
     val bytes = dataFor(resolvedWorkspaceId, editSessionId)
@@ -1092,7 +1059,8 @@ internal fun EngineRuntime.analyze(
         it.contains("http://") || it.contains("https://")
     }.take(80)
     val pathStrings = strings.filter {
-        it.startsWith("/") || it.contains("/data/") ||
+        it.startsWith("/") ||
+            it.contains("/data/") ||
             it.contains("/sdcard/")
     }.take(80)
     val commandStrings = strings.filter { value ->
@@ -1101,7 +1069,8 @@ internal fun EngineRuntime.analyze(
         }
     }.take(80)
     val cryptoImports = imports.filter {
-        it.contains("ssl", true) || it.contains("crypto", true) ||
+        it.contains("ssl", true) ||
+            it.contains("crypto", true) ||
             it.contains("AES", true) ||
             it.contains("RSA", true)
     }.distinct()
@@ -1159,11 +1128,7 @@ internal fun EngineRuntime.analyze(
     )
 }
 
-internal fun EngineRuntime.overview(
-    workspaceId: String,
-    editSessionId: String = "",
-    pathHint: String = ""
-): JSONObject = guarded {
+internal fun EngineRuntime.overview(workspaceId: String, editSessionId: String = "", pathHint: String = ""): JSONObject = guarded {
     val resolvedWorkspaceId = resolveWorkspaceId(workspaceId, pathHint)
     val elf = elfFor(resolvedWorkspaceId, editSessionId)
     val bytes = dataFor(resolvedWorkspaceId, editSessionId)
@@ -1211,25 +1176,22 @@ internal fun EngineRuntime.resolveWorkspaceId(workspaceId: String, pathHint: Str
     error("Workspace not found: $workspaceId")
 }
 
-internal fun EngineRuntime.workspace(id: String): Workspace =
-    workspaces[id] ?: error("Workspace not found: $id")
+internal fun EngineRuntime.workspace(id: String): Workspace = workspaces[id] ?: error("Workspace not found: $id")
 
-internal fun EngineRuntime.dataFor(workspaceId: String, editSessionId: String): ByteArray =
-    if (editSessionId.isBlank()) {
-        workspace(workspaceId).data
-    } else {
-        workspace(workspaceId).edits[editSessionId]?.data
-            ?: error("Edit session not found")
-    }
+internal fun EngineRuntime.dataFor(workspaceId: String, editSessionId: String): ByteArray = if (editSessionId.isBlank()) {
+    workspace(workspaceId).data
+} else {
+    workspace(workspaceId).edits[editSessionId]?.data
+        ?: error("Edit session not found")
+}
 
-internal fun EngineRuntime.elfFor(workspaceId: String, editSessionId: String): ElfFile =
-    if (editSessionId.isBlank()) {
-        workspace(
-            workspaceId
-        ).elf
-    } else {
-        lief.parse(dataFor(workspaceId, editSessionId))
-    }
+internal fun EngineRuntime.elfFor(workspaceId: String, editSessionId: String): ElfFile = if (editSessionId.isBlank()) {
+    workspace(
+        workspaceId
+    ).elf
+} else {
+    lief.parse(dataFor(workspaceId, editSessionId))
+}
 
 internal fun EngineRuntime.acceptedLocatorForms(): JSONArray = JSONArray(
     listOf(
@@ -1247,12 +1209,7 @@ internal fun EngineRuntime.acceptedLocatorForms(): JSONArray = JSONArray(
     )
 )
 
-internal fun EngineRuntime.resolveCodeAddress(
-    bytes: ByteArray,
-    elf: ElfFile,
-    locator: String,
-    explicitAddress: String = ""
-): Long? {
+internal fun EngineRuntime.resolveCodeAddress(bytes: ByteArray, elf: ElfFile, locator: String, explicitAddress: String = ""): Long? {
     val target = locator.ifBlank { explicitAddress }.trim()
     if (target.isEmpty() && explicitAddress.isBlank()) return null
     // Explicit address fields and @addr tails win first (fcn.0000b208@0xb208).
@@ -1267,14 +1224,17 @@ internal fun EngineRuntime.resolveCodeAddress(
     val bare = LocatorParser.normalizeSymbol(name)
 
     // fcn.0000b208 / fcn.b208 — zero-padded hex function name without 0x
-    if (bare.isNotEmpty() && bare.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' } &&
+    if (bare.isNotEmpty() &&
+        bare.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' } &&
         bare.length >= 3
     ) {
         bare.toLongOrNull(16)?.takeIf { it > 0 }?.let { return it }
     }
 
     (elf.symbols + elf.dynSymbols).firstOrNull {
-        it.name == name || it.name == bare || it.name == "sym.$bare" ||
+        it.name == name ||
+            it.name == bare ||
+            it.name == "sym.$bare" ||
             it.name == "sym.imp.$bare" ||
             it.name == "fcn.$bare"
     }?.value?.and(-2L)?.takeIf { it > 0 }?.let { return it }
@@ -1292,13 +1252,7 @@ internal fun EngineRuntime.littleEndianInt(bytes: ByteArray, offset: Int): Int =
         ((bytes[offset + 2].toInt() and 0xff) shl 16) or
         ((bytes[offset + 3].toInt() and 0xff) shl 24)
 
-internal fun EngineRuntime.searchKey(
-    workspaceId: String,
-    editSessionId: String,
-    target: String,
-    query: String,
-    limit: Int
-): String {
+internal fun EngineRuntime.searchKey(workspaceId: String, editSessionId: String, target: String, query: String, limit: Int): String {
     val revision = if (editSessionId.isBlank()) {
         0
     } else {
@@ -1311,12 +1265,7 @@ internal fun EngineRuntime.searchKey(
     )}"
 }
 
-internal fun EngineRuntime.page(
-    field: String,
-    all: List<JSONObject>,
-    limit: Int,
-    cursor: String = ""
-): JSONObject {
+internal fun EngineRuntime.page(field: String, all: List<JSONObject>, limit: Int, cursor: String = ""): JSONObject {
     val slice =
         cursor.takeIf { it.isNotBlank() }?.let(pageStore::consume)
             ?: pageStore.first(field, all, limit)
@@ -1338,12 +1287,7 @@ internal fun EngineRuntime.pageJson(slice: PageStore.PageSlice): JSONObject = ok
         )
 )
 
-internal fun EngineRuntime.functionByteSize(
-    elf: ElfFile,
-    sym: SymbolInfo,
-    fileOffset: Int,
-    fileSize: Int
-): Int {
+internal fun EngineRuntime.functionByteSize(elf: ElfFile, sym: SymbolInfo, fileOffset: Int, fileSize: Int): Int {
     val declared = sym.size.toInt().takeIf { it > 0 }
     if (declared != null) return declared
     val start = sym.value and -2L
@@ -1364,12 +1308,7 @@ internal fun EngineRuntime.functionByteSize(
     return (bySection ?: (fileSize - fileOffset)).coerceAtMost(64 * 1024)
 }
 
-internal fun EngineRuntime.functionByteSizeFromAddress(
-    elf: ElfFile,
-    start: Long,
-    fileOffset: Int,
-    fileSize: Int
-): Int {
+internal fun EngineRuntime.functionByteSizeFromAddress(elf: ElfFile, start: Long, fileOffset: Int, fileSize: Int): Int {
     val nextFunction = (elf.symbols + elf.dynSymbols)
         .asSequence()
         .filter { it.type == "FUNC" && !it.imported }
@@ -1402,11 +1341,7 @@ internal fun EngineRuntime.neededLibraries(elf: ElfFile, bytes: ByteArray): List
         .toList()
 }
 
-internal fun EngineRuntime.validateCodeAddress(
-    elf: ElfFile,
-    va: Long,
-    thumb: Boolean
-): JSONObject? {
+internal fun EngineRuntime.validateCodeAddress(elf: ElfFile, va: Long, thumb: Boolean): JSONObject? {
     val alignment = if (elf.architecture == "arm32" &&
         thumb
     ) {
@@ -1450,11 +1385,9 @@ internal fun EngineRuntime.validateCodeAddress(
     return null
 }
 
-internal fun EngineRuntime.sectionExecutable(section: SectionInfo): Boolean =
-    section.flags and 4L != 0L
+internal fun EngineRuntime.sectionExecutable(section: SectionInfo): Boolean = section.flags and 4L != 0L
 
-internal fun EngineRuntime.executableSectionFor(elf: ElfFile, va: Long): SectionInfo? =
-    sectionFor(elf, va)?.takeIf(::sectionExecutable)
+internal fun EngineRuntime.executableSectionFor(elf: ElfFile, va: Long): SectionInfo? = sectionFor(elf, va)?.takeIf(::sectionExecutable)
 
 internal fun EngineRuntime.functionContaining(elf: ElfFile, va: Long): SymbolInfo? = (
     elf.symbols +
@@ -1498,11 +1431,7 @@ internal fun EngineRuntime.thunkInfoFromLines(lines: List<String>, entry: Long):
     }
 }
 
-internal fun EngineRuntime.instructionOffsetToByteOffset(
-    elf: ElfFile,
-    sym: SymbolInfo,
-    instructionOffset: Int
-): Int {
+internal fun EngineRuntime.instructionOffsetToByteOffset(elf: ElfFile, sym: SymbolInfo, instructionOffset: Int): Int {
     if (instructionOffset <= 0) return 0
     val step = if (elf.architecture == "arm32" && (sym.value and 1L) == 1L) {
         2
@@ -1514,26 +1443,25 @@ internal fun EngineRuntime.instructionOffsetToByteOffset(
     return if (step > 0) instructionOffset * step else 0
 }
 
-internal fun EngineRuntime.sectionFor(elf: ElfFile, va: Long): SectionInfo? =
-    elf.sections.firstOrNull {
-        it.size >
-            0 &&
-            it.addr != 0L &&
-            va >= it.addr &&
-            va < it.addr + it.size
-    }
+internal fun EngineRuntime.sectionFor(elf: ElfFile, va: Long): SectionInfo? = elf.sections.firstOrNull {
+    it.size >
+        0 &&
+        it.addr != 0L &&
+        va >= it.addr &&
+        va < it.addr + it.size
+}
 
-internal fun EngineRuntime.sectionForOffset(elf: ElfFile, offset: Long): SectionInfo? =
-    elf.sections.firstOrNull {
-        offset >=
-            it.offset &&
-            offset < it.offset + it.size
-    }
+internal fun EngineRuntime.sectionForOffset(elf: ElfFile, offset: Long): SectionInfo? = elf.sections.firstOrNull {
+    offset >=
+        it.offset &&
+        offset < it.offset + it.size
+}
 
 internal fun EngineRuntime.offsetToVa(elf: ElfFile, offset: Long): Long? {
     sectionForOffset(elf, offset)?.let { return it.addr + (offset - it.offset) }
     val ph = elf.programHeaders.firstOrNull {
-        it.type == 1L && offset >= it.offset &&
+        it.type == 1L &&
+            offset >= it.offset &&
             offset < it.offset + it.filesz
     }
     return ph?.let { it.vaddr + (offset - it.offset) }
@@ -1541,7 +1469,8 @@ internal fun EngineRuntime.offsetToVa(elf: ElfFile, offset: Long): Long? {
 
 internal fun EngineRuntime.vaToOffset(elf: ElfFile, va: Long): Long? {
     val ph = elf.programHeaders.firstOrNull {
-        it.type == 1L && va >= it.vaddr &&
+        it.type == 1L &&
+            va >= it.vaddr &&
             va < it.vaddr + it.filesz
     }
     if (ph != null) return ph.offset + (va - ph.vaddr)
@@ -1581,32 +1510,28 @@ internal fun EngineRuntime.pseudoDisasm(
     return lines.joinToString("\n")
 }
 
-internal fun EngineRuntime.cleanDisasmLines(text: String, limit: Int): List<String> =
-    text.lineSequence()
-        .map { it.trimEnd() }
-        .filter { it.isNotBlank() }
-        .map { line ->
-            val mixed = Regex(
-                """^(0x[0-9a-fA-F]+:)\s+(?:[0-9a-fA-F]{2}\s+){4,}(.+)$"""
-            ).find(line.trim())
-            if (mixed !=
-                null
-            ) {
-                "${mixed.groupValues[1]} ${mixed.groupValues[2].trim()}"
-            } else {
-                line.trim()
-            }
+internal fun EngineRuntime.cleanDisasmLines(text: String, limit: Int): List<String> = text.lineSequence()
+    .map { it.trimEnd() }
+    .filter { it.isNotBlank() }
+    .map { line ->
+        val mixed = Regex(
+            """^(0x[0-9a-fA-F]+:)\s+(?:[0-9a-fA-F]{2}\s+){4,}(.+)$"""
+        ).find(line.trim())
+        if (mixed !=
+            null
+        ) {
+            "${mixed.groupValues[1]} ${mixed.groupValues[2].trim()}"
+        } else {
+            line.trim()
         }
-        .filterNot {
-            it.matches(Regex("""^[0-9a-fA-F]{4,}\s+[0-9a-fA-F]{2}(\s+[0-9a-fA-F]{2}){3,}.*"""))
-        }
-        .take(limit)
-        .toList()
+    }
+    .filterNot {
+        it.matches(Regex("""^[0-9a-fA-F]{4,}\s+[0-9a-fA-F]{2}(\s+[0-9a-fA-F]{2}){3,}.*"""))
+    }
+    .take(limit)
+    .toList()
 
-internal fun EngineRuntime.annotateDisasmLines(
-    hints: Map<Long, String>,
-    lines: List<String>
-): List<String> {
+internal fun EngineRuntime.annotateDisasmLines(hints: Map<Long, String>, lines: List<String>): List<String> {
     if (lines.isEmpty()) return lines
     if (hints.isEmpty()) return lines
     val addressPattern = Regex("""\b0x[0-9a-fA-F]+\b""")
@@ -1626,22 +1551,13 @@ internal fun EngineRuntime.annotateDisasmLines(
     }
 }
 
-internal fun EngineRuntime.disasmReferenceHints(
-    workspaceId: String,
-    editSessionId: String,
-    elf: ElfFile
-): Map<Long, String> {
+internal fun EngineRuntime.disasmReferenceHints(workspaceId: String, editSessionId: String, elf: ElfFile): Map<Long, String> {
     val hints = importAddressHints(elf).toMutableMap()
     hints.putAll(rizinImportStubHints(workspaceId, editSessionId, elf))
     return hints
 }
 
-internal fun EngineRuntime.disasmSymbolHints(
-    hints: Map<Long, String>,
-    elf: ElfFile,
-    startVa: Long,
-    size: Long
-): JSONArray {
+internal fun EngineRuntime.disasmSymbolHints(hints: Map<Long, String>, elf: ElfFile, startVa: Long, size: Long): JSONArray {
     val endVa = startVa + size.coerceAtLeast(0)
     val result = JSONArray()
     hints.entries
@@ -1739,11 +1655,7 @@ internal fun EngineRuntime.allIndexesOf(data: ByteArray, pattern: ByteArray): Li
     return out
 }
 
-internal fun EngineRuntime.rawUtf8Hits(
-    data: ByteArray,
-    query: String,
-    remaining: Int
-): List<Pair<Int, String>> {
+internal fun EngineRuntime.rawUtf8Hits(data: ByteArray, query: String, remaining: Int): List<Pair<Int, String>> {
     if (query.isBlank() || remaining <= 0) return emptyList()
     val pattern = query.toByteArray(Charsets.UTF_8)
     val hits = mutableListOf<Pair<Int, String>>()
@@ -1779,45 +1691,28 @@ internal fun EngineRuntime.indexOf(data: ByteArray, pattern: ByteArray, startAt:
     return -1
 }
 
-internal fun EngineRuntime.pagination(
-    hasMore: Boolean,
-    cursor: String?,
-    returned: Int,
-    limit: Int,
-    total: Int
-) = JSONObject().put("hasMore", hasMore).put(
+internal fun EngineRuntime.pagination(hasMore: Boolean, cursor: String?, returned: Int, limit: Int, total: Int) = JSONObject().put("hasMore", hasMore).put(
     "nextCursor",
     cursor ?: JSONObject.NULL
 ).put("returnedCount", returned).put("limitMax", limit).put("totalAvailableCount", total)
 
-internal fun EngineRuntime.disasmPagination(
-    hasMore: Boolean,
-    cursor: String?,
-    instructionCount: Int,
-    limit: Int,
-    bytesReturned: Int,
-    totalBytes: Int
-) = JSONObject()
-    .put("hasMore", hasMore)
-    .put("nextCursor", cursor ?: JSONObject.NULL)
-    .put("instructionCount", instructionCount)
-    .put("bytesReturned", bytesReturned)
-    .put("hasMoreInstructions", hasMore)
-    .put("returnedCount", instructionCount)
-    .put("limitMax", limit)
-    .put("totalAvailableCount", totalBytes)
-    .put("totalAvailableBytes", totalBytes)
-    .put(
-        "units",
-        JSONObject().put("returnedCount", "instructions").put("totalAvailableCount", "bytes")
-    )
+internal fun EngineRuntime.disasmPagination(hasMore: Boolean, cursor: String?, instructionCount: Int, limit: Int, bytesReturned: Int, totalBytes: Int) =
+    JSONObject()
+        .put("hasMore", hasMore)
+        .put("nextCursor", cursor ?: JSONObject.NULL)
+        .put("instructionCount", instructionCount)
+        .put("bytesReturned", bytesReturned)
+        .put("hasMoreInstructions", hasMore)
+        .put("returnedCount", instructionCount)
+        .put("limitMax", limit)
+        .put("totalAvailableCount", totalBytes)
+        .put("totalAvailableBytes", totalBytes)
+        .put(
+            "units",
+            JSONObject().put("returnedCount", "instructions").put("totalAvailableCount", "bytes")
+        )
 
-internal fun EngineRuntime.inferReturnType(
-    bytes: ByteArray,
-    elf: ElfFile,
-    startVa: Long,
-    size: Int
-): JSONObject {
+internal fun EngineRuntime.inferReturnType(bytes: ByteArray, elf: ElfFile, startVa: Long, size: Int): JSONObject {
     if (elf.architecture != "arm64" ||
         size < 8
     ) {

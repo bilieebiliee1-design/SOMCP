@@ -84,28 +84,27 @@ internal object UnidbgBatchRunner {
         )
     }
 
-    private fun substituteUnidbgBatchValue(value: Any?, keyed: Map<String, JSONObject>): Any =
-        when (value) {
-            is JSONObject -> JSONObject().also { copy ->
-                value.keys().forEach { key ->
-                    copy.put(key, substituteUnidbgBatchValue(value.opt(key), keyed))
-                }
+    private fun substituteUnidbgBatchValue(value: Any?, keyed: Map<String, JSONObject>): Any = when (value) {
+        is JSONObject -> JSONObject().also { copy ->
+            value.keys().forEach { key ->
+                copy.put(key, substituteUnidbgBatchValue(value.opt(key), keyed))
             }
-
-            is JSONArray -> JSONArray().also { copy ->
-                for (i in 0 until value.length()) {
-                    copy.put(
-                        substituteUnidbgBatchValue(value.opt(i), keyed)
-                    )
-                }
-            }
-
-            is String -> substituteUnidbgBatchString(value, keyed)
-
-            null -> JSONObject.NULL
-
-            else -> value
         }
+
+        is JSONArray -> JSONArray().also { copy ->
+            for (i in 0 until value.length()) {
+                copy.put(
+                    substituteUnidbgBatchValue(value.opt(i), keyed)
+                )
+            }
+        }
+
+        is String -> substituteUnidbgBatchString(value, keyed)
+
+        null -> JSONObject.NULL
+
+        else -> value
+    }
 
     private fun substituteUnidbgBatchString(raw: String, keyed: Map<String, JSONObject>): String {
         if (raw.isEmpty()) return raw

@@ -2,3 +2,7 @@ root = true
 
 [*.{kt,kts}]
 ktlint_code_style = android_studio
+max_line_length = 160
+# Compose functions follow the JetBrains PascalCase convention for @Composable
+# functions, which conflicts with ktlint's standard function-naming rule.
+ktlint_standard_function-naming = disabled
