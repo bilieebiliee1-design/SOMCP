@@ -14,7 +14,7 @@ data class EndpointInfo(
     val label: String,
     val publicCandidate: Boolean,
     val externallyRoutable: Boolean,
-    val note: String,
+    val note: String
 )
 
 object NetworkInspector {
@@ -40,7 +40,7 @@ object NetworkInspector {
                 label = if (address is Inet6Address) "IPv6 地址" else "局域网地址",
                 publicCandidate = publicCandidate,
                 externallyRoutable = publicCandidate,
-                note = if (publicCandidate) "地址看起来可公网路由，仍取决于运营商/防火墙/客户端网络" else "通常仅同一局域网可访问",
+                note = if (publicCandidate) "地址看起来可公网路由，仍取决于运营商/防火墙/客户端网络" else "通常仅同一局域网可访问"
             )
         }
         return out.distinctBy { it.url }
@@ -64,12 +64,18 @@ object NetworkInspector {
         }
         return addresses
             .filterIsInstance<Inet4Address>()
-            .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress }
+            .firstOrNull {
+                !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress
+            }
             ?.hostAddress
     }
 
     private fun isPublicCandidate(address: InetAddress): Boolean {
-        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress) return false
+        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||
+            address.isSiteLocalAddress
+        ) {
+            return false
+        }
         if (address is Inet4Address) {
             val b = address.address.map { it.toInt() and 0xff }
             if (b[0] == 10 || b[0] == 127) return false

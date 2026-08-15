@@ -78,29 +78,43 @@ private fun SettingsTile(
     icon: ImageVector,
     tint: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     val shape = RoundedCornerShape(18.dp)
     Column(
         modifier
             .clip(shape)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
-            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)), shape)
+            .border(
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)),
+                shape
+            )
             .clickable(onClick = onClick)
             .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Box(
             Modifier
                 .size(36.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(tint.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
+            contentAlignment = Alignment.Center
         ) {
             Icon(icon, null, tint = tint, modifier = Modifier.size(18.dp))
         }
-        Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
-        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            title,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            subtitle,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -137,13 +151,13 @@ internal fun SettingsHub(
     onPredictiveBack: (Boolean) -> Unit,
     dest: SettingsDest,
     onDest: (SettingsDest) -> Unit,
-    onBack: () -> Unit,
+    onBack: () -> Unit
 ) {
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader(
                 title = t.settings,
-                subtitle = if (t.zh) "常用在前，极客选项更深一层" else "Common first, power options deeper",
+                subtitle = if (t.zh) "常用在前，极客选项更深一层" else "Common first, power options deeper"
             )
             Column(
                 Modifier
@@ -151,167 +165,291 @@ internal fun SettingsHub(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = LocalUiMetrics.current.pagePad)
                     .padding(bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(if (t.zh) "常用" else "Essentials", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (t.zh) "常用" else "Essentials",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SettingsTile(if (t.zh) "服务配置" else "Service", if (t.zh) "目录 / 端口 / 地址 / 工具" else "Directory / port / URLs / tools", Icons.Default.Settings, MaterialTheme.colorScheme.primary, { onDest(SettingsDest.ServiceConfig) }, Modifier.weight(1f))
-                    SettingsTile(if (t.zh) "外观" else "Look", if (t.zh) "主题 / 强调色 / 密度" else "Theme / accent / density", Icons.Default.Tune, AppPalette.indigo, { onDest(SettingsDest.Appearance) }, Modifier.weight(1f))
+                    SettingsTile(if (t.zh) "服务配置" else "Service", if (t.zh) "目录 / 端口 / 地址 / 工具" else "Directory / port / URLs / tools", Icons.Default.Settings, MaterialTheme.colorScheme.primary, {
+                        onDest(SettingsDest.ServiceConfig)
+                    }, Modifier.weight(1f))
+                    SettingsTile(if (t.zh) "外观" else "Look", if (t.zh) "主题 / 强调色 / 密度" else "Theme / accent / density", Icons.Default.Tune, AppPalette.indigo, {
+                        onDest(SettingsDest.Appearance)
+                    }, Modifier.weight(1f))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SettingsTile(if (t.zh) "AI 深度分析" else "AI Deep", if (t.zh) "端点 / Key / 模型" else "Endpoint / key / model", Icons.Default.Memory, AppPalette.indigo, { onDest(SettingsDest.AiDeep) }, Modifier.weight(1f))
-                    SettingsTile(if (t.zh) "保活" else "Keep-alive", if (t.zh) "唤醒锁 / 自启" else "Wake lock / boot", Icons.Default.PowerSettingsNew, AppPalette.green, { onDest(SettingsDest.KeepAlive) }, Modifier.weight(1f))
+                    SettingsTile(if (t.zh) "AI 深度分析" else "AI Deep", if (t.zh) "端点 / Key / 模型" else "Endpoint / key / model", Icons.Default.Memory, AppPalette.indigo, {
+                        onDest(SettingsDest.AiDeep)
+                    }, Modifier.weight(1f))
+                    SettingsTile(if (t.zh) "保活" else "Keep-alive", if (t.zh) "唤醒锁 / 自启" else "Wake lock / boot", Icons.Default.PowerSettingsNew, AppPalette.green, {
+                        onDest(SettingsDest.KeepAlive)
+                    }, Modifier.weight(1f))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SettingsTile("APK MCP", if (t.zh) "MT 管理器协同" else "MT Manager bridge", Icons.Default.Link, AppPalette.orange, { onDest(SettingsDest.ApkBridge) }, Modifier.weight(1f))
-                    SettingsTile(if (t.zh) "隧道" else "Tunnel", if (t.zh) "公网暴露 / 保活" else "Public expose", Icons.Default.Cloud, AppPalette.purple, { onDest(SettingsDest.Tunnel) }, Modifier.weight(1f))
+                    SettingsTile("APK MCP", if (t.zh) "MT 管理器协同" else "MT Manager bridge", Icons.Default.Link, AppPalette.orange, {
+                        onDest(SettingsDest.ApkBridge)
+                    }, Modifier.weight(1f))
+                    SettingsTile(if (t.zh) "隧道" else "Tunnel", if (t.zh) "公网暴露 / 保活" else "Public expose", Icons.Default.Cloud, AppPalette.purple, {
+                        onDest(SettingsDest.Tunnel)
+                    }, Modifier.weight(1f))
                 }
-                Text(if (t.zh) "引擎" else "Engine", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
+                Text(
+                    if (t.zh) "引擎" else "Engine",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
                 SurfacePanel {
-                    NavRow(if (t.zh) "返回数量" else "Result limits", "limit / disasm / hexdump", Icons.Default.Analytics, onClick = { onDest(SettingsDest.Limits) })
+                    NavRow(if (t.zh) "返回数量" else "Result limits", "limit / disasm / hexdump", Icons.Default.Analytics, onClick = {
+                        onDest(SettingsDest.Limits)
+                    })
                     GroupDivider()
-                    NavRow(if (t.zh) "导出" else "Export", if (t.zh) "冲突策略与构建镜像" else "Conflict strategy", Icons.Default.Storage, onClick = { onDest(SettingsDest.Export) })
+                    NavRow(if (t.zh) "导出" else "Export", if (t.zh) "冲突策略与构建镜像" else "Conflict strategy", Icons.Default.Storage, onClick = {
+                        onDest(SettingsDest.Export)
+                    })
                     GroupDivider()
-                    NavRow(if (t.zh) "编辑校验与审计" else "Edit & Audit", if (t.zh) "快照 / 并发 / 模拟" else "Snapshot / concurrency", Icons.Default.Security, onClick = { onDest(SettingsDest.Audit) })
+                    NavRow(if (t.zh) "编辑校验与审计" else "Edit & Audit", if (t.zh) "快照 / 并发 / 模拟" else "Snapshot / concurrency", Icons.Default.Security, onClick = {
+                        onDest(SettingsDest.Audit)
+                    })
                     GroupDivider()
-                    NavRow("Blutter", if (t.zh) "Flutter 3.44 / Dart 3.12.2 / 完全离线" else "Flutter 3.44 / Dart 3.12.2 / fully offline", Icons.Default.Memory, onClick = { onDest(SettingsDest.Blutter) })
+                    NavRow("Blutter", if (t.zh) "Flutter 3.44 / Dart 3.12.2 / 完全离线" else "Flutter 3.44 / Dart 3.12.2 / fully offline", Icons.Default.Memory, onClick = {
+                        onDest(SettingsDest.Blutter)
+                    })
                 }
 
-                Text(if (t.zh) "诊断与关于" else "Diagnostics & about", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
+                Text(
+                    if (t.zh) "诊断与关于" else "Diagnostics & about",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
                 SurfacePanel {
-                    NavRow(if (t.zh) "版本更新" else "Software update", if (t.zh) "GitHub Releases / 自动检查" else "GitHub Releases / automatic checks", Icons.Default.Info, trailing = availableRelease?.tag.orEmpty(), onClick = { onDest(SettingsDest.Updates) })
+                    NavRow(if (t.zh) "版本更新" else "Software update", if (t.zh) "GitHub Releases / 自动检查" else "GitHub Releases / automatic checks", Icons.Default.Info, trailing = availableRelease?.tag.orEmpty(), onClick = {
+                        onDest(SettingsDest.Updates)
+                    })
                     GroupDivider()
-                    NavRow(t.backupRestore, t.backupRestoreSubtitle, Icons.Default.Cloud, onClick = { onDest(SettingsDest.BackupRestore) })
+                    NavRow(t.backupRestore, t.backupRestoreSubtitle, Icons.Default.Cloud, onClick = {
+                        onDest(SettingsDest.BackupRestore)
+                    })
                     GroupDivider()
-                    NavRow(if (t.zh) "工具调用审计" else "Tool audit", if (t.zh) "调用统计与失败率" else "Stats and failures", Icons.Default.Analytics, onClick = { onDest(SettingsDest.ToolStats) })
+                    NavRow(if (t.zh) "工具调用审计" else "Tool audit", if (t.zh) "调用统计与失败率" else "Stats and failures", Icons.Default.Analytics, onClick = {
+                        onDest(SettingsDest.ToolStats)
+                    })
                     GroupDivider()
-                    NavRow(if (t.zh) "隧道稳定性" else "Tunnel stability", if (t.zh) "重启与探查" else "Restart and probe", Icons.Default.Cloud, onClick = { onDest(SettingsDest.TunnelStats) })
+                    NavRow(if (t.zh) "隧道稳定性" else "Tunnel stability", if (t.zh) "重启与探查" else "Restart and probe", Icons.Default.Cloud, onClick = {
+                        onDest(SettingsDest.TunnelStats)
+                    })
                     GroupDivider()
-                    NavRow(t.instructions, if (t.zh) "推荐工作流" else "Workflow", Icons.Default.Description, onClick = { onDest(SettingsDest.Instructions) })
+                    NavRow(t.instructions, if (t.zh) "推荐工作流" else "Workflow", Icons.Default.Description, onClick = {
+                        onDest(SettingsDest.Instructions)
+                    })
                     GroupDivider()
-                    NavRow(if (t.zh) "开源致谢" else "Credits", if (t.zh) "依赖与参考" else "Dependencies", Icons.Default.Build, onClick = { onDest(SettingsDest.Credits) })
+                    NavRow(if (t.zh) "开源致谢" else "Credits", if (t.zh) "依赖与参考" else "Dependencies", Icons.Default.Build, onClick = {
+                        onDest(SettingsDest.Credits)
+                    })
                     GroupDivider()
-                    NavRow(t.disclaimer, icon = Icons.Default.Info, onClick = { onDest(SettingsDest.Disclaimer) })
+                    NavRow(t.disclaimer, icon = Icons.Default.Info, onClick = {
+                        onDest(SettingsDest.Disclaimer)
+                    })
                     GroupDivider()
-                    NavRow(t.about, icon = Icons.Default.Info, onClick = { onDest(SettingsDest.About) })
+                    NavRow(t.about, icon = Icons.Default.Info, onClick = {
+                        onDest(SettingsDest.About)
+                    })
                 }
                 // License footer
                 Text(
                     "${com.soreverse.mcp.core.Provenance.PROJECT} · ${com.soreverse.mcp.core.Provenance.LICENSE}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp).align(Alignment.CenterHorizontally),
+                    modifier = Modifier.padding(
+                        top = 4.dp,
+                        bottom = 8.dp
+                    ).align(Alignment.CenterHorizontally)
                 )
             }
         }
         if (dest != SettingsDest.Root) {
-    Surface(
-        modifier = Modifier.fillMaxSize().graphicsLayer {
-            translationX = size.width * backProgress
-            alpha = 1f - 0.12f * backProgress
-        },
-        color = MaterialTheme.colorScheme.background,
-    ) {
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = settingsTitle(t, dest),
-            showBack = true,
-            onBack = onBack,
-        )
-        Box(Modifier.fillMaxSize()) {
-        when (dest) {
-            SettingsDest.ServiceConfig -> SettingsServiceConfigPage(t, settings)
-            SettingsDest.Appearance -> SettingsAppearancePage(t, language, onLanguage, themeMode, onTheme, accentColor, onAccent, pureBlackDark, onPureBlack, uiDensity, onDensity, cornerStyle, onCorner, motionMode, onMotion, showAdvancedHome, onShowAdvancedHome, highContrast, onHighContrast, textScale, onTextScale, predictiveBack, onPredictiveBack)
-            SettingsDest.KeepAlive -> SettingsKeepAlivePage(t, settings)
-            SettingsDest.Access -> SettingsAccessPage(t, settings)
-            SettingsDest.Limits -> SettingsLimitsPage(t, settings)
-            SettingsDest.Export -> SettingsExportPage(t, settings)
-            SettingsDest.Audit -> SettingsAuditPage(t, settings)
-            SettingsDest.Blutter -> SettingsBlutterPage(t)
-            SettingsDest.Tunnel -> SettingsTunnelPage(t, settings)
-            SettingsDest.ApkBridge -> SettingsApkBridgePage(t, settings)
-            SettingsDest.AiDeep -> SettingsAiDeepPage(t, settings)
-            SettingsDest.Updates -> SettingsUpdatesPage(t, settings, updateManager, availableRelease, onRelease)
-            SettingsDest.Probe -> SettingsProbePage(t, settings)
-            SettingsDest.BackupRestore -> SettingsBackupRestorePage(t, settings)
-            SettingsDest.ToolStats -> PageScroll { GlassGroup { Column(Modifier.padding(12.dp)) { ToolStatsSection(t, settings) } } }
-            SettingsDest.TunnelStats -> PageScroll { GlassGroup { Column(Modifier.padding(12.dp)) { TunnelStatsSection(t) } } }
-            SettingsDest.Instructions -> PageScroll {
-                GlassGroup {
-                    Text(t.instructionsBody, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        if (t.zh)
-                            "详细流程：先在服务页启动 SO MCP；需要电脑访问时开启 Cloudflare Tunnel，或 adb forward tcp:8000 tcp:8000。客户端配置 /mcp 后按 so_open -> analyze_* -> read_disasm/search_* 分析；修改前 session_open，dryRun 预览后再 patch，最后 build_so 导出。"
-                        else
-                            "Start SO MCP on Service tab; enable Cloudflare Tunnel or adb forward for desktop access; then follow so_open -> analyze_* -> read/search -> session_open -> dryRun patch -> build_so.",
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Surface(
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    translationX = size.width * backProgress
+                    alpha = 1f - 0.12f * backProgress
+                },
+                color = MaterialTheme.colorScheme.background
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    ScreenHeader(
+                        title = settingsTitle(t, dest),
+                        showBack = true,
+                        onBack = onBack
                     )
-                }
-            }
-            SettingsDest.Credits -> SettingsCreditsPage(t)
-            SettingsDest.Disclaimer -> PageScroll {
-                GlassGroup {
-                    Text(t.disclaimerBody, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
-                }
-                GlassGroup(title = if (t.zh) "开源许可" else "License") {
-                    Text(
-                        if (t.zh) {
-                            "${com.soreverse.mcp.core.Provenance.PROJECT} 是 GPL-3.0-only 自由软件。任何再分发（含修改、改名、二次打包版本）必须保留本版权与许可声明、继续以 GPL-3.0-only 授权，并向每一位接收者提供完整对应源代码。"
-                        } else {
-                            "${com.soreverse.mcp.core.Provenance.PROJECT} is GPL-3.0-only free software. Any redistribution must retain this notice, remain under GPL-3.0-only, and provide complete corresponding source code."
-                        },
-                        modifier = Modifier.padding(14.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            SettingsDest.About -> {
-                val aboutContext = LocalContext.current
-                PageScroll {
-                    GlassGroup {
-                        Text(t.aboutBody, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
-                        Row(Modifier.padding(14.dp)) {
-                            PrimaryActionButton(t.joinQqGroup, { joinQqGroup(aboutContext, t.zh) }, modifier = Modifier.fillMaxWidth())
+                    Box(Modifier.fillMaxSize()) {
+                        when (dest) {
+                            SettingsDest.ServiceConfig -> SettingsServiceConfigPage(t, settings)
+
+                            SettingsDest.Appearance -> SettingsAppearancePage(t, language, onLanguage, themeMode, onTheme, accentColor, onAccent, pureBlackDark, onPureBlack, uiDensity, onDensity, cornerStyle, onCorner, motionMode, onMotion, showAdvancedHome, onShowAdvancedHome, highContrast, onHighContrast, textScale, onTextScale, predictiveBack, onPredictiveBack)
+
+                            SettingsDest.KeepAlive -> SettingsKeepAlivePage(t, settings)
+
+                            SettingsDest.Access -> SettingsAccessPage(t, settings)
+
+                            SettingsDest.Limits -> SettingsLimitsPage(t, settings)
+
+                            SettingsDest.Export -> SettingsExportPage(t, settings)
+
+                            SettingsDest.Audit -> SettingsAuditPage(t, settings)
+
+                            SettingsDest.Blutter -> SettingsBlutterPage(t)
+
+                            SettingsDest.Tunnel -> SettingsTunnelPage(t, settings)
+
+                            SettingsDest.ApkBridge -> SettingsApkBridgePage(t, settings)
+
+                            SettingsDest.AiDeep -> SettingsAiDeepPage(t, settings)
+
+                            SettingsDest.Updates -> SettingsUpdatesPage(
+                                t,
+                                settings,
+                                updateManager,
+                                availableRelease,
+                                onRelease
+                            )
+
+                            SettingsDest.Probe -> SettingsProbePage(t, settings)
+
+                            SettingsDest.BackupRestore -> SettingsBackupRestorePage(t, settings)
+
+                            SettingsDest.ToolStats -> PageScroll {
+                                GlassGroup {
+                                    Column(Modifier.padding(12.dp)) {
+                                        ToolStatsSection(t, settings)
+                                    }
+                                }
+                            }
+
+                            SettingsDest.TunnelStats -> PageScroll {
+                                GlassGroup {
+                                    Column(Modifier.padding(12.dp)) { TunnelStatsSection(t) }
+                                }
+                            }
+
+                            SettingsDest.Instructions -> PageScroll {
+                                GlassGroup {
+                                    Text(
+                                        t.instructionsBody,
+                                        modifier = Modifier.padding(14.dp),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        if (t.zh) {
+                                            "详细流程：先在服务页启动 SO MCP；需要电脑访问时开启 Cloudflare Tunnel，或 adb forward tcp:8000 tcp:8000。客户端配置 /mcp 后按 so_open -> analyze_* -> read_disasm/search_* 分析；修改前 session_open，dryRun 预览后再 patch，最后 build_so 导出。"
+                                        } else {
+                                            "Start SO MCP on Service tab; enable Cloudflare Tunnel or adb forward for desktop access; then follow so_open -> analyze_* -> read/search -> session_open -> dryRun patch -> build_so."
+                                        },
+                                        modifier = Modifier.padding(
+                                            horizontal = 14.dp,
+                                            vertical = 8.dp
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            SettingsDest.Credits -> SettingsCreditsPage(t)
+
+                            SettingsDest.Disclaimer -> PageScroll {
+                                GlassGroup {
+                                    Text(
+                                        t.disclaimerBody,
+                                        modifier = Modifier.padding(14.dp),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                                GlassGroup(title = if (t.zh) "开源许可" else "License") {
+                                    Text(
+                                        if (t.zh) {
+                                            "${com.soreverse.mcp.core.Provenance.PROJECT} 是 GPL-3.0-only 自由软件。任何再分发（含修改、改名、二次打包版本）必须保留本版权与许可声明、继续以 GPL-3.0-only 授权，并向每一位接收者提供完整对应源代码。"
+                                        } else {
+                                            "${com.soreverse.mcp.core.Provenance.PROJECT} is GPL-3.0-only free software. Any redistribution must retain this notice, remain under GPL-3.0-only, and provide complete corresponding source code."
+                                        },
+                                        modifier = Modifier.padding(14.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            SettingsDest.About -> {
+                                val aboutContext = LocalContext.current
+                                PageScroll {
+                                    GlassGroup {
+                                        Text(
+                                            t.aboutBody,
+                                            modifier = Modifier.padding(14.dp),
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Row(Modifier.padding(14.dp)) {
+                                            PrimaryActionButton(t.joinQqGroup, {
+                                                joinQqGroup(aboutContext, t.zh)
+                                            }, modifier = Modifier.fillMaxWidth())
+                                        }
+                                    }
+                                    GlassGroup(
+                                        title = if (t.zh) "开源许可与来源" else "License & origin"
+                                    ) {
+                                        NavRow(
+                                            "${com.soreverse.mcp.core.Provenance.PROJECT} · ${com.soreverse.mcp.core.Provenance.LICENSE}",
+                                            com.soreverse.mcp.core.Provenance.COPYRIGHT,
+                                            Icons.Default.Info,
+                                            onClick = {
+                                                copy(
+                                                    aboutContext,
+                                                    com.soreverse.mcp.core.Provenance.LICENSE,
+                                                    t.copied
+                                                )
+                                            }
+                                        )
+                                        GroupDivider()
+                                        NavRow(
+                                            if (t.zh) "上游开源仓库（唯一官方来源）" else "Upstream source (only official origin)",
+                                            com.soreverse.mcp.core.Provenance.UPSTREAM,
+                                            Icons.Default.Info,
+                                            onClick = {
+                                                copy(
+                                                    aboutContext,
+                                                    com.soreverse.mcp.core.Provenance.UPSTREAM,
+                                                    t.copied
+                                                )
+                                            }
+                                        )
+                                        GroupDivider()
+                                        Text(
+                                            if (t.zh) {
+                                                "本软件为 GPL-3.0 自由软件，受《中华人民共和国著作权法》《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：保留本版权与许可声明、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码。\n\n" +
+                                                    "闭源分发、抹除署名、改名冒充原创即构成侵权。依据《著作权法》第五十二条、第五十三条，权利人可要求停止侵害、消除影响、赔礼道歉并赔偿损失；情节严重的可按《著作权法》第五十四条主张惩罚性赔偿。GPL 作为授权合同在中国司法实践中已被确认有效并可强制执行（参见北京高院\u201c数字天堂诉柚子科技\u201d、\u201c罗盒诉风灵\u201d等 GPL/开源协议案）。\n\n" +
+                                                    "侵权者将被记录（含运行时溯源指纹）并可能面临平台下架、公开通报及民事索赔。"
+                                            } else {
+                                                com.soreverse.mcp.core.Provenance.REDISTRIBUTION_NOTICE
+                                            },
+                                            modifier = Modifier.padding(14.dp),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            SettingsDest.Root -> Unit
                         }
                     }
-                    GlassGroup(title = if (t.zh) "开源许可与来源" else "License & origin") {
-                        NavRow(
-                            "${com.soreverse.mcp.core.Provenance.PROJECT} · ${com.soreverse.mcp.core.Provenance.LICENSE}",
-                            com.soreverse.mcp.core.Provenance.COPYRIGHT,
-                            Icons.Default.Info,
-                            onClick = { copy(aboutContext, com.soreverse.mcp.core.Provenance.LICENSE, t.copied) },
-                        )
-                        GroupDivider()
-                        NavRow(
-                            if (t.zh) "上游开源仓库（唯一官方来源）" else "Upstream source (only official origin)",
-                            com.soreverse.mcp.core.Provenance.UPSTREAM,
-                            Icons.Default.Info,
-                            onClick = { copy(aboutContext, com.soreverse.mcp.core.Provenance.UPSTREAM, t.copied) },
-                        )
-                        GroupDivider()
-                        Text(
-                            if (t.zh) {
-                                "本软件为 GPL-3.0 自由软件，受《中华人民共和国著作权法》《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：保留本版权与许可声明、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码。\n\n" +
-                                    "闭源分发、抹除署名、改名冒充原创即构成侵权。依据《著作权法》第五十二条、第五十三条，权利人可要求停止侵害、消除影响、赔礼道歉并赔偿损失；情节严重的可按《著作权法》第五十四条主张惩罚性赔偿。GPL 作为授权合同在中国司法实践中已被确认有效并可强制执行（参见北京高院\u201c数字天堂诉柚子科技\u201d、\u201c罗盒诉风灵\u201d等 GPL/开源协议案）。\n\n" +
-                                    "侵权者将被记录（含运行时溯源指纹）并可能面临平台下架、公开通报及民事索赔。"
-                            } else {
-                                com.soreverse.mcp.core.Provenance.REDISTRIBUTION_NOTICE
-                            },
-                            modifier = Modifier.padding(14.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
             }
-            SettingsDest.Root -> Unit
-        }
         }
     }
-    }
-    }
-}
 }

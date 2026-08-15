@@ -37,20 +37,17 @@ sealed interface RikkaPart {
         val name: String,
         val arguments: String,
         val result: String? = null,
-        val index: Int = 0,
+        val index: Int = 0
     ) : RikkaPart
 }
 
-internal data class RikkaMessage(
-    val role: String,
-    val parts: List<RikkaPart>,
-)
+internal data class RikkaMessage(val role: String, val parts: List<RikkaPart>)
 
 internal data class RikkaTool(
     val name: String,
     val description: String,
     val schema: JSONObject,
-    val execute: suspend (JSONObject) -> String,
+    val execute: suspend (JSONObject) -> String
 )
 
 internal class RikkaAgentEngine(
@@ -61,9 +58,12 @@ internal class RikkaAgentEngine(
     private val model: String,
     private val temperature: Float,
     private val customHeaders: Map<String, String>,
-    private val customBody: Map<String, JsonElement>,
+    private val customBody: Map<String, JsonElement>
 ) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 
     suspend fun run(
         systemPrompt: String,
@@ -71,11 +71,11 @@ internal class RikkaAgentEngine(
         tools: List<RikkaTool>,
         maxSteps: Int,
         requiredTools: List<String> = emptyList(),
-        onParts: (List<RikkaPart>) -> Unit,
+        onParts: (List<RikkaPart>) -> Unit
     ): String {
         val messages = mutableListOf(
             RikkaMessage("system", listOf(RikkaPart.Text(systemPrompt))),
-            RikkaMessage("user", listOf(RikkaPart.Text(userPrompt))),
+            RikkaMessage("user", listOf(RikkaPart.Text(userPrompt)))
         )
         val visibleParts = mutableListOf<RikkaPart>()
         val executedTools = linkedSetOf<String>()
@@ -86,18 +86,29 @@ internal class RikkaAgentEngine(
                 onParts(visibleParts + assistant.parts)
             }
             messages += assistant
-            val calls = assistant.parts.filterIsInstance<RikkaPart.Tool>().filter { it.result == null }
+            val calls = assistant.parts.filterIsInstance<RikkaPart.Tool>().filter {
+                it.result ==
+                    null
+            }
             if (calls.isEmpty()) {
                 val missing = requiredTools.filterNot(executedTools::contains)
                 if (missing.isNotEmpty()) {
                     visibleParts += assistant.parts
                     messages += RikkaMessage(
                         "user",
-                        listOf(RikkaPart.Text("Continue the analysis. Complete these required tools before the final answer: ${missing.joinToString(" → ")}.")),
+                        listOf(
+                            RikkaPart.Text(
+                                "Continue the analysis. Complete these required tools before the final answer: ${missing.joinToString(
+                                    " → "
+                                )}."
+                            )
+                        )
                     )
                     return@repeat
                 }
-                return assistant.parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text }.trim()
+                return assistant.parts.filterIsInstance<RikkaPart.Text>().joinToString("") {
+                    it.text
+                }.trim()
             }
             calls.forEach { call ->
                 val requestedName = call.name.trim()
@@ -130,7 +141,15 @@ internal class RikkaAgentEngine(
                 }
                 val completed = call.copy(result = result)
                 messages[messages.lastIndex] = messages.last().copy(
-                    parts = messages.last().parts.map { if (it is RikkaPart.Tool && it.id == call.id) completed else it },
+                    parts = messages.last().parts.map {
+                        if (it is RikkaPart.Tool &&
+                            it.id == call.id
+                        ) {
+                            completed
+                        } else {
+                            it
+                        }
+                    }
                 )
                 onParts(visibleParts + messages.last().parts)
             }
@@ -139,10 +158,21 @@ internal class RikkaAgentEngine(
         error("Maximum tool steps exceeded")
     }
 
-    private fun stream(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> =
-        if (provider == "anthropic") streamAnthropic(messages, tools) else streamOpenAi(messages, tools)
+    private fun stream(
+        messages: List<RikkaMessage>,
+        tools: List<RikkaTool>
+    ): Flow<List<RikkaPart>> = if (provider ==
+        "anthropic"
+    ) {
+        streamAnthropic(messages, tools)
+    } else {
+        streamOpenAi(messages, tools)
+    }
 
-    private fun streamOpenAi(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> = callbackFlow {
+    private fun streamOpenAi(
+        messages: List<RikkaMessage>,
+        tools: List<RikkaTool>
+    ): Flow<List<RikkaPart>> = callbackFlow {
         val body = buildOpenAiBody(messages, tools)
         val request = requestBuilder(openAiUrl())
             .safeHeader("Authorization", "Bearer $apiKey")
@@ -150,106 +180,186 @@ internal class RikkaAgentEngine(
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         val toolMetadata = mutableMapOf<Int, Pair<String, String>>()
-        val source = EventSources.createFactory(client).newEventSource(request, object : EventSourceListener() {
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                if (data == "[DONE]") {
-                    close()
-                    return
-                }
-                runCatching {
-                    val root = json.parseToJsonElement(data).jsonObject
-                    root["error"]?.let { error(it.toString()) }
-                    val delta = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject?.get("delta")?.jsonObject
-                        ?: return@runCatching
-                    val parts = buildList {
-                        delta["reasoning_content"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotEmpty)?.let { add(RikkaPart.Reasoning(it)) }
-                        delta["reasoning"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotEmpty)?.let { add(RikkaPart.Reasoning(it)) }
-                        delta["content"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotEmpty)?.let { add(RikkaPart.Text(it)) }
-                        delta["tool_calls"]?.jsonArray?.forEach { item ->
-                            val tool = item.jsonObject
-                            val index = tool["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
-                            val function = tool["function"]?.jsonObject ?: JsonObject(emptyMap())
-                            val previous = toolMetadata[index]
-                            val resolvedId = tool["id"]?.jsonPrimitive?.contentOrNull
-                                ?.takeIf(String::isNotBlank)
-                                ?: previous?.first
-                                ?: "tool_call_$index"
-                            val resolvedName = function["name"]?.jsonPrimitive?.contentOrNull
-                                ?.takeIf(String::isNotBlank)
-                                ?: previous?.second.orEmpty()
-                            toolMetadata[index] = resolvedId to resolvedName
-                            add(
-                                RikkaPart.Tool(
-                                    id = resolvedId,
-                                    name = resolvedName,
-                                    arguments = function["arguments"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                                    index = index,
-                                ),
-                            )
-                        }
+        val source = EventSources.createFactory(client).newEventSource(
+            request,
+            object : EventSourceListener() {
+                override fun onEvent(
+                    eventSource: EventSource,
+                    id: String?,
+                    type: String?,
+                    data: String
+                ) {
+                    if (data == "[DONE]") {
+                        close()
+                        return
                     }
-                    if (parts.isNotEmpty()) trySend(parts)
-                }.onFailure { close(it) }
-            }
+                    runCatching {
+                        val root = json.parseToJsonElement(data).jsonObject
+                        root["error"]?.let { error(it.toString()) }
+                        val delta =
+                            root["choices"]?.jsonArray?.firstOrNull()?.jsonObject?.get(
+                                "delta"
+                            )?.jsonObject
+                                ?: return@runCatching
+                        val parts = buildList {
+                            delta["reasoning_content"]?.jsonPrimitive?.contentOrNull?.takeIf(
+                                String::isNotEmpty
+                            )?.let {
+                                add(RikkaPart.Reasoning(it))
+                            }
+                            delta["reasoning"]?.jsonPrimitive?.contentOrNull?.takeIf(
+                                String::isNotEmpty
+                            )?.let {
+                                add(RikkaPart.Reasoning(it))
+                            }
+                            delta["content"]?.jsonPrimitive?.contentOrNull?.takeIf(
+                                String::isNotEmpty
+                            )?.let {
+                                add(RikkaPart.Text(it))
+                            }
+                            delta["tool_calls"]?.jsonArray?.forEach { item ->
+                                val tool = item.jsonObject
+                                val index =
+                                    tool["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                                val function =
+                                    tool["function"]?.jsonObject ?: JsonObject(emptyMap())
+                                val previous = toolMetadata[index]
+                                val resolvedId = tool["id"]?.jsonPrimitive?.contentOrNull
+                                    ?.takeIf(String::isNotBlank)
+                                    ?: previous?.first
+                                    ?: "tool_call_$index"
+                                val resolvedName = function["name"]?.jsonPrimitive?.contentOrNull
+                                    ?.takeIf(String::isNotBlank)
+                                    ?: previous?.second.orEmpty()
+                                toolMetadata[index] = resolvedId to resolvedName
+                                add(
+                                    RikkaPart.Tool(
+                                        id = resolvedId,
+                                        name = resolvedName,
+                                        arguments = function["arguments"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                        index = index
+                                    )
+                                )
+                            }
+                        }
+                        if (parts.isNotEmpty()) trySend(parts)
+                    }.onFailure { close(it) }
+                }
 
-            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                close(eventSourceFailure(t, response))
-            }
+                override fun onFailure(
+                    eventSource: EventSource,
+                    t: Throwable?,
+                    response: Response?
+                ) {
+                    close(eventSourceFailure(t, response))
+                }
 
-            override fun onClosed(eventSource: EventSource) {
-                close()
+                override fun onClosed(eventSource: EventSource) {
+                    close()
+                }
             }
-        })
+        )
         awaitClose { source.cancel() }
     }.buffer(Channel.UNLIMITED)
 
-    private fun streamAnthropic(messages: List<RikkaMessage>, tools: List<RikkaTool>): Flow<List<RikkaPart>> = callbackFlow {
+    private fun streamAnthropic(
+        messages: List<RikkaMessage>,
+        tools: List<RikkaTool>
+    ): Flow<List<RikkaPart>> = callbackFlow {
         val request = requestBuilder(anthropicUrl())
             .safeHeader("x-api-key", apiKey)
             .header("anthropic-version", "2023-06-01")
             .applyCustomHeaders()
-            .post(buildAnthropicBody(messages, tools).toString().toRequestBody("application/json".toMediaType()))
+            .post(
+                buildAnthropicBody(
+                    messages,
+                    tools
+                ).toString().toRequestBody("application/json".toMediaType())
+            )
             .build()
         val toolNames = mutableMapOf<Int, Pair<String, String>>()
-        val source = EventSources.createFactory(client).newEventSource(request, object : EventSourceListener() {
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                runCatching {
-                    val root = json.parseToJsonElement(data).jsonObject
-                    when (root["type"]?.jsonPrimitive?.contentOrNull) {
-                        "content_block_start" -> {
-                            val index = root["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
-                            val block = root["content_block"]?.jsonObject ?: return@runCatching
-                            if (block["type"]?.jsonPrimitive?.contentOrNull == "tool_use") {
-                                toolNames[index] = block["id"]?.jsonPrimitive?.contentOrNull.orEmpty() to block["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                val pair = toolNames[index]!!
-                                trySend(listOf(RikkaPart.Tool(pair.first, pair.second, "", index = index)))
-                            }
-                        }
-                        "content_block_delta" -> {
-                            val index = root["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
-                            val delta = root["delta"]?.jsonObject ?: return@runCatching
-                            when (delta["type"]?.jsonPrimitive?.contentOrNull) {
-                                "text_delta" -> delta["text"]?.jsonPrimitive?.contentOrNull?.let { trySend(listOf(RikkaPart.Text(it))) }
-                                "thinking_delta" -> delta["thinking"]?.jsonPrimitive?.contentOrNull?.let { trySend(listOf(RikkaPart.Reasoning(it))) }
-                                "input_json_delta" -> toolNames[index]?.let { pair ->
-                                    trySend(listOf(RikkaPart.Tool(pair.first, pair.second, delta["partial_json"]?.jsonPrimitive?.contentOrNull.orEmpty(), index = index)))
+        val source = EventSources.createFactory(client).newEventSource(
+            request,
+            object : EventSourceListener() {
+                override fun onEvent(
+                    eventSource: EventSource,
+                    id: String?,
+                    type: String?,
+                    data: String
+                ) {
+                    runCatching {
+                        val root = json.parseToJsonElement(data).jsonObject
+                        when (root["type"]?.jsonPrimitive?.contentOrNull) {
+                            "content_block_start" -> {
+                                val index =
+                                    root["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                                val block = root["content_block"]?.jsonObject ?: return@runCatching
+                                if (block["type"]?.jsonPrimitive?.contentOrNull == "tool_use") {
+                                    toolNames[index] =
+                                        block["id"]?.jsonPrimitive?.contentOrNull.orEmpty() to
+                                        block["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                    val pair = toolNames[index]!!
+                                    trySend(
+                                        listOf(
+                                            RikkaPart.Tool(
+                                                pair.first,
+                                                pair.second,
+                                                "",
+                                                index = index
+                                            )
+                                        )
+                                    )
                                 }
                             }
+
+                            "content_block_delta" -> {
+                                val index =
+                                    root["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                                val delta = root["delta"]?.jsonObject ?: return@runCatching
+                                when (delta["type"]?.jsonPrimitive?.contentOrNull) {
+                                    "text_delta" -> delta["text"]?.jsonPrimitive?.contentOrNull?.let {
+                                        trySend(listOf(RikkaPart.Text(it)))
+                                    }
+
+                                    "thinking_delta" -> delta["thinking"]?.jsonPrimitive?.contentOrNull?.let {
+                                        trySend(listOf(RikkaPart.Reasoning(it)))
+                                    }
+
+                                    "input_json_delta" -> toolNames[index]?.let { pair ->
+                                        trySend(
+                                            listOf(
+                                                RikkaPart.Tool(
+                                                    pair.first,
+                                                    pair.second,
+                                                    delta["partial_json"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                                    index = index
+                                                )
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+
+                            "message_stop" -> close()
+
+                            "error" -> error(root["error"].toString())
                         }
-                        "message_stop" -> close()
-                        "error" -> error(root["error"].toString())
-                    }
-                }.onFailure { close(it) }
-            }
+                    }.onFailure { close(it) }
+                }
 
-            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                close(eventSourceFailure(t, response))
-            }
+                override fun onFailure(
+                    eventSource: EventSource,
+                    t: Throwable?,
+                    response: Response?
+                ) {
+                    close(eventSourceFailure(t, response))
+                }
 
-            override fun onClosed(eventSource: EventSource) {
-                close()
+                override fun onClosed(eventSource: EventSource) {
+                    close()
+                }
             }
-        })
+        )
         awaitClose { source.cancel() }
     }.buffer(Channel.UNLIMITED)
 
@@ -274,114 +384,238 @@ internal class RikkaAgentEngine(
     private fun mergeParts(current: List<RikkaPart>, deltas: List<RikkaPart>): List<RikkaPart> =
         deltas.fold(current) { parts, delta ->
             when (delta) {
-                is RikkaPart.Text -> if (parts.lastOrNull() is RikkaPart.Text) parts.dropLast(1) + RikkaPart.Text((parts.last() as RikkaPart.Text).text + delta.text) else parts + delta
-                is RikkaPart.Reasoning -> if (parts.lastOrNull() is RikkaPart.Reasoning) parts.dropLast(1) + RikkaPart.Reasoning((parts.last() as RikkaPart.Reasoning).text + delta.text) else parts + delta
+                is RikkaPart.Text -> if (parts.lastOrNull() is RikkaPart.Text) {
+                    parts.dropLast(1) +
+                        RikkaPart.Text((parts.last() as RikkaPart.Text).text + delta.text)
+                } else {
+                    parts +
+                        delta
+                }
+
+                is RikkaPart.Reasoning -> if (parts.lastOrNull() is RikkaPart.Reasoning) {
+                    parts.dropLast(1) +
+                        RikkaPart.Reasoning((parts.last() as RikkaPart.Reasoning).text + delta.text)
+                } else {
+                    parts +
+                        delta
+                }
+
                 is RikkaPart.Tool -> {
                     val target = parts.indexOfLast {
-                        it is RikkaPart.Tool && (it.index == delta.index || (delta.id.isNotBlank() && it.id == delta.id))
+                        it is RikkaPart.Tool &&
+                            (it.index == delta.index || (delta.id.isNotBlank() && it.id == delta.id))
                     }
-                    if (target < 0) parts + delta else parts.toMutableList().apply {
-                        val old = this[target] as RikkaPart.Tool
-                        this[target] = old.copy(
-                            id = delta.id.ifBlank { old.id },
-                            name = delta.name.ifBlank { old.name },
-                            arguments = old.arguments + delta.arguments,
-                            result = delta.result ?: old.result,
+                    if (target < 0) {
+                        parts + delta
+                    } else {
+                        parts.toMutableList().apply {
+                            val old = this[target] as RikkaPart.Tool
+                            this[target] = old.copy(
+                                id = delta.id.ifBlank { old.id },
+                                name = delta.name.ifBlank { old.name },
+                                arguments = old.arguments + delta.arguments,
+                                result = delta.result ?: old.result
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun buildOpenAiBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) =
+        buildJsonObject {
+            put("model", model)
+            put("stream", true)
+            put("temperature", temperature)
+            putJsonArray("messages") {
+                messages.forEach { message ->
+                    add(
+                        buildJsonObject {
+                            put("role", message.role)
+                            put(
+                                "content",
+                                message.parts.filterIsInstance<RikkaPart.Text>().joinToString("") {
+                                    it.text
+                                }
+                            )
+                            val calls = message.parts.filterIsInstance<RikkaPart.Tool>()
+                            if (message.role == "assistant" && calls.isNotEmpty()) {
+                                putJsonArray("tool_calls") {
+                                    calls.forEach { call ->
+                                        add(
+                                            buildJsonObject {
+                                                put("id", call.id)
+                                                put("type", "function")
+                                                put(
+                                                    "function",
+                                                    buildJsonObject {
+                                                        put("name", call.name)
+                                                        put("arguments", call.arguments)
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    message.parts.filterIsInstance<RikkaPart.Tool>().filter {
+                        it.result != null
+                    }.forEach { call ->
+                        add(
+                            buildJsonObject {
+                                put("role", "tool")
+                                put("tool_call_id", call.id)
+                                put("content", call.result.orEmpty())
+                            }
                         )
                     }
                 }
             }
-        }
-
-    private fun buildOpenAiBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) = buildJsonObject {
-        put("model", model)
-        put("stream", true)
-        put("temperature", temperature)
-        putJsonArray("messages") {
-            messages.forEach { message ->
-                add(buildJsonObject {
-                    put("role", message.role)
-                    put("content", message.parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text })
-                    val calls = message.parts.filterIsInstance<RikkaPart.Tool>()
-                    if (message.role == "assistant" && calls.isNotEmpty()) {
-                        putJsonArray("tool_calls") {
-                            calls.forEach { call -> add(buildJsonObject {
-                                put("id", call.id)
-                                put("type", "function")
-                                put("function", buildJsonObject { put("name", call.name); put("arguments", call.arguments) })
-                            }) }
+            putJsonArray("tools") {
+                tools.forEach { tool ->
+                    add(
+                        buildJsonObject {
+                            put("type", "function")
+                            put(
+                                "function",
+                                buildJsonObject {
+                                    put("name", tool.name)
+                                    put("description", tool.description)
+                                    put(
+                                        "parameters",
+                                        json.parseToJsonElement(tool.schema.toString())
+                                    )
+                                }
+                            )
                         }
-                    }
-                })
-                message.parts.filterIsInstance<RikkaPart.Tool>().filter { it.result != null }.forEach { call ->
-                    add(buildJsonObject { put("role", "tool"); put("tool_call_id", call.id); put("content", call.result.orEmpty()) })
+                    )
                 }
             }
+            customBody.forEach { (key, value) -> put(key, value) }
         }
-        putJsonArray("tools") {
-            tools.forEach { tool -> add(buildJsonObject {
-                put("type", "function")
-                put("function", buildJsonObject {
-                    put("name", tool.name); put("description", tool.description)
-                    put("parameters", json.parseToJsonElement(tool.schema.toString()))
-                })
-            }) }
-        }
-        customBody.forEach { (key, value) -> put(key, value) }
-    }
 
-    private fun buildAnthropicBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) = buildJsonObject {
-        put("model", model); put("stream", true); put("max_tokens", 16_384); put("temperature", temperature)
-        put("system", messages.firstOrNull { it.role == "system" }?.parts?.filterIsInstance<RikkaPart.Text>()?.joinToString("") { it.text }.orEmpty())
-        putJsonArray("messages") {
-            messages.filter { it.role != "system" }.forEach { message ->
-                if (message.role != "assistant") {
-                    add(buildJsonObject {
-                        put("role", message.role)
-                        putJsonArray("content") {
-                            message.parts.filterIsInstance<RikkaPart.Text>().forEach { part ->
-                                add(buildJsonObject { put("type", "text"); put("text", part.text) })
+    private fun buildAnthropicBody(messages: List<RikkaMessage>, tools: List<RikkaTool>) =
+        buildJsonObject {
+            put("model", model)
+            put("stream", true)
+            put("max_tokens", 16_384)
+            put("temperature", temperature)
+            put(
+                "system",
+                messages.firstOrNull {
+                    it.role == "system"
+                }?.parts?.filterIsInstance<RikkaPart.Text>()?.joinToString("") { it.text }.orEmpty()
+            )
+            putJsonArray("messages") {
+                messages.filter { it.role != "system" }.forEach { message ->
+                    if (message.role != "assistant") {
+                        add(
+                            buildJsonObject {
+                                put("role", message.role)
+                                putJsonArray("content") {
+                                    message.parts.filterIsInstance<RikkaPart.Text>().forEach { part ->
+                                        add(
+                                            buildJsonObject {
+                                                put("type", "text")
+                                                put("text", part.text)
+                                            }
+                                        )
+                                    }
+                                }
                             }
-                        }
-                    })
-                } else {
-                    add(buildJsonObject {
-                        put("role", "assistant")
-                        putJsonArray("content") {
-                            message.parts.forEach { part -> when (part) {
-                                is RikkaPart.Text -> add(buildJsonObject { put("type", "text"); put("text", part.text) })
-                                is RikkaPart.Reasoning -> Unit
-                                is RikkaPart.Tool -> add(buildJsonObject {
-                                    put("type", "tool_use"); put("id", part.id); put("name", part.name)
-                                    put("input", runCatching { json.parseToJsonElement(part.arguments) }.getOrElse { JsonObject(emptyMap()) })
-                                })
-                            } }
-                        }
-                    })
-                    val completed = message.parts.filterIsInstance<RikkaPart.Tool>().filter { it.result != null }
-                    if (completed.isNotEmpty()) {
-                        add(buildJsonObject {
-                            put("role", "user")
-                            putJsonArray("content") {
-                                completed.forEach { part -> add(buildJsonObject {
-                                    put("type", "tool_result"); put("tool_use_id", part.id); put("content", part.result.orEmpty())
-                                }) }
+                        )
+                    } else {
+                        add(
+                            buildJsonObject {
+                                put("role", "assistant")
+                                putJsonArray("content") {
+                                    message.parts.forEach { part ->
+                                        when (part) {
+                                            is RikkaPart.Text -> add(
+                                                buildJsonObject {
+                                                    put("type", "text")
+                                                    put("text", part.text)
+                                                }
+                                            )
+
+                                            is RikkaPart.Reasoning -> Unit
+
+                                            is RikkaPart.Tool -> add(
+                                                buildJsonObject {
+                                                    put("type", "tool_use")
+                                                    put("id", part.id)
+                                                    put("name", part.name)
+                                                    put(
+                                                        "input",
+                                                        runCatching {
+                                                            json.parseToJsonElement(part.arguments)
+                                                        }.getOrElse { JsonObject(emptyMap()) }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
                             }
-                        })
+                        )
+                        val completed = message.parts.filterIsInstance<RikkaPart.Tool>().filter {
+                            it.result !=
+                                null
+                        }
+                        if (completed.isNotEmpty()) {
+                            add(
+                                buildJsonObject {
+                                    put("role", "user")
+                                    putJsonArray("content") {
+                                        completed.forEach { part ->
+                                            add(
+                                                buildJsonObject {
+                                                    put("type", "tool_result")
+                                                    put("tool_use_id", part.id)
+                                                    put("content", part.result.orEmpty())
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
+            putJsonArray("tools") {
+                tools.forEach { tool ->
+                    add(
+                        buildJsonObject {
+                            put("name", tool.name)
+                            put("description", tool.description)
+                            put("input_schema", json.parseToJsonElement(tool.schema.toString()))
+                        }
+                    )
+                }
+            }
+            customBody.forEach { (key, value) -> put(key, value) }
         }
-        putJsonArray("tools") { tools.forEach { tool -> add(buildJsonObject { put("name", tool.name); put("description", tool.description); put("input_schema", json.parseToJsonElement(tool.schema.toString())) }) } }
-        customBody.forEach { (key, value) -> put(key, value) }
-    }
 
-    private fun requestBuilder(url: String) = Request.Builder().url(url).header("Accept", "text/event-stream")
+    private fun requestBuilder(url: String) =
+        Request.Builder().url(url).header("Accept", "text/event-stream")
 
     private fun Request.Builder.applyCustomHeaders() = apply {
         customHeaders.forEach { (name, value) -> safeHeader(name, value) }
     }
 
-    private fun openAiUrl(): String = endpoint.trimEnd('/').let { if (it.endsWith("/chat/completions")) it else "$it/chat/completions" }
-    private fun anthropicUrl(): String = endpoint.trimEnd('/').let { if (it.endsWith("/messages")) it else if (it.endsWith("/v1")) "$it/messages" else "$it/v1/messages" }
+    private fun openAiUrl(): String = endpoint.trimEnd('/').let {
+        if (it.endsWith("/chat/completions")) it else "$it/chat/completions"
+    }
+    private fun anthropicUrl(): String = endpoint.trimEnd('/').let {
+        if (it.endsWith("/messages")) {
+            it
+        } else if (it.endsWith("/v1")) {
+            "$it/messages"
+        } else {
+            "$it/v1/messages"
+        }
+    }
 }

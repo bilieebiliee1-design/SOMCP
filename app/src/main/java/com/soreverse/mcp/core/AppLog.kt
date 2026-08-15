@@ -20,6 +20,7 @@ object AppLog {
     private var app: Context? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = mutableListOf<(String) -> Unit>()
+
     @Volatile private var lastDelivered: String? = null
 
     fun init(context: Context) {
@@ -59,7 +60,13 @@ object AppLog {
         val minLevel = app?.let { runCatching { SettingsStore(it).logLevel }.getOrNull() } ?: "I"
         if (levelRank(level) < levelRank(minLevel)) return
         val raw = message
-        val clipped = if (raw.length > MAX_LINE_LEN) raw.substring(0, MAX_LINE_LEN) + "…(${raw.length})" else raw
+        val clipped = if (raw.length >
+            MAX_LINE_LEN
+        ) {
+            raw.substring(0, MAX_LINE_LEN) + "…(${raw.length})"
+        } else {
+            raw
+        }
         val nextLine = "${formatter.format(Date())} $level $clipped"
         synchronized(lock) {
             if (lines.size == MAX_LINES) lines.removeFirst()

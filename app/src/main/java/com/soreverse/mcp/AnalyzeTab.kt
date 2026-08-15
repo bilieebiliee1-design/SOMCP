@@ -78,7 +78,7 @@ internal fun AnalyzeTab(
     scope: CoroutineScope,
     deepService: DeepAnalysisService,
     backProgress: Float,
-    onLeaveDeepReport: () -> Unit,
+    onLeaveDeepReport: () -> Unit
 ) {
     val context = LocalContext.current
     val deepChatListState = rememberLazyListState()
@@ -92,17 +92,22 @@ internal fun AnalyzeTab(
         }
     }
     var showWorkspaces by remember { mutableStateOf(false) }
-    val pickTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+    val pickTree =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+            if (uri != null) {
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                }
+                settings.treeUri = uri
+                settings.useDefaultWorkDir = false
+                EngineProvider.get(context).setWorkDirectory(uri)
+                state.scannedTreeUri = null
             }
-            settings.treeUri = uri
-            settings.useDefaultWorkDir = false
-            EngineProvider.get(context).setWorkDirectory(uri)
-            state.scannedTreeUri = null
         }
-    }
 
     fun startDeepAnalysis(path: String, request: String = "") {
         launchDeepAnalysis(context, path, request, settings, state, scope, deepService, t.zh)
@@ -111,9 +116,12 @@ internal fun AnalyzeTab(
     LaunchedEffect(settings.treeUri?.toString(), settings.defaultLimit) {
         val treeKey = settings.treeUri?.toString()
         if (treeKey == null) {
-            state.message = if (t.zh) "尚未选择目录，请先选择工作目录" else "No directory selected. Choose a work directory first."
+            state.message =
+                if (t.zh) "尚未选择目录，请先选择工作目录" else "No directory selected. Choose a work directory first."
         } else if (state.scannedTreeUri != treeKey && !state.scanning) {
-            EngineProvider.get(context).let { engine -> settings.treeUri?.let(engine::setWorkDirectory) }
+            EngineProvider.get(context).let { engine ->
+                settings.treeUri?.let(engine::setWorkDirectory)
+            }
             launchSoScan(context, settings, state, scope, t.zh)
         }
     }
@@ -121,7 +129,10 @@ internal fun AnalyzeTab(
     LaunchedEffect(deepChatListState.isScrollInProgress, deepAtBottom) {
         when {
             deepAtBottom -> followDeepOutput = true
-            deepChatListState.isScrollInProgress && deepChatListState.lastScrolledBackward -> followDeepOutput = false
+
+            deepChatListState.isScrollInProgress && deepChatListState.lastScrolledBackward ->
+                followDeepOutput =
+                    false
         }
     }
 
@@ -136,7 +147,7 @@ internal fun AnalyzeTab(
         latestDeepMessage?.parts,
         latestDeepMessage?.events?.size,
         latestDeepMessage?.error,
-        followDeepOutput,
+        followDeepOutput
     ) {
         if (state.showDeepReport && state.deepMessages.isNotEmpty() && followDeepOutput) {
             deepChatListState.scrollToItem(state.deepMessages.size)
@@ -149,264 +160,379 @@ internal fun AnalyzeTab(
                 Triple(it.index, it.offset, it.size)
             }
         }.distinctUntilChanged().collect {
-            if (state.showDeepReport && followDeepOutput && !deepAtBottom && state.deepMessages.isNotEmpty()) {
+            if (state.showDeepReport && followDeepOutput && !deepAtBottom &&
+                state.deepMessages.isNotEmpty()
+            ) {
                 deepChatListState.scrollToItem(state.deepMessages.size)
             }
         }
     }
 
     LaunchedEffect(showWorkspaces) {
-        if (showWorkspaces) state.workspaces = withContext(Dispatchers.IO) { loadWorkspaces(context.applicationContext) }
+        if (showWorkspaces) {
+            state.workspaces =
+                withContext(Dispatchers.IO) { loadWorkspaces(context.applicationContext) }
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader(
-            title = if (t.zh) "分析" else "Analyze",
-            subtitle = if (t.zh) "SO 文件程序基础分析" else "Program-level SO analysis",
-            trailing = {
-                Row {
-                    IconButton(
-                        enabled = !state.scanning && state.analyzingSoPath == null && state.deepAnalyzingPath == null,
-                        onClick = {
-                            scope.launch {
-                                withContext(Dispatchers.IO) {
-                                    val engine = EngineProvider.get(context)
-                                    engine.clearCaches()
-                                    engine.flutterBlutter(org.json.JSONObject().put("action", "prune").put("olderThanMillis", 0))
-                                }
-                                state.workspaces = emptyList()
-                                state.soSources = emptyList()
-                                state.perSoDetail = emptyMap()
-                                state.expandedSoPath = null
-                                state.scannedTreeUri = null
-                                state.message = if (t.zh) "缓存、工作区和已结束的 Blutter 结果已清理" else "Caches, workspaces, and completed Blutter results cleared"
-                            }
-                        },
-                    ) {
-                        Icon(Icons.Default.DeleteSweep, if (t.zh) "清理分析资源" else "Clear analysis resources")
-                    }
-                    TextButton(onClick = { showWorkspaces = true }) {
-                        Icon(Icons.Default.Storage, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (t.zh) "工作区" else "Workspaces")
-                    }
-                }
-            },
-        )
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 12.dp),
-        ) {
-            Row(Modifier.padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (state.scanning) (if (t.zh) "扫描中…" else "Scanning…") else if (state.soSources.isNotEmpty()) (if (t.zh) "共计 ${state.soSources.size} 个 SO 文件" else "${state.soSources.size} SO files") else (if (t.zh) "选择目录后自动扫描" else "Choose a directory to scan"),
-                    Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (settings.treeUri == null) {
-                    TextButton(onClick = { pickTree.launch(null) }) { Text(if (t.zh) "选择目录" else "Choose") }
-                }
-            }
-            if (state.scanning) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = LocalUiMetrics.current.pagePad))
-                Spacer(Modifier.height(8.dp))
-            }
-            if (state.analyzingSoPath != null) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 14.dp))
-                Text(
-                    state.message.ifBlank { if (t.zh) "正在进行程序基础分析…" else "Running program analysis…" },
-                    modifier = Modifier.padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 6.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-            if (state.soSources.isEmpty()) {
-                Text(
-                    state.message.ifBlank { if (t.zh) "选择目录后会自动扫描 SO 文件。" else "SO files will be scanned automatically after choosing a directory." },
-                    modifier = Modifier.padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 8.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            } else {
-                state.soSources.take(30).forEachIndexed { idx, src ->
-                    if (idx > 0) GroupDivider()
-                    Column {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            IndexedBadge(idx)
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(src.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("${if (t.zh) (if (src.source == "filesystem") "文件系统" else src.source) else src.source} ${src.abi} ${src.architecture}/${src.bits} ${formatBytes(src.size)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                Text(src.path, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                TextButton(
-                                    enabled = state.analyzingSoPath == null && state.deepAnalyzingPath == null,
-                                    onClick = {
-                                        if (state.perSoDetail[src.path] != null) {
-                                            state.expandedSoPath = src.path
-                                        } else {
-                                            launchBasicAnalysis(context, src.path, src.name, state, scope, t.zh)
-                                        }
-                                    },
-                                ) {
-                                    Text(
-                                        when {
-                                            state.analyzingSoPath == src.path -> if (t.zh) "分析中" else "Analyzing"
-                                            else -> if (t.zh) "程序基础分析" else "Basic analysis"
-                                        },
-                                    )
-                                }
-                                TextButton(
-                                    enabled = state.analyzingSoPath == null && state.deepAnalyzingPath == null,
-                                    onClick = { startDeepAnalysis(src.path) },
-                                ) {
-                                    Text(
-                                        if (state.deepAnalyzingPath == src.path) {
-                                            if (t.zh) "AI 分析中" else "AI analyzing"
-                                        } else {
-                                            if (t.zh) "AI 深度分析" else "AI deep analysis"
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    state.expandedSoPath?.let(state.perSoDetail::get)?.let { selectedDetail ->
-        Surface(
-            modifier = Modifier.fillMaxSize().graphicsLayer {
-                translationX = size.width * backProgress
-                alpha = 1f - 0.12f * backProgress
-            },
-            color = MaterialTheme.colorScheme.background,
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                ScreenHeader(
-                    title = selectedDetail.name,
-                    subtitle = if (t.zh) "ELF 程序基础分析" else "ELF basic analysis",
-                    showBack = true,
-                    onBack = { state.expandedSoPath = null },
-                )
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = LocalUiMetrics.current.pagePad)
-                        .padding(bottom = 12.dp),
-                ) {
-                    ElfOverviewPanel(detail = selectedDetail, zh = t.zh, onCopy = { text -> copy(context, text, t.copied) })
-                }
-            }
-        }
-    }
-    if (state.showDeepReport) {
-        Surface(
-            modifier = Modifier.fillMaxSize().graphicsLayer {
-                translationX = size.width * backProgress
-                alpha = 1f - 0.12f * backProgress
-            },
-            color = MaterialTheme.colorScheme.background,
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                ScreenHeader(
-                    title = state.deepTargetPath.substringAfterLast('/').ifBlank { if (t.zh) "AI 深度分析" else "AI Deep Analysis" },
-                    subtitle = if (state.deepAnalyzingPath != null) (if (t.zh) "正在生成" else "Generating") else settings.aiModel,
-                    showBack = true,
-                    onBack = onLeaveDeepReport,
-                    trailing = {
-                        if (state.deepMessages.isNotEmpty()) {
-                            IconButton(onClick = {
-                                state.deepMessages.lastOrNull { it.role == DeepChatRole.ASSISTANT }?.text?.let { copy(context, it, t.copied) }
-                            }) {
-                                Icon(Icons.Default.ContentCopy, if (t.zh) "复制最新回复" else "Copy latest reply")
-                            }
-                        }
-                    },
-                )
-                LazyColumn(
-                    state = deepChatListState,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = LocalUiMetrics.current.pagePad, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(22.dp),
-                ) {
-                    items(state.deepMessages, key = { it.id }) { message ->
-                        DeepChatMessageItem(message = message, zh = t.zh)
-                    }
-                    item(key = "deep-output-bottom") {
-                        Spacer(Modifier.height(1.dp))
-                    }
-                }
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.96f),
-                    tonalElevation = 1.dp,
-                    shadowElevation = 3.dp,
-                ) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        OutlinedTextField(
-                            value = state.deepInput,
-                            onValueChange = { state.deepInput = it },
-                            modifier = Modifier.weight(1f).heightIn(min = 50.dp, max = 132.dp),
-                            placeholder = { Text(if (t.zh) "继续提问" else "Ask a follow-up", maxLines = 1) },
-                            shape = RoundedCornerShape(18.dp),
-                            maxLines = 5,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
-                            ),
-                        )
-                        FilledIconButton(
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader(
+                title = if (t.zh) "分析" else "Analyze",
+                subtitle = if (t.zh) "SO 文件程序基础分析" else "Program-level SO analysis",
+                trailing = {
+                    Row {
+                        IconButton(
+                            enabled =
+                                !state.scanning && state.analyzingSoPath == null &&
+                                    state.deepAnalyzingPath == null,
                             onClick = {
-                                if (state.deepAnalyzingPath != null) {
-                                    state.deepJob?.cancel(CancellationException("Stopped by user"))
-                                } else {
-                                    val input = state.deepInput.trim()
-                                    if (input.isNotBlank() && state.deepTargetPath.isNotBlank()) {
-                                        state.deepInput = ""
-                                        startDeepAnalysis(state.deepTargetPath, input)
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        val engine = EngineProvider.get(context)
+                                        engine.clearCaches()
+                                        engine.flutterBlutter(
+                                            org.json.JSONObject().put(
+                                                "action",
+                                                "prune"
+                                            ).put("olderThanMillis", 0)
+                                        )
                                     }
+                                    state.workspaces = emptyList()
+                                    state.soSources = emptyList()
+                                    state.perSoDetail = emptyMap()
+                                    state.expandedSoPath = null
+                                    state.scannedTreeUri = null
+                                    state.message =
+                                        if (t.zh) "缓存、工作区和已结束的 Blutter 结果已清理" else "Caches, workspaces, and completed Blutter results cleared"
                                 }
-                            },
-                            enabled = state.deepAnalyzingPath != null || state.deepInput.isNotBlank(),
-                            modifier = Modifier.size(50.dp),
-                            shape = CircleShape,
-                            colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                                containerColor = if (state.deepAnalyzingPath != null) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.primary
-                                },
-                            ),
+                            }
                         ) {
                             Icon(
-                                if (state.deepAnalyzingPath != null) Icons.Default.Stop else Icons.Default.ArrowUpward,
-                                if (state.deepAnalyzingPath != null) (if (t.zh) "停止" else "Stop") else (if (t.zh) "发送" else "Send"),
+                                Icons.Default.DeleteSweep,
+                                if (t.zh) "清理分析资源" else "Clear analysis resources"
                             )
+                        }
+                        TextButton(onClick = { showWorkspaces = true }) {
+                            Icon(Icons.Default.Storage, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (t.zh) "工作区" else "Workspaces")
+                        }
+                    }
+                }
+            )
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 12.dp)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (state.scanning) {
+                            (if (t.zh) "扫描中…" else "Scanning…")
+                        } else if (state.soSources.isNotEmpty()) {
+                            (if (t.zh) "共计 ${state.soSources.size} 个 SO 文件" else "${state.soSources.size} SO files")
+                        } else {
+                            (if (t.zh) "选择目录后自动扫描" else "Choose a directory to scan")
+                        },
+                        Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (settings.treeUri == null) {
+                        TextButton(onClick = {
+                            pickTree.launch(null)
+                        }) { Text(if (t.zh) "选择目录" else "Choose") }
+                    }
+                }
+                if (state.scanning) {
+                    LinearProgressIndicator(
+                        Modifier.fillMaxWidth().padding(horizontal = LocalUiMetrics.current.pagePad)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (state.analyzingSoPath != null) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 14.dp))
+                    Text(
+                        state.message.ifBlank {
+                            if (t.zh) "正在进行程序基础分析…" else "Running program analysis…"
+                        },
+                        modifier = Modifier.padding(
+                            horizontal = LocalUiMetrics.current.pagePad,
+                            vertical = 6.dp
+                        ),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+                if (state.soSources.isEmpty()) {
+                    Text(
+                        state.message.ifBlank {
+                            if (t.zh) "选择目录后会自动扫描 SO 文件。" else "SO files will be scanned automatically after choosing a directory."
+                        },
+                        modifier = Modifier.padding(
+                            horizontal = LocalUiMetrics.current.pagePad,
+                            vertical = 8.dp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    state.soSources.take(30).forEachIndexed { idx, src ->
+                        if (idx > 0) GroupDivider()
+                        Column {
+                            Row(
+                                Modifier.fillMaxWidth().padding(
+                                    horizontal = LocalUiMetrics.current.pagePad,
+                                    vertical = 10.dp
+                                ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                IndexedBadge(idx)
+                                Column(
+                                    Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        src.name,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "${if (t.zh) (if (src.source == "filesystem") "文件系统" else src.source) else src.source} ${src.abi} ${src.architecture}/${src.bits} ${formatBytes(
+                                            src.size
+                                        )}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        src.path,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    TextButton(
+                                        enabled =
+                                            state.analyzingSoPath == null &&
+                                                state.deepAnalyzingPath == null,
+                                        onClick = {
+                                            if (state.perSoDetail[src.path] != null) {
+                                                state.expandedSoPath = src.path
+                                            } else {
+                                                launchBasicAnalysis(
+                                                    context,
+                                                    src.path,
+                                                    src.name,
+                                                    state,
+                                                    scope,
+                                                    t.zh
+                                                )
+                                            }
+                                        }
+                                    ) {
+                                        Text(
+                                            when {
+                                                state.analyzingSoPath == src.path -> if (t.zh) "分析中" else "Analyzing"
+                                                else -> if (t.zh) "程序基础分析" else "Basic analysis"
+                                            }
+                                        )
+                                    }
+                                    TextButton(
+                                        enabled =
+                                            state.analyzingSoPath == null &&
+                                                state.deepAnalyzingPath == null,
+                                        onClick = { startDeepAnalysis(src.path) }
+                                    ) {
+                                        Text(
+                                            if (state.deepAnalyzingPath == src.path) {
+                                                if (t.zh) "AI 分析中" else "AI analyzing"
+                                            } else {
+                                                if (t.zh) "AI 深度分析" else "AI deep analysis"
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-    }
+        state.expandedSoPath?.let(state.perSoDetail::get)?.let { selectedDetail ->
+            Surface(
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    translationX = size.width * backProgress
+                    alpha = 1f - 0.12f * backProgress
+                },
+                color = MaterialTheme.colorScheme.background
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    ScreenHeader(
+                        title = selectedDetail.name,
+                        subtitle = if (t.zh) "ELF 程序基础分析" else "ELF basic analysis",
+                        showBack = true,
+                        onBack = { state.expandedSoPath = null }
+                    )
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = LocalUiMetrics.current.pagePad)
+                            .padding(bottom = 12.dp)
+                    ) {
+                        ElfOverviewPanel(detail = selectedDetail, zh = t.zh, onCopy = { text ->
+                            copy(context, text, t.copied)
+                        })
+                    }
+                }
+            }
+        }
+        if (state.showDeepReport) {
+            Surface(
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    translationX = size.width * backProgress
+                    alpha = 1f - 0.12f * backProgress
+                },
+                color = MaterialTheme.colorScheme.background
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    ScreenHeader(
+                        title = state.deepTargetPath.substringAfterLast('/').ifBlank {
+                            if (t.zh) "AI 深度分析" else "AI Deep Analysis"
+                        },
+                        subtitle = if (state.deepAnalyzingPath !=
+                            null
+                        ) {
+                            (if (t.zh) "正在生成" else "Generating")
+                        } else {
+                            settings.aiModel
+                        },
+                        showBack = true,
+                        onBack = onLeaveDeepReport,
+                        trailing = {
+                            if (state.deepMessages.isNotEmpty()) {
+                                IconButton(onClick = {
+                                    state.deepMessages.lastOrNull {
+                                        it.role == DeepChatRole.ASSISTANT
+                                    }?.text?.let { copy(context, it, t.copied) }
+                                }) {
+                                    Icon(
+                                        Icons.Default.ContentCopy,
+                                        if (t.zh) "复制最新回复" else "Copy latest reply"
+                                    )
+                                }
+                            }
+                        }
+                    )
+                    LazyColumn(
+                        state = deepChatListState,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(
+                            horizontal = LocalUiMetrics.current.pagePad,
+                            vertical = 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(22.dp)
+                    ) {
+                        items(state.deepMessages, key = { it.id }) { message ->
+                            DeepChatMessageItem(message = message, zh = t.zh)
+                        }
+                        item(key = "deep-output-bottom") {
+                            Spacer(Modifier.height(1.dp))
+                        }
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.96f),
+                        tonalElevation = 1.dp,
+                        shadowElevation = 3.dp
+                    ) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = state.deepInput,
+                                onValueChange = { state.deepInput = it },
+                                modifier = Modifier.weight(1f).heightIn(min = 50.dp, max = 132.dp),
+                                placeholder = {
+                                    Text(if (t.zh) "继续提问" else "Ask a follow-up", maxLines = 1)
+                                },
+                                shape = RoundedCornerShape(18.dp),
+                                maxLines = 5,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(
+                                        alpha = 0.55f
+                                    ),
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(
+                                        alpha = 0.65f
+                                    )
+                                )
+                            )
+                            FilledIconButton(
+                                onClick = {
+                                    if (state.deepAnalyzingPath != null) {
+                                        state.deepJob?.cancel(
+                                            CancellationException("Stopped by user")
+                                        )
+                                    } else {
+                                        val input = state.deepInput.trim()
+                                        if (input.isNotBlank() &&
+                                            state.deepTargetPath.isNotBlank()
+                                        ) {
+                                            state.deepInput = ""
+                                            startDeepAnalysis(state.deepTargetPath, input)
+                                        }
+                                    }
+                                },
+                                enabled =
+                                    state.deepAnalyzingPath != null || state.deepInput.isNotBlank(),
+                                modifier = Modifier.size(50.dp),
+                                shape = CircleShape,
+                                colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = if (state.deepAnalyzingPath != null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    }
+                                )
+                            ) {
+                                Icon(
+                                    if (state.deepAnalyzingPath !=
+                                        null
+                                    ) {
+                                        Icons.Default.Stop
+                                    } else {
+                                        Icons.Default.ArrowUpward
+                                    },
+                                    if (state.deepAnalyzingPath !=
+                                        null
+                                    ) {
+                                        (if (t.zh) "停止" else "Stop")
+                                    } else {
+                                        (if (t.zh) "发送" else "Send")
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     if (showWorkspaces) {
         AlertDialog(
@@ -415,17 +541,28 @@ internal fun AnalyzeTab(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (state.workspaces.isEmpty()) {
-                        Text(if (t.zh) "暂无通过 MCP 打开的工作区。程序基础分析不会创建工作区。" else "No MCP workspaces. Basic analysis does not create workspaces.")
+                        Text(
+                            if (t.zh) "暂无通过 MCP 打开的工作区。程序基础分析不会创建工作区。" else "No MCP workspaces. Basic analysis does not create workspaces."
+                        )
                     } else {
                         state.workspaces.forEach { ws ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Column(Modifier.weight(1f)) {
                                     Text(ws.name, fontWeight = FontWeight.SemiBold)
-                                    Text("${ws.architecture}/${ws.bits} ${ws.abi}", style = MaterialTheme.typography.labelSmall)
+                                    Text(
+                                        "${ws.architecture}/${ws.bits} ${ws.abi}",
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
                                 }
                                 if (ws.hasLocalAiReport) {
                                     TextButton(onClick = {
-                                        DeepReportStore.load(context.applicationContext, ws.id)?.let { snapshot ->
+                                        DeepReportStore.load(
+                                            context.applicationContext,
+                                            ws.id
+                                        )?.let { snapshot ->
                                             restoreDeepReport(state, snapshot)
                                             showWorkspaces = false
                                         }
@@ -441,7 +578,11 @@ internal fun AnalyzeTab(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showWorkspaces = false }) { Text(if (t.zh) "完成" else "Done") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    showWorkspaces = false
+                }) { Text(if (t.zh) "完成" else "Done") }
+            }
         )
     }
 }

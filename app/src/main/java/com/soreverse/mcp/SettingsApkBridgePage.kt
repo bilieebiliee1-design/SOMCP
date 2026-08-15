@@ -83,7 +83,7 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                     if (t.zh) "尚未添加任何桥接" else "No bridges configured",
                     modifier = Modifier.padding(14.dp),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             configs.forEachIndexed { index, config ->
@@ -95,15 +95,24 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                 val latencyMs = st?.optLong("lastLatencyMs") ?: 0L
 
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    Modifier.fillMaxWidth().padding(
+                        start = 14.dp,
+                        end = 4.dp,
+                        top = 8.dp,
+                        bottom = 8.dp
+                    ),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Status dot
                     Box(
                         Modifier.size(10.dp).clip(CircleShape).background(
-                            if (online) AppleColors.systemGreen
-                            else if (st != null) AppleColors.systemRed
-                            else Color.Gray
+                            if (online) {
+                                AppleColors.systemGreen
+                            } else if (st != null) {
+                                AppleColors.systemRed
+                            } else {
+                                Color.Gray
+                            }
                         )
                     )
                     Spacer(Modifier.width(10.dp))
@@ -113,14 +122,16 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (config.token.isNotBlank()) {
                                 Text(
-                                    "token: ${"\u2022".repeat(config.token.length.coerceIn(4, 12))}",
+                                    "token: ${"\u2022".repeat(
+                                        config.token.length.coerceIn(4, 12)
+                                    )}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Spacer(Modifier.width(8.dp))
                             }
@@ -128,13 +139,13 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                                 Text(
                                     "$toolCount tools",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = AppleColors.systemGreen,
+                                    color = AppleColors.systemGreen
                                 )
                                 if (latencyMs > 0) {
                                     Text(
                                         "  ${latencyMs}ms",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             } else if (st != null && lastError.isNotBlank()) {
@@ -143,13 +154,13 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                                     style = MaterialTheme.typography.bodySmall,
                                     color = AppleColors.systemRed,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             } else if (st != null) {
                                 Text(
                                     if (t.zh) "离线" else "offline",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = AppleColors.systemRed,
+                                    color = AppleColors.systemRed
                                 )
                             }
                         }
@@ -160,7 +171,11 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                         configs = settings.apkMcpConfigs
                         snapshot = null
                     }) {
-                        Icon(Icons.Default.Close, if (t.zh) "移除" else "Remove", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            Icons.Default.Close,
+                            if (t.zh) "移除" else "Remove",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -177,11 +192,19 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
+                            alpha = 0.35f
+                        ),
                         focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                            alpha = 0.35f
+                        )
                     ),
-                    modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(
+                        start = 14.dp,
+                        end = 14.dp,
+                        top = 8.dp
+                    )
                 )
                 OutlinedTextField(
                     value = newToken,
@@ -191,20 +214,32 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
+                            alpha = 0.35f
+                        ),
                         focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                            alpha = 0.35f
+                        )
                     ),
-                    modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(
+                        start = 14.dp,
+                        end = 14.dp,
+                        top = 8.dp
+                    )
                 )
                 Row(
                     Modifier.fillMaxWidth().padding(14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     SecondaryActionButton(
                         if (t.zh) "取消" else "Cancel",
-                        { showAddForm = false; newUrl = ""; newToken = "" },
-                        modifier = Modifier.weight(1f),
+                        {
+                            showAddForm = false
+                            newUrl = ""
+                            newToken = ""
+                        },
+                        modifier = Modifier.weight(1f)
                     )
                     PrimaryActionButton(
                         if (t.zh) "添加" else "Add",
@@ -221,7 +256,7 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                                 }
                             }
                         },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f)
                     )
                 }
             } else {
@@ -236,16 +271,24 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                     if (t.zh) "支持同时连接多个 APK MCP 桥接（如 MT 管理器 + NP 管理器）" else "Supports multiple concurrent APK MCP bridges (e.g. MT Manager + NP Manager)",
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
         // ---- Options ----
         GlassGroup(title = if (t.zh) "选项" else "Options") {
-            ToggleRow(if (t.zh) "持续自动探测" else "Continuous auto-probe", apkAutoProbe) { apkAutoProbe = it; settings.apkMcpAutoProbe = it }
+            ToggleRow(if (t.zh) "持续自动探测" else "Continuous auto-probe", apkAutoProbe) {
+                apkAutoProbe =
+                    it
+                settings.apkMcpAutoProbe = it
+            }
             GroupDivider()
-            ToggleRow(if (t.zh) "合并工具到 tools/list" else "Merge tools into tools/list", apkMerge) { apkMerge = it; settings.apkMcpMergeTools = it }
+            ToggleRow(if (t.zh) "合并工具到 tools/list" else "Merge tools into tools/list", apkMerge) {
+                apkMerge =
+                    it
+                settings.apkMcpMergeTools = it
+            }
         }
 
         // ---- Actions ----
@@ -254,7 +297,7 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                 PrimaryActionButton(
                     if (t.zh) "探测全部" else "Probe All",
                     { refreshSnapshot() },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
             snapshot?.let { snap ->
@@ -265,7 +308,7 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                     text,
                     color = if (onlineCount > 0) AppleColors.systemGreen else AppleColors.systemRed,
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
                 )
                 // Show per-bridge status in probe results
                 if (bridges.length() > 0) {
@@ -287,19 +330,20 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                             color = if (online) AppleColors.systemGreen else AppleColors.systemRed,
                             modifier = Modifier.padding(horizontal = 14.dp),
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
             Text(
-                if (t.zh)
+                if (t.zh) {
                     "MT 管理器或 NP 管理器负责 APK 主流程；本应用补充 SO 分析与远程 MCP。离线时桥接工具会自动隐藏。"
-                else
-                    "MT Manager or NP Manager owns the APK workflow; this app assists with SO analysis. Bridged tools hide when offline.",
+                } else {
+                    "MT Manager or NP Manager owns the APK workflow; this app assists with SO analysis. Bridged tools hide when offline."
+                },
                 modifier = Modifier.padding(14.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

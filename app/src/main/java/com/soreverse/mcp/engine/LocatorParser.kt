@@ -5,7 +5,13 @@ import com.soreverse.mcp.core.HexCodec
 internal object LocatorParser {
     fun target(locator: String, prefix: String = ""): String {
         val trimmed = locator.trim()
-        val withoutPrefix = if (prefix.isNotBlank() && trimmed.startsWith("$prefix:")) trimmed.substringAfter(':') else trimmed
+        val withoutPrefix = if (prefix.isNotBlank() &&
+            trimmed.startsWith("$prefix:")
+        ) {
+            trimmed.substringAfter(':')
+        } else {
+            trimmed
+        }
         return withoutPrefix.substringAfterLast('!').substringBeforeLast('@').trim()
     }
 

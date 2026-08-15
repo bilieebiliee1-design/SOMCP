@@ -31,7 +31,7 @@ data class ToolMeta(
     val category: String,
     val cls: ToolClass,
     val heavy: Boolean = false,
-    val schemaBuilder: SchemaBuilder.() -> JSONObject = { SchemaBuilder.emptyObject() },
+    val schemaBuilder: SchemaBuilder.() -> JSONObject = { SchemaBuilder.emptyObject() }
 )
 
 // ToolClass is defined in ToolCatalog.kt and reused here to avoid a redeclaration.
@@ -39,7 +39,7 @@ data class ToolMeta(
 open class ToolContext(
     open val context: Context,
     open val settings: SettingsStore,
-    open val engine: NativeSoEngine,
+    open val engine: NativeSoEngine
 )
 
 /**
@@ -49,7 +49,8 @@ open class ToolContext(
  */
 class EngineToolHandler(
     override val meta: ToolMeta,
-    private val invoke: (NativeSoEngine, JSONObject, SettingsStore) -> JSONObject,
+    private val invoke: (NativeSoEngine, JSONObject, SettingsStore) -> JSONObject
 ) : ToolHandler {
-    override fun handle(ctx: ToolContext, args: JSONObject): JSONObject = invoke(ctx.engine, args, ctx.settings)
+    override fun handle(ctx: ToolContext, args: JSONObject): JSONObject =
+        invoke(ctx.engine, args, ctx.settings)
 }

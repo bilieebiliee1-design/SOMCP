@@ -1,5 +1,6 @@
 package com.soreverse.mcp.service
 
+import android.animation.ValueAnimator
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -19,7 +20,6 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.animation.OvershootInterpolator
-import android.animation.ValueAnimator
 import android.widget.TextView
 import com.soreverse.mcp.MainActivity
 import com.soreverse.mcp.core.AppLog
@@ -47,6 +47,7 @@ class McpForegroundService : Service() {
         val action = intent?.action ?: ACTION_START
         when (action) {
             ACTION_START -> startServer()
+
             ACTION_STOP -> {
                 // Flip running=false the moment we receive the explicit STOP
                 // intent, BEFORE stopSelf() schedules onDestroy(). The window
@@ -67,6 +68,7 @@ class McpForegroundService : Service() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
+
             ACTION_REFRESH_FLOATING -> updateFloating()
         }
         return START_STICKY
@@ -166,14 +168,20 @@ class McpForegroundService : Service() {
         val raw = settings.tunnelMode
         val mode = when (raw) {
             "quick" -> com.soreverse.mcp.core.CloudflareTunnelManager.Mode.QUICK
+
             "named" -> com.soreverse.mcp.core.CloudflareTunnelManager.Mode.NAMED
+
             else -> {
-                AppLog.i("Auto-start tunnel: tunnelMode was '$raw', promoting to 'quick' to honour tunnelAutoStart=true")
+                AppLog.i(
+                    "Auto-start tunnel: tunnelMode was '$raw', promoting to 'quick' to honour tunnelAutoStart=true"
+                )
                 settings.tunnelMode = "quick"
                 com.soreverse.mcp.core.CloudflareTunnelManager.Mode.QUICK
             }
         }
-        if (mode == com.soreverse.mcp.core.CloudflareTunnelManager.Mode.NAMED && settings.tunnelNamedToken.isBlank()) {
+        if (mode == com.soreverse.mcp.core.CloudflareTunnelManager.Mode.NAMED &&
+            settings.tunnelNamedToken.isBlank()
+        ) {
             AppLog.w("Auto-start tunnel: named mode selected but token is blank, skipping")
             return
         }
@@ -189,11 +197,16 @@ class McpForegroundService : Service() {
             val target = settings.tunnelTargetPort.coerceAtLeast(settings.port)
             try {
                 server?.tunnel?.start(target, mode, settings.tunnelNamedToken)
-                AppLog.i("Auto-started Cloudflare tunnel: mode=${settings.tunnelMode} target=$target")
+                AppLog.i(
+                    "Auto-started Cloudflare tunnel: mode=${settings.tunnelMode} target=$target"
+                )
             } catch (e: Throwable) {
                 AppLog.w("Auto-start tunnel failed: ${e.message}")
             }
-        }.apply { isDaemon = true; name = "tunnel-autostart" }.start()
+        }.apply {
+            isDaemon = true
+            name = "tunnel-autostart"
+        }.start()
     }
 
     private var reconnectReceiver: android.content.BroadcastReceiver? = null
@@ -236,11 +249,18 @@ class McpForegroundService : Service() {
                             else -> com.soreverse.mcp.core.CloudflareTunnelManager.Mode.QUICK
                         }
                         try {
-                            server?.tunnel?.start(settings.tunnelTargetPort.coerceAtLeast(settings.port), mode, settings.tunnelNamedToken)
+                            server?.tunnel?.start(
+                                settings.tunnelTargetPort.coerceAtLeast(settings.port),
+                                mode,
+                                settings.tunnelNamedToken
+                            )
                         } catch (e: Throwable) {
                             AppLog.w("Tunnel reconnect start failed: ${e.message}")
                         }
-                    }.apply { isDaemon = true; name = "tunnel-reconnect" }.start()
+                    }.apply {
+                        isDaemon = true
+                        name = "tunnel-reconnect"
+                    }.start()
                 }
             }
         }
@@ -284,7 +304,9 @@ class McpForegroundService : Service() {
         }
         if (floating != null) return
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val zh = settings.language == "zh" || (settings.language == "system" && Locale.getDefault().language == "zh")
+        val zh =
+            settings.language == "zh" ||
+                (settings.language == "system" && Locale.getDefault().language == "zh")
         val density = resources.displayMetrics.density
         val tv = TextView(this).apply {
             text = if (zh) "● SOMCP 运行中" else "● SOMCP running"
@@ -293,7 +315,15 @@ class McpForegroundService : Service() {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             letterSpacing = 0.03f
             gravity = Gravity.CENTER
-            setPadding((14 * density).toInt(), (9 * density).toInt(), (14 * density).toInt(), (9 * density).toInt())
+            setPadding(
+                (14 * density).toInt(),
+                (9 * density).toInt(),
+                (14 * density).toInt(),
+                (
+                    9 *
+                        density
+                    ).toInt()
+            )
             background = GradientDrawable().apply {
                 setColor(Color.argb(238, 24, 30, 42))
                 setStroke((1 * density).toInt(), Color.argb(110, 255, 255, 255))
@@ -303,13 +333,20 @@ class McpForegroundService : Service() {
             alpha = 0.96f
         }
         bubbleText = tv
-        val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
+        val type = if (Build.VERSION.SDK_INT >=
+            26
+        ) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 0
@@ -333,6 +370,7 @@ class McpForegroundService : Service() {
                     moved = false
                     true
                 }
+
                 MotionEvent.ACTION_MOVE -> {
                     val deltaX = event.rawX - downX
                     val deltaY = event.rawY - downY
@@ -346,8 +384,11 @@ class McpForegroundService : Service() {
                     }
                     true
                 }
+
                 MotionEvent.ACTION_UP -> {
-                    tv.animate().scaleX(1f).scaleY(1f).setInterpolator(OvershootInterpolator()).setDuration(260).start()
+                    tv.animate().scaleX(
+                        1f
+                    ).scaleY(1f).setInterpolator(OvershootInterpolator()).setDuration(260).start()
                     if (moved) {
                         val width = resources.displayMetrics.widthPixels
                         params.x = if (params.x > width / 2) width - tv.width else 0
@@ -357,10 +398,14 @@ class McpForegroundService : Service() {
                     }
                     true
                 }
+
                 MotionEvent.ACTION_CANCEL -> {
-                    tv.animate().scaleX(1f).scaleY(1f).setInterpolator(OvershootInterpolator()).setDuration(180).start()
+                    tv.animate().scaleX(
+                        1f
+                    ).scaleY(1f).setInterpolator(OvershootInterpolator()).setDuration(180).start()
                     true
                 }
+
                 else -> false
             }
         }
@@ -404,7 +449,9 @@ class McpForegroundService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "SOMCP", NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "SOMCP", NotificationManager.IMPORTANCE_LOW)
+            )
         }
     }
 
@@ -412,7 +459,9 @@ class McpForegroundService : Service() {
         // The full MCP endpoint always requires the /mcp path. Show a concrete,
         // usable URL rather than the bind host so users don't type 0.0.0.0.
         return if (host == "0.0.0.0") {
-            val lan = runCatching { NetworkInspector.primaryLanIpv4(applicationContext) }.getOrNull()
+            val lan = runCatching {
+                NetworkInspector.primaryLanIpv4(applicationContext)
+            }.getOrNull()
             if (lan != null) {
                 "MCP 运行中 · 客户端填 http://$lan:$port/mcp（局域网）"
             } else {
@@ -424,7 +473,13 @@ class McpForegroundService : Service() {
     }
 
     private fun notification(text: String): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
+        val builder = if (Build.VERSION.SDK_INT >=
+            26
+        ) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            Notification.Builder(this)
+        }
         return builder
             .setContentTitle("SOMCP")
             .setContentText(text)
@@ -438,7 +493,9 @@ class McpForegroundService : Service() {
         const val ACTION_STOP = "com.soreverse.mcp.STOP"
         const val ACTION_REFRESH_FLOATING = "com.soreverse.mcp.FLOATING"
         private const val CHANNEL_ID = "so_reverse_mcp"
+
         @Volatile private var running: Boolean = false
+
         @Volatile var currentServer: McpHttpServer? = null
             private set
 
@@ -450,16 +507,26 @@ class McpForegroundService : Service() {
                 return
             }
             val intent = Intent(context, McpForegroundService::class.java).setAction(ACTION_START)
-            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+            if (Build.VERSION.SDK_INT >=
+                26
+            ) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun stop(context: Context) {
             running = false
-            context.startService(Intent(context, McpForegroundService::class.java).setAction(ACTION_STOP))
+            context.startService(
+                Intent(context, McpForegroundService::class.java).setAction(ACTION_STOP)
+            )
         }
 
         fun refreshFloating(context: Context) {
-            context.startService(Intent(context, McpForegroundService::class.java).setAction(ACTION_REFRESH_FLOATING))
+            context.startService(
+                Intent(context, McpForegroundService::class.java).setAction(ACTION_REFRESH_FLOATING)
+            )
         }
     }
 }

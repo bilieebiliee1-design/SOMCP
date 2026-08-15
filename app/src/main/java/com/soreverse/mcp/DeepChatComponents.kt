@@ -40,64 +40,87 @@ internal fun DeepChatMessageItem(message: DeepChatMessage, zh: Boolean) {
             Surface(
                 modifier = Modifier.widthIn(max = 320.dp),
                 shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
+                color = MaterialTheme.colorScheme.primaryContainer
             ) {
                 Text(
                     message.text,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
         }
         return
     }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Box(
-                Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
-                contentAlignment = Alignment.Center,
+                Modifier.size(
+                    28.dp
+                ).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
             ) {
-                Text("AI", color = MaterialTheme.colorScheme.onPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "AI",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
-            Text("SOMCP", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            if (message.streaming) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+            Text(
+                "SOMCP",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (message.streaming) {
+                CircularProgressIndicator(
+                    Modifier.size(14.dp),
+                    strokeWidth = 2.dp
+                )
+            }
         }
         if (message.parts.isNotEmpty()) {
             DeepMessageParts(parts = message.parts, streaming = message.streaming, zh = zh)
         } else if (message.text.isNotBlank()) {
             MarkdownMessageContent(message.text, selectable = !message.streaming)
         } else if (message.streaming) {
-            Text(if (zh) "正在分析并调用工具…" else "Analyzing and calling tools…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (zh) "正在分析并调用工具…" else "Analyzing and calling tools…",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
         if (message.error.isNotBlank()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f),
+                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f)
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.Top,
+                    verticalAlignment = Alignment.Top
                 ) {
                     Icon(
                         Icons.Default.Info,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(20.dp)
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(
                             if (zh) "本次分析未完成" else "Analysis incomplete",
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.SemiBold
                         )
                         Text(
                             message.error,
                             color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
                 }
@@ -128,7 +151,10 @@ internal fun DeepMessageParts(parts: List<RikkaPart>, streaming: Boolean, zh: Bo
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         groups.forEachIndexed { index, group ->
             if (group.firstOrNull() is RikkaPart.Text) {
-                MarkdownMessageContent((group.first() as RikkaPart.Text).text, selectable = !streaming)
+                MarkdownMessageContent(
+                    (group.first() as RikkaPart.Text).text,
+                    selectable = !streaming
+                )
             } else {
                 DeepProcessTimeline(group, streaming && index == groups.lastIndex, zh)
             }
@@ -140,40 +166,61 @@ internal fun DeepMessageParts(parts: List<RikkaPart>, streaming: Boolean, zh: Bo
 internal fun DeepProcessTimeline(parts: List<RikkaPart>, streaming: Boolean, zh: Boolean) {
     var expanded by remember(parts.firstOrNull()) { mutableStateOf(streaming) }
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
+        Modifier.fillMaxWidth().clip(
+            RoundedCornerShape(12.dp)
+        ).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
     ) {
         Row(
-            Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(horizontal = 12.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth().clickable {
+                expanded = !expanded
+            }.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
                 if (streaming) (if (zh) "正在思考" else "Thinking") else (if (zh) "思考过程" else "Thought process"),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(if (expanded) "−" else "+", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (expanded) {
-            Column(Modifier.padding(start = 14.dp, end = 12.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier.padding(start = 14.dp, end = 12.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 parts.forEach { part ->
                     when (part) {
                         is RikkaPart.Reasoning -> RikkaMarkdown(part.text, Modifier.fillMaxWidth())
+
                         is RikkaPart.Tool -> {
                             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                 Text(
                                     "● ${part.name}",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontFamily = FontFamily.Monospace,
-                                    color = if (part.result == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (part.result ==
+                                        null
+                                    ) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
                                 )
                                 Text(
-                                    if (part.result == null) (if (zh) "调用中" else "Running") else (if (zh) "已完成" else "Completed"),
+                                    if (part.result ==
+                                        null
+                                    ) {
+                                        (if (zh) "调用中" else "Running")
+                                    } else {
+                                        (if (zh) "已完成" else "Completed")
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
+
                         is RikkaPart.Text -> Unit
                     }
                 }

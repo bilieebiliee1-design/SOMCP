@@ -37,7 +37,7 @@ class CrashReportActivity : ComponentActivity() {
                 override fun handleOnBackPressed() {
                     showExitConfirmation()
                 }
-            },
+            }
         )
         setContentView(buildContent())
         CrashReporter.markReady(this, token)
@@ -59,8 +59,8 @@ class CrashReportActivity : ComponentActivity() {
                 },
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
             )
             addView(
                 TextView(context).apply {
@@ -68,7 +68,7 @@ class CrashReportActivity : ComponentActivity() {
                     textSize = 14f
                     setTextColor(Color.rgb(99, 99, 102))
                     setPadding(0, dp(8), 0, dp(12))
-                },
+                }
             )
             addView(
                 LinearLayout(context).apply {
@@ -79,20 +79,20 @@ class CrashReportActivity : ComponentActivity() {
                             text = "复制全部"
                             isAllCaps = false
                             setOnClickListener { copyAll() }
-                        },
+                        }
                     )
                     addView(
                         Button(context).apply {
                             text = "确认退出"
                             isAllCaps = false
                             setOnClickListener { showExitConfirmation() }
-                        },
+                        }
                     )
                 },
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
             )
             addView(
                 ScrollView(context).apply {
@@ -110,15 +110,15 @@ class CrashReportActivity : ComponentActivity() {
                         },
                         ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ),
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        )
                     )
                 },
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     0,
-                    1f,
-                ).apply { topMargin = dp(12) },
+                    1f
+                ).apply { topMargin = dp(12) }
             )
         }
     }

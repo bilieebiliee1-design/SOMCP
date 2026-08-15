@@ -1,13 +1,13 @@
 package com.soreverse.mcp.engine
 
 import android.content.Context
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 internal class BlutterResultStore(context: Context) {
     companion object {
@@ -22,12 +22,33 @@ internal class BlutterResultStore(context: Context) {
     fun create(request: JSONObject): String {
         val id = "blutter-${UUID.randomUUID()}"
         val dir = File(jobs, id).apply { mkdirs() }
-        write(File(dir, "state.json"), JSONObject().put("jobId", id).put("status", "queued").put("stage", "created").put("createdAt", System.currentTimeMillis()).put("updatedAt", System.currentTimeMillis()).put("request", request))
+        write(
+            File(dir, "state.json"),
+            JSONObject().put(
+                "jobId",
+                id
+            ).put(
+                "status",
+                "queued"
+            ).put(
+                "stage",
+                "created"
+            ).put(
+                "createdAt",
+                System.currentTimeMillis()
+            ).put("updatedAt", System.currentTimeMillis()).put("request", request)
+        )
         return id
     }
 
     @Synchronized
-    fun update(jobId: String, status: String, stage: String, error: JSONObject? = null, resultKey: String? = null) {
+    fun update(
+        jobId: String,
+        status: String,
+        stage: String,
+        error: JSONObject? = null,
+        resultKey: String? = null
+    ) {
         requireValidJobId(jobId)
         val state = readState(jobId) ?: return
         state.put("status", status).put("stage", stage).put("updatedAt", System.currentTimeMillis())
@@ -56,7 +77,12 @@ internal class BlutterResultStore(context: Context) {
         require(limit in 1..1000) { "limit must be between 1 and 1000" }
         val state = readState(jobId) ?: return null
         val key = state.optString("resultKey")
-        if (key.isBlank()) return JSONObject().put("jobId", jobId).put("status", state.optString("status"))
+        if (key.isBlank()) {
+            return JSONObject().put(
+                "jobId",
+                jobId
+            ).put("status", state.optString("status"))
+        }
         val file = File(File(results, key), "result.json")
         if (!file.isFile) return null
         val result = JSONObject(file.readText())
@@ -69,18 +95,34 @@ internal class BlutterResultStore(context: Context) {
         val selected = JSONArray()
         for (index in offset until end) selected.put(items.get(index))
         val response = JSONObject(result.toString()).put("jobId", jobId)
-        response.put(kind, JSONObject()
-            .put("items", selected)
-            .put("total", items.length())
-            .put("hasMore", end < items.length())
-            .put("nextCursor", if (end < items.length()) encodeCursor(jobId, kind, end) else JSONObject.NULL))
+        response.put(
+            kind,
+            JSONObject()
+                .put("items", selected)
+                .put("total", items.length())
+                .put("hasMore", end < items.length())
+                .put(
+                    "nextCursor",
+                    if (end <
+                        items.length()
+                    ) {
+                        encodeCursor(jobId, kind, end)
+                    } else {
+                        JSONObject.NULL
+                    }
+                )
+        )
         return response
     }
 
     @Synchronized
     fun cancel(jobId: String): Boolean {
         val state = readState(jobId) ?: return false
-        if (state.optString("status") in setOf("succeeded", "failed", "cancelled", "interrupted")) return false
+        if (state.optString("status") in
+            setOf("succeeded", "failed", "cancelled", "interrupted")
+        ) {
+            return false
+        }
         update(jobId, "cancelled", "cancelled")
         return true
     }
@@ -91,32 +133,64 @@ internal class BlutterResultStore(context: Context) {
         var removedJobs = 0
         jobs.listFiles()?.forEach { dir ->
             val state = readState(dir.name)
-            val terminal = state?.optString("status") in setOf("succeeded", "failed", "cancelled", "interrupted")
-            if (terminal && state?.optLong("updatedAt", Long.MAX_VALUE) ?: Long.MAX_VALUE < cutoff) {
+            val terminal =
+                state?.optString("status") in
+                    setOf("succeeded", "failed", "cancelled", "interrupted")
+            if (terminal &&
+                state?.optLong("updatedAt", Long.MAX_VALUE) ?: Long.MAX_VALUE < cutoff
+            ) {
                 if (dir.deleteRecursively()) removedJobs++
             }
         }
         var removedResults = 0
-        val referenced = jobs.listFiles().orEmpty().mapNotNull { readState(it.name)?.optString("resultKey")?.takeIf(String::isNotBlank) }.toSet()
-        results.listFiles()?.filter { it.lastModified() < cutoff && it.name !in referenced }?.forEach { if (it.deleteRecursively()) removedResults++ }
-        return JSONObject().put("removedJobs", removedJobs).put("removedResults", removedResults).put("cutoff", cutoff)
+        val referenced = jobs.listFiles().orEmpty().mapNotNull {
+            readState(it.name)?.optString("resultKey")?.takeIf(String::isNotBlank)
+        }.toSet()
+        results.listFiles()?.filter {
+            it.lastModified() < cutoff && it.name !in referenced
+        }?.forEach { if (it.deleteRecursively()) removedResults++ }
+        return JSONObject().put(
+            "removedJobs",
+            removedJobs
+        ).put("removedResults", removedResults).put("cutoff", cutoff)
     }
 
-    private fun readState(jobId: String): JSONObject? = runCatching { requireValidJobId(jobId); File(File(jobs, jobId), "state.json").takeIf { it.isFile }?.let { JSONObject(it.readText()) } }.getOrNull()
+    private fun readState(jobId: String): JSONObject? = runCatching {
+        requireValidJobId(jobId)
+        File(File(jobs, jobId), "state.json").takeIf {
+            it.isFile
+        }?.let { JSONObject(it.readText()) }
+    }.getOrNull()
     private fun write(file: File, value: JSONObject) {
         file.parentFile?.mkdirs()
         val temp = File(file.parentFile, "${file.name}.${UUID.randomUUID()}.tmp")
         temp.writeText(value.toString())
-        runCatching { Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING) }
-            .getOrElse { Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING) }
+        runCatching {
+            Files.move(
+                temp.toPath(),
+                file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        }
+            .getOrElse {
+                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
     }
-    private fun requireValidJobId(jobId: String) { require(JOB_ID.matches(jobId)) { "Invalid Blutter job id" } }
-    private fun encodeCursor(jobId: String, kind: String, offset: Int): String = Base64.getUrlEncoder().withoutPadding().encodeToString("$jobId|$kind|$offset".toByteArray())
+    private fun requireValidJobId(jobId: String) {
+        require(JOB_ID.matches(jobId)) { "Invalid Blutter job id" }
+    }
+    private fun encodeCursor(jobId: String, kind: String, offset: Int): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString("$jobId|$kind|$offset".toByteArray())
     private fun decodeCursor(cursor: String?, jobId: String, kind: String): Int {
         if (cursor.isNullOrBlank()) return 0
-        val parts = runCatching { String(Base64.getUrlDecoder().decode(cursor)).split('|') }.getOrNull()
-            ?: throw IllegalArgumentException("Invalid cursor")
-        require(parts.size == 3 && parts[0] == jobId && parts[1] == kind) { "Cursor does not belong to this result" }
-        return parts[2].toIntOrNull()?.takeIf { it >= 0 } ?: throw IllegalArgumentException("Invalid cursor offset")
+        val parts =
+            runCatching { String(Base64.getUrlDecoder().decode(cursor)).split('|') }.getOrNull()
+                ?: throw IllegalArgumentException("Invalid cursor")
+        require(parts.size == 3 && parts[0] == jobId && parts[1] == kind) {
+            "Cursor does not belong to this result"
+        }
+        return parts[2].toIntOrNull()?.takeIf { it >= 0 }
+            ?: throw IllegalArgumentException("Invalid cursor offset")
     }
 }

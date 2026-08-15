@@ -27,10 +27,12 @@ internal fun ToolSummary(t: UiText, apkTools: List<String> = emptyList()) {
     val groups = toolGroups(t, apkTools)
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            "${if (t.zh) "共计" else "Total"} ${groups.sumOf { it.items.size }} ${if (t.zh) "个工具" else "tools"}",
+            "${if (t.zh) "共计" else "Total"} ${groups.sumOf {
+                it.items.size
+            }} ${if (t.zh) "个工具" else "tools"}",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.SemiBold
         )
         groups.forEach { (cat, color, items) ->
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -41,22 +43,40 @@ internal fun ToolSummary(t: UiText, apkTools: List<String> = emptyList()) {
                         .background(color.copy(alpha = 0.10f))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-                    Text(cat, style = MaterialTheme.typography.labelLarge, color = color, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        cat,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = color,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
                 items.forEach { (name, desc) ->
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                            )
                             .padding(horizontal = 10.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(name, modifier = Modifier.weight(0.9f), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurface)
-                        Text(desc, modifier = Modifier.weight(1.1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            name,
+                            modifier = Modifier.weight(0.9f),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            desc,
+                            modifier = Modifier.weight(1.1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -64,7 +84,11 @@ internal fun ToolSummary(t: UiText, apkTools: List<String> = emptyList()) {
     }
 }
 
-private data class ToolGroup(val category: String, val color: Color, val items: List<Pair<String, String>>)
+private data class ToolGroup(
+    val category: String,
+    val color: Color,
+    val items: List<Pair<String, String>>
+)
 
 private val groupColor: Map<String, Color> = mapOf(
     "workspace" to AppleColors.systemGreen,
@@ -78,7 +102,7 @@ private val groupColor: Map<String, Color> = mapOf(
     "build" to AppleColors.systemPurple,
     "system" to AppleColors.systemTeal,
     "meta" to AppleColors.systemBlue,
-    "apk-bridge" to Color(0xFF8E8E93),
+    "apk-bridge" to Color(0xFF8E8E93)
 )
 
 private fun toolGroups(t: UiText, apkTools: List<String> = emptyList()): List<ToolGroup> {

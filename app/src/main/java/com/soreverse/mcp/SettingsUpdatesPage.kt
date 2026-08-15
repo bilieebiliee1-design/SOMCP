@@ -7,8 +7,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -23,9 +23,9 @@ import com.soreverse.mcp.core.GitHubUpdateManager
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.UpdateCheckResult
 import com.soreverse.mcp.core.UpdateDownloadEvent
+import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import java.io.File
 
 @Composable
 internal fun SettingsUpdatesPage(
@@ -33,7 +33,7 @@ internal fun SettingsUpdatesPage(
     settings: SettingsStore,
     manager: GitHubUpdateManager,
     initialRelease: GitHubRelease?,
-    onRelease: (GitHubRelease?) -> Unit,
+    onRelease: (GitHubRelease?) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var autoCheck by remember { mutableStateOf(settings.autoCheckUpdates) }
@@ -45,7 +45,9 @@ internal fun SettingsUpdatesPage(
     var probeTotal by remember { mutableStateOf(0) }
     var probeAvailable by remember { mutableStateOf(0) }
     var selectedSource by remember { mutableStateOf("") }
-    var probeResults by remember { mutableStateOf<List<UpdateDownloadEvent.ProbeResult>>(emptyList()) }
+    var probeResults by remember {
+        mutableStateOf<List<UpdateDownloadEvent.ProbeResult>>(emptyList())
+    }
     var downloadPhase by remember { mutableStateOf("") }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
@@ -78,12 +80,15 @@ internal fun SettingsUpdatesPage(
                         is UpdateCheckResult.Available -> {
                             release = result.release
                             onRelease(result.release)
-                            status = if (t.zh) "发现新版本 ${result.release.tag}" else "Version ${result.release.tag} is available"
+                            status =
+                                if (t.zh) "发现新版本 ${result.release.tag}" else "Version ${result.release.tag} is available"
                         }
+
                         UpdateCheckResult.Current -> {
                             release = null
                             onRelease(null)
-                            status = if (t.zh) "当前已是最新正式发行版" else "You are using the latest stable release"
+                            status =
+                                if (t.zh) "当前已是最新正式发行版" else "You are using the latest stable release"
                         }
                     }
                 }
@@ -118,24 +123,30 @@ internal fun SettingsUpdatesPage(
                             downloadPhase = "probing"
                             probeTotal = event.total
                         }
+
                         is UpdateDownloadEvent.ProbeResult -> {
                             probeCompleted = event.completed
                             if (event.reachable) probeAvailable++
                             probeResults = probeResults + event
                         }
+
                         is UpdateDownloadEvent.Selected -> {
                             downloadPhase = "downloading"
                             selectedSource = event.source
                             progress = 0
                         }
+
                         is UpdateDownloadEvent.Downloading -> {
                             downloadPhase = "downloading"
                             selectedSource = event.source
                             progress = event.percent
                         }
+
                         UpdateDownloadEvent.Verifying -> downloadPhase = "verifying"
+
                         is UpdateDownloadEvent.VerifySkipped -> {
-                            verifyNote = if (t.zh) "已跳过 SHA-256 校验（${event.reason}），文件为有效 APK，可安装。" else "SHA-256 check skipped (${event.reason}); file is a valid APK and installable."
+                            verifyNote =
+                                if (t.zh) "已跳过 SHA-256 校验（${event.reason}），文件为有效 APK，可安装。" else "SHA-256 check skipped (${event.reason}); file is a valid APK and installable."
                         }
                     }
                 }
@@ -159,13 +170,20 @@ internal fun SettingsUpdatesPage(
     PageScroll {
         GlassGroup {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (t.zh) "GitHub 正式发行版" else "Official GitHub releases", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Text(
+                    if (t.zh) "GitHub 正式发行版" else "Official GitHub releases",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
                 Text(
                     if (t.zh) "只检查 bilieebiliee1-design/SOMCP 的正式 Release。普通构建、提交、分支和标签均不会被视为更新。" else "Only stable releases from bilieebiliee1-design/SOMCP are checked. Builds, commits, branches and tags do not count as updates.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text("${if (t.zh) "当前版本" else "Current version"}: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${if (t.zh) "当前版本" else "Current version"}: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
             GroupDivider()
             ToggleRow(if (t.zh) "启动时自动检查" else "Check automatically at startup", autoCheck) {
@@ -177,32 +195,54 @@ internal fun SettingsUpdatesPage(
                 if (checking) (if (t.zh) "正在检查…" else "Checking…") else (if (t.zh) "立即检查更新" else "Check now"),
                 status,
                 Icons.Default.Info,
-                onClick = ::checkUpdates,
+                onClick = ::checkUpdates
             )
         }
         if (error.isNotBlank()) {
             Surface(
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(error, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(14.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
         release?.let { update ->
             GlassGroup {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(update.name, style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    Text(update.tag, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                    if (update.notes.isNotBlank()) MarkdownMessageContent(update.notes, selectable = true)
+                    Text(
+                        update.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
+                    Text(
+                        update.tag,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                    if (update.notes.isNotBlank()) {
+                        MarkdownMessageContent(
+                            update.notes,
+                            selectable = true
+                        )
+                    }
                     if (downloading) {
                         UpdateDownloadStatus(
                             downloadPhase, progress, probeCompleted, probeTotal, probeAvailable, selectedSource, probeResults, t.zh,
                             verifyNote = verifyNote,
-                            onPickSource = { source -> startDownload(update, source) },
+                            onPickSource = { source -> startDownload(update, source) }
                         )
                     } else if (verifyNote.isNotBlank() && downloadedFile != null) {
-                        Text(verifyNote, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            verifyNote,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     PrimaryActionButton(
                         text = when {
@@ -214,7 +254,8 @@ internal fun SettingsUpdatesPage(
                             val file = downloadedFile
                             if (file != null) {
                                 if (!manager.install(file)) {
-                                    status = if (t.zh) "请允许 SOMCP 安装未知应用，返回后再次点击安装。" else "Allow SOMCP to install unknown apps, then return and tap Install again."
+                                    status =
+                                        if (t.zh) "请允许 SOMCP 安装未知应用，返回后再次点击安装。" else "Allow SOMCP to install unknown apps, then return and tap Install again."
                                 }
                             } else if (!downloading) {
                                 startDownload(update, null)
@@ -226,9 +267,15 @@ internal fun SettingsUpdatesPage(
                                 status = if (t.zh) "下载已取消" else "Download cancelled"
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (status.isNotBlank()) {
+                        Text(
+                            status,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
