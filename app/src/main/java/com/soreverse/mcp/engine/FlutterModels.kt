@@ -12,7 +12,7 @@ internal data class FlutterFingerprint(
     val os: String?,
     val compressedPointers: Boolean?,
     val confidence: Double,
-    val evidence: List<String>,
+    val evidence: List<String>
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("dartVersion", dartVersion ?: JSONObject.NULL)
@@ -26,7 +26,8 @@ internal data class FlutterFingerprint(
         .put("evidence", JSONArray(evidence))
 
     companion object {
-        fun unknown(): FlutterFingerprint = FlutterFingerprint(null, null, emptyList(), emptyList(), null, null, null, 0.0, emptyList())
+        fun unknown(): FlutterFingerprint =
+            FlutterFingerprint(null, null, emptyList(), emptyList(), null, null, null, 0.0, emptyList())
     }
 }
 
@@ -36,5 +37,5 @@ internal data class FlutterLibraries(
     val libapp: ByteArray,
     val libflutter: ByteArray,
     val libappEntry: String,
-    val libflutterEntry: String,
+    val libflutterEntry: String
 )

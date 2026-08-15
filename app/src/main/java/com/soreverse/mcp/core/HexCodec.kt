@@ -8,7 +8,10 @@ object HexCodec {
         ?.toLongOrNull(16)
 
     fun bytes(value: String): ByteArray? {
-        val clean = value.filterNot { it == ' ' || it == '\n' || it == '\r' || it == '\t' || it == ',' }
+        val clean = value.filterNot {
+            it == ' ' || it == '\n' || it == '\r' || it == '\t' ||
+                it == ','
+        }
         if (clean.isBlank() || clean.length % 2 != 0) return null
         return ByteArray(clean.length / 2) { index ->
             val high = Character.digit(clean[index * 2], 16)

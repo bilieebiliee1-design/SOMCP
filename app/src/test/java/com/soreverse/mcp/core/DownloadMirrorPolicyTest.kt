@@ -12,7 +12,9 @@ class DownloadMirrorPolicyTest {
         assertEquals(candidates.size, candidates.distinct().size)
         assertTrue(original in candidates)
         assertTrue("https://ghproxy.net/$original" in candidates)
-        assertTrue("https://xget.xi-xu.me/gh/example/app/releases/download/v1/app.apk" in candidates)
+        assertTrue(
+            "https://xget.xi-xu.me/gh/example/app/releases/download/v1/app.apk" in candidates
+        )
         assertTrue("https://kkgithub.com/example/app/releases/download/v1/app.apk" in candidates)
     }
 
