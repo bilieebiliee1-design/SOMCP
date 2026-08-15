@@ -45,11 +45,15 @@ Java_com_soreverse_mcp_blutter_NativeBlutterBridge_nativeRun(JNIEnv* env, jobjec
         throw_runtime(env, "Invalid Blutter runner arguments");
         return -1;
     }
+    // Acquire and check one at a time. Fetching both before the null check leaked
+    // the first buffer whenever the second allocation failed (OOM on a long
+    // options payload), and left a pending OutOfMemoryError unhandled.
     const char* raw_library = env->GetStringUTFChars(library_name, nullptr);
-    const char* raw_options = env->GetStringUTFChars(options_json, nullptr);
-    if (raw_library == nullptr || raw_options == nullptr) return -1;
+    if (raw_library == nullptr) return -1;
     std::string library(raw_library);
     env->ReleaseStringUTFChars(library_name, raw_library);
+    const char* raw_options = env->GetStringUTFChars(options_json, nullptr);
+    if (raw_options == nullptr) return -1;
     if (!valid_library(library)) {
         env->ReleaseStringUTFChars(options_json, raw_options);
         throw_runtime(env, "Rejected Blutter runner library name");
