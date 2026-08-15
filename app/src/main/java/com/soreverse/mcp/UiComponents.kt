@@ -50,7 +50,7 @@ internal fun ScreenHeader(
     subtitle: String? = null,
     showBack: Boolean = false,
     onBack: (() -> Unit)? = null,
-    trailing: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null
 ) {
     val metrics = LocalUiMetrics.current
     Row(
@@ -58,11 +58,15 @@ internal fun ScreenHeader(
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = metrics.pagePad, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         if (showBack && onBack != null) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
         }
         Column(Modifier.weight(1f)) {
@@ -71,7 +75,7 @@ internal fun ScreenHeader(
                 fontWeight = FontWeight.Bold,
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onBackground,
-                letterSpacing = (-0.3).sp,
+                letterSpacing = (-0.3).sp
             )
             if (!subtitle.isNullOrBlank()) {
                 Text(
@@ -79,7 +83,7 @@ internal fun ScreenHeader(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -91,7 +95,7 @@ internal fun ScreenHeader(
 internal fun GlassGroup(
     title: String? = null,
     footer: String? = null,
-    content: @Composable ColumnScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit
 ) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.cardRadius)
@@ -102,7 +106,7 @@ internal fun GlassGroup(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 2.dp),
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.SemiBold
             )
         }
         Column(
@@ -110,16 +114,19 @@ internal fun GlassGroup(
                 .fillMaxWidth()
                 .clip(shape)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
-                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)), shape)
+                .border(
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)),
+                    shape
+                )
                 .padding(vertical = 2.dp),
-            content = content,
+            content = content
         )
         if (!footer.isNullOrBlank()) {
             Text(
                 footer,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 2.dp),
+                modifier = Modifier.padding(horizontal = 2.dp)
             )
         }
     }
@@ -130,7 +137,7 @@ internal fun GroupDivider() {
     HorizontalDivider(
         modifier = Modifier.padding(start = 16.dp),
         thickness = 0.5.dp,
-        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
     )
 }
 
@@ -141,7 +148,7 @@ internal fun NavRow(
     icon: ImageVector? = null,
     iconTint: Color? = null,
     trailing: String? = null,
-    onClick: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null
 ) {
     val metrics = LocalUiMetrics.current
     val resolvedTint = iconTint ?: MaterialTheme.colorScheme.primary
@@ -151,7 +158,7 @@ internal fun NavRow(
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 14.dp, vertical = metrics.rowPadV),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (icon != null) {
             Box(
@@ -159,22 +166,42 @@ internal fun NavRow(
                     .size(34.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(resolvedTint.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.Center
             ) {
                 Icon(icon, null, tint = resolvedTint, modifier = Modifier.size(18.dp))
             }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Medium
+            )
             if (!subtitle.isNullOrBlank()) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
         if (!trailing.isNullOrBlank()) {
-            Text(trailing, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            Text(
+                trailing,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold
+            )
         }
         if (onClick != null) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -182,8 +209,16 @@ internal fun NavRow(
 @Composable
 internal fun ToggleRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     val metrics = LocalUiMetrics.current
-    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(text, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text,
+            Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodyLarge
+        )
         Switch(
             checked = checked,
             onCheckedChange = onChange,
@@ -192,8 +227,8 @@ internal fun ToggleRow(text: String, checked: Boolean, onChange: (Boolean) -> Un
                 checkedTrackColor = MaterialTheme.colorScheme.primary,
                 uncheckedThumbColor = Color.White,
                 uncheckedTrackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                uncheckedBorderColor = Color.Transparent,
-            ),
+                uncheckedBorderColor = Color.Transparent
+            )
         )
     }
 }
@@ -204,7 +239,7 @@ internal fun PrimaryActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     leading: ImageVector? = null,
-    container: Color? = null,
+    container: Color? = null
 ) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.controlRadius)
@@ -213,7 +248,7 @@ internal fun PrimaryActionButton(
         onClick = onClick,
         shape = shape,
         colors = ButtonDefaults.buttonColors(containerColor = resolved, contentColor = Color.White),
-        modifier = modifier.height(50.dp),
+        modifier = modifier.height(50.dp)
     ) {
         if (leading != null) {
             Icon(leading, null)
@@ -233,7 +268,7 @@ internal fun PageScroll(content: @Composable ColumnScope.() -> Unit) {
             .padding(horizontal = metrics.pagePad, vertical = 8.dp)
             .padding(bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(metrics.sectionGap),
-        content = content,
+        content = content
     )
 }
 
@@ -244,8 +279,13 @@ internal fun IndexedBadge(index: Int) {
             .size(28.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.Center
     ) {
-        Text("${index + 1}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+        Text(
+            "${index + 1}",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+        )
     }
 }

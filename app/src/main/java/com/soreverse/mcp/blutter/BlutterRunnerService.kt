@@ -16,9 +16,20 @@ class BlutterRunnerService : Service() {
     private val nextToken = AtomicLong(1)
 
     private val binder = object : IBlutterRunner.Stub() {
-        override fun getManifestJson(): String = assets.open("blutter/runners.json").bufferedReader().use { it.readText() }
+        override fun getManifestJson(): String =
+            assets.open("blutter/runners.json").bufferedReader().use {
+                it.readText()
+            }
 
-        override fun run(jobId: String, libraryName: String, libapp: ParcelFileDescriptor, libflutter: ParcelFileDescriptor, result: ParcelFileDescriptor, optionsJson: String, callback: IBlutterRunnerCallback) {
+        override fun run(
+            jobId: String,
+            libraryName: String,
+            libapp: ParcelFileDescriptor,
+            libflutter: ParcelFileDescriptor,
+            result: ParcelFileDescriptor,
+            optionsJson: String,
+            callback: IBlutterRunnerCallback
+        ) {
             val token = nextToken.getAndIncrement()
             val job = RunnerJob(token, libapp, libflutter, result)
             jobs[jobId] = job
@@ -34,7 +45,15 @@ class BlutterRunnerService : Service() {
                         return@submit
                     }
                     callback.onProgress(jobId, "running", 10)
-                    exitCode = NativeBlutterBridge.run(libraryName, libapp.fd, libflutter.fd, result.fd, optionsJson, token)
+                    exitCode =
+                        NativeBlutterBridge.run(
+                            libraryName,
+                            libapp.fd,
+                            libflutter.fd,
+                            result.fd,
+                            optionsJson,
+                            token
+                        )
                     if (exitCode != 0) errorCode = "RUNNER_FAILED"
                 } catch (error: Exception) {
                     errorCode = "RUNNER_EXCEPTION"
@@ -81,7 +100,7 @@ class BlutterRunnerService : Service() {
         val token: Long,
         private val libapp: ParcelFileDescriptor,
         private val libflutter: ParcelFileDescriptor,
-        private val result: ParcelFileDescriptor,
+        private val result: ParcelFileDescriptor
     ) {
         val cancelled = AtomicBoolean(false)
         val started = AtomicBoolean(false)

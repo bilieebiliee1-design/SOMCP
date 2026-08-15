@@ -1,10 +1,10 @@
 package com.soreverse.mcp.core
 
+import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
 
 object PublicReachability {
     private val client = OkHttpClient.Builder()

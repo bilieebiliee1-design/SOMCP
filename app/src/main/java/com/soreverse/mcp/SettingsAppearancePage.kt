@@ -44,31 +44,71 @@ internal fun SettingsAppearancePage(
     textScale: String,
     onTextScale: (String) -> Unit,
     predictiveBack: Boolean,
-    onPredictiveBack: (Boolean) -> Unit,
+    onPredictiveBack: (Boolean) -> Unit
 ) {
     PageScroll {
         SurfacePanel {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Text(if (t.zh) "实时预览" else "Live preview", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (t.zh) "实时预览" else "Live preview",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Box(
                     Modifier
                         .size(64.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
-                        .border(BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)), CircleShape),
-                    contentAlignment = Alignment.Center,
+                        .border(
+                            BorderStroke(
+                                2.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                            ),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
                 }
-                Text(if (t.zh) "强调色会立刻影响按钮与选中态" else "Accent updates buttons and selection immediately", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                PrimaryActionButton(if (t.zh) "示例主按钮" else "Sample primary", onClick = {}, modifier = Modifier.fillMaxWidth())
+                Text(
+                    if (t.zh) "强调色会立刻影响按钮与选中态" else "Accent updates buttons and selection immediately",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                PrimaryActionButton(if (t.zh) "示例主按钮" else "Sample primary", onClick = {
+                }, modifier = Modifier.fillMaxWidth())
             }
         }
         GlassGroup(title = t.language) {
-            ChipRow(listOf("system" to if (t.zh) "跟随系统" else "System", "zh" to "中文", "en" to "English"), language, onLanguage)
+            ChipRow(
+                listOf(
+                    "system" to if (t.zh) "跟随系统" else "System",
+                    "zh" to "中文",
+                    "en" to "English"
+                ),
+                language,
+                onLanguage
+            )
         }
         GlassGroup(title = t.theme) {
-            ChipRow(listOf("system" to if (t.zh) "跟随系统" else "System", "light" to if (t.zh) "浅色" else "Light", "dark" to if (t.zh) "深色" else "Dark"), themeMode, onTheme)
+            ChipRow(
+                listOf(
+                    "system" to if (t.zh) "跟随系统" else "System",
+                    "light" to if (t.zh) "浅色" else "Light",
+                    "dark" to if (t.zh) "深色" else "Dark"
+                ),
+                themeMode,
+                onTheme
+            )
         }
         GlassGroup(title = if (t.zh) "强调色" else "Accent") {
             ChipRow(
@@ -80,10 +120,10 @@ internal fun SettingsAppearancePage(
                     "green" to if (t.zh) "绿" else "Green",
                     "orange" to if (t.zh) "橙" else "Orange",
                     "red" to if (t.zh) "红" else "Red",
-                    "mono" to if (t.zh) "灰" else "Mono",
+                    "mono" to if (t.zh) "灰" else "Mono"
                 ),
                 accentColor,
-                onAccent,
+                onAccent
             )
         }
         GlassGroup(title = if (t.zh) "布局密度" else "Density") {
@@ -91,10 +131,10 @@ internal fun SettingsAppearancePage(
                 listOf(
                     "compact" to if (t.zh) "紧凑" else "Compact",
                     "comfortable" to if (t.zh) "舒适" else "Comfortable",
-                    "spacious" to if (t.zh) "宽松" else "Spacious",
+                    "spacious" to if (t.zh) "宽松" else "Spacious"
                 ),
                 uiDensity,
-                onDensity,
+                onDensity
             )
         }
         GlassGroup(title = if (t.zh) "圆角" else "Corners") {
@@ -103,10 +143,10 @@ internal fun SettingsAppearancePage(
                     "small" to if (t.zh) "小" else "Small",
                     "medium" to if (t.zh) "中" else "Medium",
                     "large" to if (t.zh) "大" else "Large",
-                    "xlarge" to if (t.zh) "特大" else "XL",
+                    "xlarge" to if (t.zh) "特大" else "XL"
                 ),
                 cornerStyle,
-                onCorner,
+                onCorner
             )
         }
         GlassGroup(title = if (t.zh) "字号" else "Text size") {
@@ -114,10 +154,10 @@ internal fun SettingsAppearancePage(
                 listOf(
                     "normal" to if (t.zh) "标准" else "Normal",
                     "large" to if (t.zh) "大" else "Large",
-                    "xlarge" to if (t.zh) "特大" else "XL",
+                    "xlarge" to if (t.zh) "特大" else "XL"
                 ),
                 textScale,
-                onTextScale,
+                onTextScale
             )
         }
         GlassGroup(title = if (t.zh) "动效" else "Motion") {
@@ -125,10 +165,10 @@ internal fun SettingsAppearancePage(
                 listOf(
                     "system" to if (t.zh) "跟随系统" else "System",
                     "full" to if (t.zh) "标准" else "Full",
-                    "reduced" to if (t.zh) "减弱" else "Reduced",
+                    "reduced" to if (t.zh) "减弱" else "Reduced"
                 ),
                 motionMode,
-                onMotion,
+                onMotion
             )
         }
         GlassGroup {

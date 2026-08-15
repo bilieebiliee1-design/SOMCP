@@ -10,7 +10,7 @@ data class SectionInfo(
     val link: Int,
     val info: Int,
     val addralign: Long,
-    val entsize: Long,
+    val entsize: Long
 )
 
 data class SymbolInfo(
@@ -22,7 +22,7 @@ data class SymbolInfo(
     val value: Long,
     val size: Long,
     val imported: Boolean,
-    val exported: Boolean,
+    val exported: Boolean
 )
 
 data class RelocInfo(
@@ -30,7 +30,7 @@ data class RelocInfo(
     val offset: Long,
     val type: Long,
     val symbol: String,
-    val addend: Long,
+    val addend: Long
 )
 
 data class StringInfo(
@@ -39,7 +39,7 @@ data class StringInfo(
     val length: Int,
     val section: String,
     val encoding: String = "UTF-8",
-    val confidence: Double = 1.0,
+    val confidence: Double = 1.0
 )
 
 data class ProgramHeaderInfo(
@@ -50,13 +50,10 @@ data class ProgramHeaderInfo(
     val paddr: Long,
     val filesz: Long,
     val memsz: Long,
-    val align: Long,
+    val align: Long
 )
 
-data class DynamicEntryInfo(
-    val tag: Long,
-    val value: Long,
-)
+data class DynamicEntryInfo(val tag: Long, val value: Long)
 
 data class ElfFile(
     val data: ByteArray,
@@ -71,7 +68,7 @@ data class ElfFile(
     val relocations: List<RelocInfo>,
     val strings: List<StringInfo>,
     val programHeaders: List<ProgramHeaderInfo> = emptyList(),
-    val dynamicEntries: List<DynamicEntryInfo> = emptyList(),
+    val dynamicEntries: List<DynamicEntryInfo> = emptyList()
 ) {
     val architecture: String = when (machine) {
         40 -> "arm32"
