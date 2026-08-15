@@ -20,7 +20,7 @@ object DownloadMirrorPolicy {
         "https://gh-proxy.lengzzz.com/",
         "https://github.moeyy.xyz/",
         "https://ghproxy.net.kg/",
-        "https://ghproxy.17lai.site/",
+        "https://ghproxy.17lai.site/"
     )
 
     fun candidates(original: String): List<String> {
@@ -28,7 +28,7 @@ object DownloadMirrorPolicy {
         val replacements = listOf(
             "https://kkgithub.com",
             "https://bgithub.xyz",
-            "https://github.com.cnpmjs.org",
+            "https://github.com.cnpmjs.org"
         ).mapNotNull { host ->
             original.replaceFirst("https://github.com", host)
         }

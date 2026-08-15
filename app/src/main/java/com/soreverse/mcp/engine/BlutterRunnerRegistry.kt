@@ -9,7 +9,7 @@ internal data class BlutterRunnerRequirement(
     val dartVersion: String?,
     val abi: String,
     val compressedPointers: Boolean,
-    val analysis: Boolean,
+    val analysis: Boolean
 )
 
 internal data class BlutterRunnerDescriptor(
@@ -24,7 +24,7 @@ internal data class BlutterRunnerDescriptor(
     val libraryName: String,
     val upstreamCommit: String = "",
     val dartRevision: String? = null,
-    val snapshotAliases: List<String> = emptyList(),
+    val snapshotAliases: List<String> = emptyList()
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("runnerId", runnerId)
@@ -42,18 +42,32 @@ internal data class BlutterRunnerDescriptor(
 }
 
 internal object BlutterRunnerMatcher {
-    fun select(requirement: BlutterRunnerRequirement, runners: List<BlutterRunnerDescriptor>): BlutterRunnerDescriptor? = runners
+    fun select(
+        requirement: BlutterRunnerRequirement,
+        runners: List<BlutterRunnerDescriptor>
+    ): BlutterRunnerDescriptor? = runners
         .asSequence()
-        .filter { it.abi == requirement.abi && it.compressedPointers == requirement.compressedPointers && (!requirement.analysis || it.analysis) }
+        .filter {
+            it.abi == requirement.abi &&
+                it.compressedPointers == requirement.compressedPointers &&
+                (!requirement.analysis || it.analysis)
+        }
         .mapNotNull { runner ->
             val score = when {
-                requirement.engineRevision != null && runner.engineRevision == requirement.engineRevision -> 2
+                requirement.engineRevision != null &&
+                    runner.engineRevision == requirement.engineRevision -> 2
+
                 requirement.dartVersion != null && runner.dartVersion == requirement.dartVersion -> 1
+
                 else -> 0
             }
             runner.takeIf { score > 0 }?.let { score to it }
         }
-        .sortedWith(compareByDescending<Pair<Int, BlutterRunnerDescriptor>> { it.first }.thenBy { it.second.runnerId })
+        .sortedWith(
+            compareByDescending<Pair<Int, BlutterRunnerDescriptor>> {
+                it.first
+            }.thenBy { it.second.runnerId }
+        )
         .map { it.second }
         .firstOrNull()
 }
@@ -61,9 +75,12 @@ internal object BlutterRunnerMatcher {
 internal class BlutterRunnerRegistry(private val context: Context) {
     private val manifest by lazy { loadManifest() }
     val upstreamCommit: String get() = manifest.optString("upstreamCommit")
-    val runners: List<BlutterRunnerDescriptor> by lazy { parseRunners(manifest.optJSONArray("runners"), "embedded") }
+    val runners: List<BlutterRunnerDescriptor> by lazy {
+        parseRunners(manifest.optJSONArray("runners"), "embedded")
+    }
 
-    fun select(requirement: BlutterRunnerRequirement): BlutterRunnerDescriptor? = BlutterRunnerMatcher.select(requirement, runners)
+    fun select(requirement: BlutterRunnerRequirement): BlutterRunnerDescriptor? =
+        BlutterRunnerMatcher.select(requirement, runners)
 
     fun capabilities(): JSONObject = JSONObject()
         .put("schemaVersion", manifest.optInt("schemaVersion", 2))
@@ -76,7 +93,10 @@ internal class BlutterRunnerRegistry(private val context: Context) {
         .put("fullyOffline", true)
         .put("runnerCount", runners.size)
 
-    private fun loadManifest(): JSONObject = context.assets.open("blutter/runners.json").bufferedReader().use { JSONObject(it.readText()) }
+    private fun loadManifest(): JSONObject =
+        context.assets.open("blutter/runners.json").bufferedReader().use {
+            JSONObject(it.readText())
+        }
 
     private fun parseRunners(array: JSONArray?, source: String): List<BlutterRunnerDescriptor> {
         if (array == null) return emptyList()
@@ -85,11 +105,40 @@ internal class BlutterRunnerRegistry(private val context: Context) {
             val id = item.optString("runnerId")
             val abi = item.optString("abi")
             val sha256 = item.optString("sha256")
-            if (id.isBlank() || abi.isBlank() || !sha256.matches(Regex("[a-f0-9]{64}"))) return@mapNotNull null
+            if (id.isBlank() || abi.isBlank() ||
+                !sha256.matches(Regex("[a-f0-9]{64}"))
+            ) {
+                return@mapNotNull null
+            }
             val libraryName = item.optString("libraryName")
             if (!libraryName.matches(Regex("^blutter_[A-Za-z0-9_]+$"))) return@mapNotNull null
-            val aliases = item.optJSONArray("snapshotAliases")?.let { array -> (0 until array.length()).mapNotNull(array::optString) } ?: emptyList()
-            BlutterRunnerDescriptor(id, item.optString("dartVersion").takeIf { it.isNotBlank() }, item.optString("engineRevision").takeIf { it.isNotBlank() }, abi, item.optBoolean("compressedPointers"), item.optBoolean("analysis", true), sha256, source, libraryName, manifest.optString("upstreamCommit"), item.optString("dartRevision").takeIf { it.isNotBlank() }, aliases)
+            val aliases =
+                item.optJSONArray("snapshotAliases")?.let { array ->
+                    (0 until array.length()).mapNotNull(array::optString)
+                }
+                    ?: emptyList()
+            BlutterRunnerDescriptor(
+                id,
+                item.optString("dartVersion").takeIf {
+                    it.isNotBlank()
+                },
+                item.optString("engineRevision").takeIf {
+                    it.isNotBlank()
+                },
+                abi,
+                item.optBoolean(
+                    "compressedPointers"
+                ),
+                item.optBoolean(
+                    "analysis",
+                    true
+                ),
+                sha256, source, libraryName, manifest.optString("upstreamCommit"),
+                item.optString("dartRevision").takeIf {
+                    it.isNotBlank()
+                },
+                aliases
+            )
         }
     }
 }

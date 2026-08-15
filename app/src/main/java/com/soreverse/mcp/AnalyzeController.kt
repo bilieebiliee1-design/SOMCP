@@ -19,18 +19,23 @@ internal fun launchSoScan(
     settings: SettingsStore,
     state: AnalyzeUiState,
     scope: CoroutineScope,
-    zh: Boolean,
+    zh: Boolean
 ): Job? {
     if (state.scanning) return null
     state.scanning = true
     state.message = if (zh) "正在扫描 SO 文件…" else "Scanning SO files…"
     return scope.launch {
         try {
-            val loaded = withContext(Dispatchers.IO) { loadSoSources(context.applicationContext, settings.defaultLimit, zh) }
+            val loaded =
+                withContext(Dispatchers.IO) {
+                    loadSoSources(context.applicationContext, settings.defaultLimit, zh)
+                }
             state.soSources = loaded.first
             state.message = loaded.second
-            state.perSoDetail = state.perSoDetail.filterKeys { path -> loaded.first.any { it.path == path } }
-            state.expandedSoPath = state.expandedSoPath?.takeIf { path -> loaded.first.any { it.path == path } }
+            state.perSoDetail =
+                state.perSoDetail.filterKeys { path -> loaded.first.any { it.path == path } }
+            state.expandedSoPath =
+                state.expandedSoPath?.takeIf { path -> loaded.first.any { it.path == path } }
             state.scannedTreeUri = settings.treeUri?.toString() ?: "default"
         } finally {
             state.scanning = false
@@ -44,14 +49,15 @@ internal fun launchBasicAnalysis(
     name: String,
     state: AnalyzeUiState,
     scope: CoroutineScope,
-    zh: Boolean,
+    zh: Boolean
 ): Job? {
     if (state.analyzingSoPath != null || state.deepAnalyzingPath != null) return null
     state.analyzingSoPath = path
     state.message = if (zh) "正在分析 $name…" else "Analyzing $name…"
     return scope.launch {
         try {
-            val detail = withContext(Dispatchers.IO) { openSoForUi(context.applicationContext, path, zh) }
+            val detail =
+                withContext(Dispatchers.IO) { openSoForUi(context.applicationContext, path, zh) }
             state.message = detail.second
             val opened = detail.first
             if (opened != null) {
@@ -74,13 +80,13 @@ internal fun launchDeepAnalysis(
     state: AnalyzeUiState,
     scope: CoroutineScope,
     deepService: DeepAnalysisService,
-    zh: Boolean,
+    zh: Boolean
 ): Job? {
     if (state.deepAnalyzingPath != null) return null
     val turnRequest = buildDeepTurnRequest(
         request = request,
         messages = state.deepMessages,
-        historySoftLimit = settings.aiHistorySoftLimit,
+        historySoftLimit = settings.aiHistorySoftLimit
     )
     if (request.isBlank()) state.deepMessages = emptyList()
     state.deepTargetPath = path
@@ -92,21 +98,29 @@ internal fun launchDeepAnalysis(
             id = System.currentTimeMillis(),
             role = DeepChatRole.ASSISTANT,
             text = "",
-            error = if (zh) "请先开启 MCP 服务后再进行 AI 深度分析" else "Start the MCP service before AI deep analysis",
+            error = if (zh) "请先开启 MCP 服务后再进行 AI 深度分析" else "Start the MCP service before AI deep analysis"
         )
         return null
     }
-    if (settings.aiApiKey.isBlank() || settings.aiEndpoint.isBlank() || settings.aiModel.isBlank()) {
+    if (settings.aiApiKey.isBlank() || settings.aiEndpoint.isBlank() ||
+        settings.aiModel.isBlank()
+    ) {
         state.deepMessages = state.deepMessages + DeepChatMessage(
             id = System.currentTimeMillis(),
             role = DeepChatRole.ASSISTANT,
             text = "",
-            error = if (zh) "请先在设置页配置 AI 端点、API Key 和模型" else "Configure AI endpoint, API key and model in Settings first",
+            error = if (zh) "请先在设置页配置 AI 端点、API Key 和模型" else "Configure AI endpoint, API key and model in Settings first"
         )
         return null
     }
     val userText = request.ifBlank {
-        if (zh) "请对 ${path.substringAfterLast('/')} 进行 AI 深度分析" else "Deeply analyze ${path.substringAfterLast('/')}"
+        if (zh) {
+            "请对 ${path.substringAfterLast(
+                '/'
+            )} 进行 AI 深度分析"
+        } else {
+            "Deeply analyze ${path.substringAfterLast('/')}"
+        }
     }
     val assistantId = System.currentTimeMillis() + 1
     state.deepMessages = state.deepMessages +
@@ -121,9 +135,17 @@ internal fun launchDeepAnalysis(
     return scope.launch {
         val collector = launch {
             deepService.events.collect { event ->
-                if (event.kind != DeepAnalysisEvent.Kind.DONE && event.kind != DeepAnalysisEvent.Kind.TEXT) {
+                if (event.kind != DeepAnalysisEvent.Kind.DONE &&
+                    event.kind != DeepAnalysisEvent.Kind.TEXT
+                ) {
                     state.deepMessages = state.deepMessages.map { message ->
-                        if (message.id == assistantId) message.copy(events = (message.events + event).takeLast(100)) else message
+                        if (message.id ==
+                            assistantId
+                        ) {
+                            message.copy(events = (message.events + event).takeLast(100))
+                        } else {
+                            message
+                        }
                     }
                 }
             }
@@ -131,10 +153,18 @@ internal fun launchDeepAnalysis(
         val draftCollector = launch {
             deepService.partsDraft.collect { parts ->
                 if (parts.isNotEmpty()) {
-                    val draft = parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text }
+                    val draft = parts.filterIsInstance<RikkaPart.Text>().joinToString("") {
+                        it.text
+                    }
                     state.deepReport = draft
                     state.deepMessages = state.deepMessages.map { message ->
-                        if (message.id == assistantId) message.copy(text = draft, parts = parts) else message
+                        if (message.id ==
+                            assistantId
+                        ) {
+                            message.copy(text = draft, parts = parts)
+                        } else {
+                            message
+                        }
                     }
                 }
             }
@@ -144,20 +174,33 @@ internal fun launchDeepAnalysis(
                 .onSuccess { report ->
                     state.deepReport = report
                     state.deepMessages = state.deepMessages.map { message ->
-                        if (message.id == assistantId) message.copy(text = report, streaming = false) else message
+                        if (message.id ==
+                            assistantId
+                        ) {
+                            message.copy(text = report, streaming = false)
+                        } else {
+                            message
+                        }
                     }
                     deepService.workspaceId.value.takeIf(String::isNotBlank)?.let { workspaceId ->
                         DeepReportStore.save(
                             context.applicationContext,
                             workspaceId,
-                            deepReportSnapshot(path, settings.aiModel, state.deepMessages),
+                            deepReportSnapshot(path, settings.aiModel, state.deepMessages)
                         )
                     }
                 }
                 .onFailure { error ->
-                    val messageText = error.message ?: if (zh) "AI 深度分析失败" else "AI deep analysis failed"
+                    val messageText =
+                        error.message ?: if (zh) "AI 深度分析失败" else "AI deep analysis failed"
                     state.deepMessages = state.deepMessages.map { message ->
-                        if (message.id == assistantId) message.copy(streaming = false, error = messageText) else message
+                        if (message.id ==
+                            assistantId
+                        ) {
+                            message.copy(streaming = false, error = messageText)
+                        } else {
+                            message
+                        }
                     }
                 }
         } catch (_: CancellationException) {
@@ -176,7 +219,7 @@ internal fun launchDeepAnalysis(
 internal fun buildDeepTurnRequest(
     request: String,
     messages: List<DeepChatMessage>,
-    historySoftLimit: Int,
+    historySoftLimit: Int
 ): String {
     if (request.isBlank()) return request
     val history = messages
@@ -186,8 +229,12 @@ internal fun buildDeepTurnRequest(
             "$role: ${message.text}"
         }
         .takeLast(historySoftLimit.coerceAtLeast(4_000))
-    return if (history.isBlank()) request else """以下是最近对话上下文：
+    return if (history.isBlank()) {
+        request
+    } else {
+        """以下是最近对话上下文：
 $history
 
 用户本轮问题：$request"""
+    }
 }
