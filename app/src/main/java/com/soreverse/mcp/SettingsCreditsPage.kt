@@ -22,7 +22,11 @@ internal fun SettingsCreditsPage(t: UiText) {
             footer = com.soreverse.mcp.core.Provenance.COPYRIGHT
         ) {
             Text(
-                if (t.zh) "本软件为 GPL-3.0-only 自由软件。再分发（含修改、改名、二次打包版本）必须保留版权与许可声明、继续以 GPL-3.0-only 授权、提供完整对应源代码。上游唯一官方来源：" else "SOMCP is GPL-3.0-only free software. Redistribution must retain notices, remian under GPL-3.0-only, and provide complete corresponding source. Upstream: ",
+                if (t.zh) {
+                    "本软件为 GPL-3.0-only 自由软件。再分发（含修改、改名、二次打包版本）必须保留版权与许可声明、继续以 GPL-3.0-only 授权、提供完整对应源代码。上游唯一官方来源："
+                } else {
+                    "SOMCP is GPL-3.0-only free software. Redistribution must retain notices, remian under GPL-3.0-only, and provide complete corresponding source. Upstream: "
+                },
                 modifier = Modifier.padding(14.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

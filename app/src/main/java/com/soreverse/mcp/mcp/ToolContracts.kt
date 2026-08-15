@@ -10,30 +10,23 @@ annotation class SchemaDsl
 
 @SchemaDsl
 object SchemaBuilder {
-    fun emptyObject(): JSONObject =
-        JSONObject().put("type", "object").put("properties", JSONObject())
+    fun emptyObject(): JSONObject = JSONObject().put("type", "object").put("properties", JSONObject())
 
     fun objectSchema(properties: JSONObject): JSONObject = JSONObject()
         .put("type", "object").put("properties", properties)
 
-    private fun strProp(description: String): JSONObject =
-        JSONObject().put("type", "string").put("description", description)
-    private fun enumProp(description: String, vararg values: String): JSONObject =
-        strProp(description).put("enum", JSONArray(values.toList()))
-    private fun intProp(description: String): JSONObject =
-        JSONObject().put("type", "integer").put("description", description)
-    private fun numProp(description: String): JSONObject =
-        JSONObject().put("type", "number").put("description", description)
-    private fun boolProp(description: String): JSONObject =
-        JSONObject().put("type", "boolean").put("description", description)
-    private fun arrProp(description: String, items: JSONObject?): JSONObject =
-        JSONObject().put("type", "array").put("description", description).apply {
-            if (items !=
-                null
-            ) {
-                put("items", items)
-            }
+    private fun strProp(description: String): JSONObject = JSONObject().put("type", "string").put("description", description)
+    private fun enumProp(description: String, vararg values: String): JSONObject = strProp(description).put("enum", JSONArray(values.toList()))
+    private fun intProp(description: String): JSONObject = JSONObject().put("type", "integer").put("description", description)
+    private fun numProp(description: String): JSONObject = JSONObject().put("type", "number").put("description", description)
+    private fun boolProp(description: String): JSONObject = JSONObject().put("type", "boolean").put("description", description)
+    private fun arrProp(description: String, items: JSONObject?): JSONObject = JSONObject().put("type", "array").put("description", description).apply {
+        if (items !=
+            null
+        ) {
+            put("items", items)
         }
+    }
 
     fun props(block: PropList.() -> Unit): JSONObject = PropList().apply(block).build()
 

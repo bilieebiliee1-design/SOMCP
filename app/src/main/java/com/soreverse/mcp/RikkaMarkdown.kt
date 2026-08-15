@@ -63,9 +63,9 @@ private val markdownParser by lazy { MarkdownParser(markdownFlavour) }
 
 private data class MarkdownParseResult(val content: String, val ast: ASTNode, val html: String)
 
-private fun ASTNode.containsHtml(): Boolean =
-    type == MarkdownElementTypes.HTML_BLOCK || type == MarkdownTokenTypes.HTML_TAG ||
-        children.any { it.containsHtml() }
+private fun ASTNode.containsHtml(): Boolean = type == MarkdownElementTypes.HTML_BLOCK ||
+    type == MarkdownTokenTypes.HTML_TAG ||
+    children.any { it.containsHtml() }
 
 private fun parseMarkdown(content: String): MarkdownParseResult {
     val tree = markdownParser.buildMarkdownTreeFromString(content)
@@ -78,11 +78,7 @@ private fun parseMarkdown(content: String): MarkdownParseResult {
 
 @Composable
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun RikkaMarkdown(
-    content: String,
-    modifier: Modifier = Modifier,
-    selectable: Boolean = true
-) {
+internal fun RikkaMarkdown(content: String, modifier: Modifier = Modifier, selectable: Boolean = true) {
     var parsed by remember { mutableStateOf(parseMarkdown(content)) }
     val updatedContent by rememberUpdatedState(content)
     LaunchedEffect(Unit) {

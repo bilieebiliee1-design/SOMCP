@@ -25,22 +25,9 @@ data class SymbolInfo(
     val exported: Boolean
 )
 
-data class RelocInfo(
-    val section: String,
-    val offset: Long,
-    val type: Long,
-    val symbol: String,
-    val addend: Long
-)
+data class RelocInfo(val section: String, val offset: Long, val type: Long, val symbol: String, val addend: Long)
 
-data class StringInfo(
-    val offset: Long,
-    val value: String,
-    val length: Int,
-    val section: String,
-    val encoding: String = "UTF-8",
-    val confidence: Double = 1.0
-)
+data class StringInfo(val offset: Long, val value: String, val length: Int, val section: String, val encoding: String = "UTF-8", val confidence: Double = 1.0)
 
 data class ProgramHeaderInfo(
     val type: Long,

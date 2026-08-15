@@ -5,21 +5,9 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
-data class CachedApkSo(
-    val apkPath: String,
-    val entry: String,
-    val name: String,
-    val abi: String,
-    val size: Long
-)
+data class CachedApkSo(val apkPath: String, val entry: String, val name: String, val abi: String, val size: Long)
 
-data class CachedSourceSummary(
-    val architecture: String,
-    val bits: Int,
-    val endian: String,
-    val hasDebugInfo: Boolean,
-    val stripped: Boolean
-)
+data class CachedSourceSummary(val architecture: String, val bits: Int, val endian: String, val hasDebugInfo: Boolean, val stripped: Boolean)
 
 class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_cache.db", null, 1) {
     override fun onCreate(db: SQLiteDatabase) {
@@ -62,12 +50,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
         onCreate(db)
     }
 
-    fun apkEntries(
-        treeUri: String,
-        apkPath: String,
-        apkSize: Long,
-        apkModified: Long
-    ): List<CachedApkSo> {
+    fun apkEntries(treeUri: String, apkPath: String, apkSize: Long, apkModified: Long): List<CachedApkSo> {
         readableDatabase.query(
             "apk_so_entries",
             arrayOf("entry", "name", "abi", "entry_size"),
@@ -95,13 +78,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
         }
     }
 
-    fun putApkEntries(
-        treeUri: String,
-        apkPath: String,
-        apkSize: Long,
-        apkModified: Long,
-        entries: List<CachedApkSo>
-    ) {
+    fun putApkEntries(treeUri: String, apkPath: String, apkSize: Long, apkModified: Long, entries: List<CachedApkSo>) {
         writableDatabase.beginTransaction()
         try {
             writableDatabase.delete(
@@ -132,12 +109,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
         }
     }
 
-    fun sourceSummary(
-        treeUri: String,
-        path: String,
-        size: Long,
-        modified: Long
-    ): CachedSourceSummary? {
+    fun sourceSummary(treeUri: String, path: String, size: Long, modified: Long): CachedSourceSummary? {
         readableDatabase.query(
             "source_summaries",
             arrayOf("architecture", "bits", "endian", "has_debug", "stripped"),
@@ -158,13 +130,7 @@ class ScanCacheStore(context: Context) : SQLiteOpenHelper(context, "somcp_scan_c
         }
     }
 
-    fun putSourceSummary(
-        treeUri: String,
-        path: String,
-        size: Long,
-        modified: Long,
-        summary: CachedSourceSummary
-    ) {
+    fun putSourceSummary(treeUri: String, path: String, size: Long, modified: Long, summary: CachedSourceSummary) {
         writableDatabase.insertWithOnConflict(
             "source_summaries",
             null,

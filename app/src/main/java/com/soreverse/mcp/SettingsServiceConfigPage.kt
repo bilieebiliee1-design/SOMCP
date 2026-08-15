@@ -74,7 +74,7 @@ internal fun SettingsServiceConfigPage(t: UiText, settings: SettingsStore) {
     val preferred =
         endpoints.firstOrNull { !it.url.contains("127.0.0.1") && !it.url.contains("[::1]") }?.url
             ?: loopback
-    val publicUrl = activeServer(context)?.tunnel?.status()?.publicUrl?.takeIf { it.isNotBlank() }
+    val publicUrl = activeServer(context)?.tunnel?.status?.publicUrl?.takeIf { it.isNotBlank() }
     PageScroll {
         GlassGroup(title = if (t.zh) "工作目录" else "Work directory") {
             NavRow(
@@ -239,11 +239,7 @@ private fun displayEndpoint(endpoint: EndpointInfo, zh: Boolean): Pair<String, S
     return label to note
 }
 
-internal fun filteredEndpoints(
-    context: Context,
-    settings: SettingsStore,
-    port: Int
-): List<EndpointInfo> {
+internal fun filteredEndpoints(context: Context, settings: SettingsStore, port: Int): List<EndpointInfo> {
     // Always surface every reachable endpoint (loopback + LAN + routable), the
     // same behaviour as 1.0.9. Earlier 1.0.10 hid all non-loopback URLs whenever
     // bindHost defaulted to 127.0.0.1, which regressed the "show my LAN link"
