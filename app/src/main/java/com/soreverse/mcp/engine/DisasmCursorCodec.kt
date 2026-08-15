@@ -3,14 +3,7 @@ package com.soreverse.mcp.engine
 import java.util.Base64
 
 internal object DisasmCursorCodec {
-    fun encode(
-        workspaceId: String,
-        editSessionId: String,
-        locator: String,
-        byteOffset: Int,
-        limit: Int,
-        maxBytes: Int
-    ): String = listOf(
+    fun encode(workspaceId: String, editSessionId: String, locator: String, byteOffset: Int, limit: Int, maxBytes: Int): String = listOf(
         encodePart(workspaceId),
         encodePart(editSessionId),
         encodePart(locator),
@@ -35,8 +28,6 @@ internal object DisasmCursorCodec {
         }.getOrNull()
     }
 
-    private fun encodePart(value: String): String =
-        Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray(Charsets.UTF_8))
-    private fun decodePart(value: String): String =
-        String(Base64.getUrlDecoder().decode(value), Charsets.UTF_8)
+    private fun encodePart(value: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray(Charsets.UTF_8))
+    private fun decodePart(value: String): String = String(Base64.getUrlDecoder().decode(value), Charsets.UTF_8)
 }

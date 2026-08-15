@@ -9,13 +9,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
 
-data class EndpointInfo(
-    val url: String,
-    val label: String,
-    val publicCandidate: Boolean,
-    val externallyRoutable: Boolean,
-    val note: String
-)
+data class EndpointInfo(val url: String, val label: String, val publicCandidate: Boolean, val externallyRoutable: Boolean, val note: String)
 
 object NetworkInspector {
     fun endpoints(context: Context, port: Int): List<EndpointInfo> {
@@ -71,7 +65,9 @@ object NetworkInspector {
     }
 
     private fun isPublicCandidate(address: InetAddress): Boolean {
-        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||
+        if (address.isAnyLocalAddress ||
+            address.isLoopbackAddress ||
+            address.isLinkLocalAddress ||
             address.isSiteLocalAddress
         ) {
             return false

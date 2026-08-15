@@ -36,8 +36,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.BackupCrypto
 import com.soreverse.mcp.core.SettingsStore
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -257,7 +255,8 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                                 resultMessage = t.backupImportSuccess
                             }.onFailure { error ->
                                 decryptError = error.message?.let {
-                                    if (it.contains("password") || it.contains("tag mismatch") ||
+                                    if (it.contains("password") ||
+                                        it.contains("tag mismatch") ||
                                         it.contains("AEADBadTagException")
                                     ) {
                                         t.backupDecryptFailed
@@ -593,13 +592,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
     }
 }
 
-private fun applyImport(
-    content: String,
-    t: UiText,
-    settings: SettingsStore,
-    includeSecrets: Boolean,
-    onResult: (Boolean, String) -> Unit
-) {
+private fun applyImport(content: String, t: UiText, settings: SettingsStore, includeSecrets: Boolean, onResult: (Boolean, String) -> Unit) {
     runCatching {
         check(
             settings.fromJsonString(content, allowSecrets = includeSecrets).optBoolean("ok", false)

@@ -5,8 +5,7 @@ import org.json.JSONObject
 object ToolCatalogPresentation {
     fun leanNames(): List<String> = ToolCatalog.registry.leanNames()
 
-    fun leanNames(popularity: Map<String, Long>?): List<String> =
-        ToolCatalog.registry.leanNames(popularity)
+    fun leanNames(popularity: Map<String, Long>?): List<String> = ToolCatalog.registry.leanNames(popularity)
 
     fun description(name: String, zh: Boolean): String = ToolCatalog.registry.description(name, zh)
 
@@ -31,10 +30,7 @@ object ToolCatalogPresentation {
             (if (zh) "元信息：帮助、工具列表、统计、批量、分页" else "Meta: help, tool list, stats, batch, pagination")
     )
 
-    fun grouped(
-        zh: Boolean,
-        includeApk: List<String> = emptyList()
-    ): List<Pair<String, List<Pair<String, String>>>> {
+    fun grouped(zh: Boolean, includeApk: List<String> = emptyList()): List<Pair<String, List<Pair<String, String>>>> {
         val groups = LinkedHashMap<String, MutableList<Pair<String, String>>>()
         val order = categoryDescriptions(zh).map { it.first }.toMutableList()
         order.forEach { groups[it] = mutableListOf() }

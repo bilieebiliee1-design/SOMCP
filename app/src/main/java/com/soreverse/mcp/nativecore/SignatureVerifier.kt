@@ -1,7 +1,6 @@
 package com.soreverse.mcp.nativecore
 
 import android.content.Context
-import android.util.Log
 import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.normalizeSignerDigest
 import java.security.MessageDigest

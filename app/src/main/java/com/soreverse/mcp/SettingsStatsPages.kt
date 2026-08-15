@@ -55,13 +55,7 @@ private fun MetricPill(label: String, value: String, color: Color) {
 }
 
 @Composable
-private fun MetricProgressRow(
-    label: String,
-    value: String,
-    progress: Float,
-    color: Color,
-    monospace: Boolean = false
-) {
+private fun MetricProgressRow(label: String, value: String, progress: Float, color: Color, monospace: Boolean = false) {
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(
             Modifier.fillMaxWidth(),

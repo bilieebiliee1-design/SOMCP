@@ -72,14 +72,7 @@ private fun settingsTitle(t: UiText, dest: SettingsDest): String = when (dest) {
 }
 
 @Composable
-private fun SettingsTile(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    tint: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+private fun SettingsTile(title: String, subtitle: String, icon: ImageVector, tint: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(18.dp)
     Column(
         modifier
@@ -174,20 +167,41 @@ internal fun SettingsHub(
                     fontWeight = FontWeight.SemiBold
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SettingsTile(if (t.zh) "服务配置" else "Service", if (t.zh) "目录 / 端口 / 地址 / 工具" else "Directory / port / URLs / tools", Icons.Default.Settings, MaterialTheme.colorScheme.primary, {
-                        onDest(SettingsDest.ServiceConfig)
-                    }, Modifier.weight(1f))
+                    SettingsTile(
+                        if (t.zh) "服务配置" else "Service",
+                        if (t.zh) "目录 / 端口 / 地址 / 工具" else "Directory / port / URLs / tools",
+                        Icons.Default.Settings,
+                        MaterialTheme.colorScheme.primary,
+                        {
+                            onDest(SettingsDest.ServiceConfig)
+                        },
+                        Modifier.weight(1f)
+                    )
                     SettingsTile(if (t.zh) "外观" else "Look", if (t.zh) "主题 / 强调色 / 密度" else "Theme / accent / density", Icons.Default.Tune, AppPalette.indigo, {
                         onDest(SettingsDest.Appearance)
                     }, Modifier.weight(1f))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SettingsTile(if (t.zh) "AI 深度分析" else "AI Deep", if (t.zh) "端点 / Key / 模型" else "Endpoint / key / model", Icons.Default.Memory, AppPalette.indigo, {
-                        onDest(SettingsDest.AiDeep)
-                    }, Modifier.weight(1f))
-                    SettingsTile(if (t.zh) "保活" else "Keep-alive", if (t.zh) "唤醒锁 / 自启" else "Wake lock / boot", Icons.Default.PowerSettingsNew, AppPalette.green, {
-                        onDest(SettingsDest.KeepAlive)
-                    }, Modifier.weight(1f))
+                    SettingsTile(
+                        if (t.zh) "AI 深度分析" else "AI Deep",
+                        if (t.zh) "端点 / Key / 模型" else "Endpoint / key / model",
+                        Icons.Default.Memory,
+                        AppPalette.indigo,
+                        {
+                            onDest(SettingsDest.AiDeep)
+                        },
+                        Modifier.weight(1f)
+                    )
+                    SettingsTile(
+                        if (t.zh) "保活" else "Keep-alive",
+                        if (t.zh) "唤醒锁 / 自启" else "Wake lock / boot",
+                        Icons.Default.PowerSettingsNew,
+                        AppPalette.green,
+                        {
+                            onDest(SettingsDest.KeepAlive)
+                        },
+                        Modifier.weight(1f)
+                    )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     SettingsTile("APK MCP", if (t.zh) "MT 管理器协同" else "MT Manager bridge", Icons.Default.Link, AppPalette.orange, {
@@ -217,9 +231,14 @@ internal fun SettingsHub(
                         onDest(SettingsDest.Audit)
                     })
                     GroupDivider()
-                    NavRow("Blutter", if (t.zh) "Flutter 3.44 / Dart 3.12.2 / 完全离线" else "Flutter 3.44 / Dart 3.12.2 / fully offline", Icons.Default.Memory, onClick = {
-                        onDest(SettingsDest.Blutter)
-                    })
+                    NavRow(
+                        "Blutter",
+                        if (t.zh) "Flutter 3.44 / Dart 3.12.2 / 完全离线" else "Flutter 3.44 / Dart 3.12.2 / fully offline",
+                        Icons.Default.Memory,
+                        onClick = {
+                            onDest(SettingsDest.Blutter)
+                        }
+                    )
                 }
 
                 Text(
@@ -230,9 +249,15 @@ internal fun SettingsHub(
                     modifier = Modifier.padding(top = 4.dp)
                 )
                 SurfacePanel {
-                    NavRow(if (t.zh) "版本更新" else "Software update", if (t.zh) "GitHub Releases / 自动检查" else "GitHub Releases / automatic checks", Icons.Default.Info, trailing = availableRelease?.tag.orEmpty(), onClick = {
-                        onDest(SettingsDest.Updates)
-                    })
+                    NavRow(
+                        if (t.zh) "版本更新" else "Software update",
+                        if (t.zh) "GitHub Releases / 自动检查" else "GitHub Releases / automatic checks",
+                        Icons.Default.Info,
+                        trailing = availableRelease?.tag.orEmpty(),
+                        onClick = {
+                            onDest(SettingsDest.Updates)
+                        }
+                    )
                     GroupDivider()
                     NavRow(t.backupRestore, t.backupRestoreSubtitle, Icons.Default.Cloud, onClick = {
                         onDest(SettingsDest.BackupRestore)
@@ -292,7 +317,32 @@ internal fun SettingsHub(
                         when (dest) {
                             SettingsDest.ServiceConfig -> SettingsServiceConfigPage(t, settings)
 
-                            SettingsDest.Appearance -> SettingsAppearancePage(t, language, onLanguage, themeMode, onTheme, accentColor, onAccent, pureBlackDark, onPureBlack, uiDensity, onDensity, cornerStyle, onCorner, motionMode, onMotion, showAdvancedHome, onShowAdvancedHome, highContrast, onHighContrast, textScale, onTextScale, predictiveBack, onPredictiveBack)
+                            SettingsDest.Appearance ->
+                                SettingsAppearancePage(
+                                    t,
+                                    language,
+                                    onLanguage,
+                                    themeMode,
+                                    onTheme,
+                                    accentColor,
+                                    onAccent,
+                                    pureBlackDark,
+                                    onPureBlack,
+                                    uiDensity,
+                                    onDensity,
+                                    cornerStyle,
+                                    onCorner,
+                                    motionMode,
+                                    onMotion,
+                                    showAdvancedHome,
+                                    onShowAdvancedHome,
+                                    highContrast,
+                                    onHighContrast,
+                                    textScale,
+                                    onTextScale,
+                                    predictiveBack,
+                                    onPredictiveBack
+                                )
 
                             SettingsDest.KeepAlive -> SettingsKeepAlivePage(t, settings)
 
@@ -431,8 +481,11 @@ internal fun SettingsHub(
                                         GroupDivider()
                                         Text(
                                             if (t.zh) {
-                                                "本软件为 GPL-3.0 自由软件，受《中华人民共和国著作权法》《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：保留本版权与许可声明、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码。\n\n" +
-                                                    "闭源分发、抹除署名、改名冒充原创即构成侵权。依据《著作权法》第五十二条、第五十三条，权利人可要求停止侵害、消除影响、赔礼道歉并赔偿损失；情节严重的可按《著作权法》第五十四条主张惩罚性赔偿。GPL 作为授权合同在中国司法实践中已被确认有效并可强制执行（参见北京高院\u201c数字天堂诉柚子科技\u201d、\u201c罗盒诉风灵\u201d等 GPL/开源协议案）。\n\n" +
+                                                "本软件为 GPL-3.0 自由软件，受《中华人民共和国著作权法》《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：" +
+                                                    "保留本版权与许可声明、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码。\n\n" +
+                                                    "闭源分发、抹除署名、改名冒充原创即构成侵权。依据《著作权法》第五十二条、第五十三条，权利人可要求停止侵害、消除影响、赔礼道歉并赔偿损失；" +
+                                                    "情节严重的可按《著作权法》第五十四条主张惩罚性赔偿。GPL 作为授权合同在中国司法实践中已被确认有效并可强制执行（参见" +
+                                                    "北京高院\u201c数字天堂诉柚子科技\u201d、\u201c罗盒诉风灵\u201d等 GPL/开源协议案）。\n\n" +
                                                     "侵权者将被记录（含运行时溯源指纹）并可能面临平台下架、公开通报及民事索赔。"
                                             } else {
                                                 com.soreverse.mcp.core.Provenance.REDISTRIBUTION_NOTICE

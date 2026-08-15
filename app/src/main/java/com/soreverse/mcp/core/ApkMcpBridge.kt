@@ -26,13 +26,7 @@ import org.json.JSONObject
  */
 class ApkMcpBridge(private val settings: SettingsStore) {
 
-    data class ToolDef(
-        val name: String,
-        val title: String?,
-        val description: String?,
-        val inputSchema: JSONObject?,
-        val outputSchema: JSONObject?
-    )
+    data class ToolDef(val name: String, val title: String?, val description: String?, val inputSchema: JSONObject?, val outputSchema: JSONObject?)
 
     data class State(
         val url: String = "",
@@ -108,7 +102,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                     url = url,
                     online = false,
                     lastError =
-                        e.message ?: e.javaClass.simpleName,
+                    e.message ?: e.javaClass.simpleName,
                     probes = prev.probes + 1,
                     probeFailures = prev.probeFailures + 1,
                     totalLatencyMs = prev.totalLatencyMs,
@@ -162,7 +156,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 url = url,
                 online = false,
                 lastError =
-                    e.message ?: e.javaClass.simpleName,
+                e.message ?: e.javaClass.simpleName,
                 probes = prev.probes + 1,
                 probeFailures = prev.probeFailures + 1,
                 totalLatencyMs = prev.totalLatencyMs,
@@ -235,7 +229,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                                     url = url,
                                     online = false,
                                     lastError =
-                                        e.message ?: e.javaClass.simpleName,
+                                    e.message ?: e.javaClass.simpleName,
                                     tools = emptyList(),
                                     lastCheckedAt = System.currentTimeMillis()
                                 )
@@ -255,12 +249,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             healthThread = null
         }
 
-        private fun buildJsonRpc(
-            url: String,
-            method: String,
-            params: JSONObject,
-            id: Int
-        ): Request {
+        private fun buildJsonRpc(url: String, method: String, params: JSONObject, id: Int): Request {
             val body = JSONObject()
                 .put("jsonrpc", "2.0")
                 .put("id", id)
@@ -375,8 +364,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         }
     }
 
-    fun configured(): Boolean =
-        settings.apkMcpConfigs.isNotEmpty() || settings.apkMcpUrl.isNotBlank()
+    fun configured(): Boolean = settings.apkMcpConfigs.isNotEmpty() || settings.apkMcpUrl.isNotBlank()
 
     /**
      * Auto-discover APK MCP servers on the standard ports.
