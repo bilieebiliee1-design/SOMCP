@@ -118,8 +118,6 @@ internal class EngineRuntime(internal val context: Context) {
     }
 
     internal fun hex(v: Long) = "0x${v.toString(16)}"
-    internal fun sha256(bytes: ByteArray) =
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-    internal fun checksums(bytes: ByteArray) =
-        JSONObject().put("sha256", sha256(bytes)).put("size", bytes.size)
+    internal fun sha256(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    internal fun checksums(bytes: ByteArray) = JSONObject().put("sha256", sha256(bytes)).put("size", bytes.size)
 }

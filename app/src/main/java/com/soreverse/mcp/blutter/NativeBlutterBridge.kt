@@ -6,14 +6,7 @@ internal object NativeBlutterBridge {
         true
     }.getOrDefault(false)
 
-    fun run(
-        libraryName: String,
-        libappFd: Int,
-        libflutterFd: Int,
-        resultFd: Int,
-        optionsJson: String,
-        cancellationToken: Long
-    ): Int {
+    fun run(libraryName: String, libappFd: Int, libflutterFd: Int, resultFd: Int, optionsJson: String, cancellationToken: Long): Int {
         check(available) { "Blutter native bridge is unavailable" }
         return nativeRun(
             libraryName,
@@ -29,13 +22,6 @@ internal object NativeBlutterBridge {
         if (available) nativeCancel(cancellationToken)
     }
 
-    private external fun nativeRun(
-        libraryName: String,
-        libappFd: Int,
-        libflutterFd: Int,
-        resultFd: Int,
-        optionsJson: String,
-        cancellationToken: Long
-    ): Int
+    private external fun nativeRun(libraryName: String, libappFd: Int, libflutterFd: Int, resultFd: Int, optionsJson: String, cancellationToken: Long): Int
     private external fun nativeCancel(cancellationToken: Long)
 }

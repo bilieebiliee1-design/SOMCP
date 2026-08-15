@@ -40,7 +40,36 @@ internal fun EngineRuntime.unidbgDispatch(
             JSONObject().put(
                 "methods",
                 JSONArray(
-                    listOf("session_open", "session_list", "session_close", "session_call", "session_call_address", "session_dump", "session_memory_maps", "session_registers", "session_modules", "session_exports", "session_trace_code", "session_breakpoint_add", "session_memory_write", "session_memory_map", "session_memory_protect", "session_memory_unmap", "native_schemas", "native_tool", "call", "dump", "modules", "exports", "imports", "reflect", "framework_matrix", "stub_template", "hook_template", "env_template")
+                    listOf(
+                        "session_open",
+                        "session_list",
+                        "session_close",
+                        "session_call",
+                        "session_call_address",
+                        "session_dump",
+                        "session_memory_maps",
+                        "session_registers",
+                        "session_modules",
+                        "session_exports",
+                        "session_trace_code",
+                        "session_breakpoint_add",
+                        "session_memory_write",
+                        "session_memory_map",
+                        "session_memory_protect",
+                        "session_memory_unmap",
+                        "native_schemas",
+                        "native_tool",
+                        "call",
+                        "dump",
+                        "modules",
+                        "exports",
+                        "imports",
+                        "reflect",
+                        "framework_matrix",
+                        "stub_template",
+                        "hook_template",
+                        "env_template"
+                    )
                 )
             ).put(
                 "roots",
@@ -1151,61 +1180,59 @@ private fun EngineRuntime.unidbgDebuggerPlan(op: String): JSONObject = JSONObjec
         )
     )
 
-private fun EngineRuntime.unidbgStubTemplate(className: String, methodName: String): JSONObject =
-    JSONObject()
-        .put("type", "java-class-stub")
-        .put("className", className.ifBlank { "android/content/Context" })
-        .put("methodName", methodName.ifBlank { "getPackageName" })
-        .put(
-            "purpose",
-            "Use this template when Unidbg fails on missing Android framework class/method resolution."
-        )
-        .put(
-            "kotlinSketch",
-            JSONArray(
-                listOf(
-                    "Detect className/methodName in Unidbg failure trace",
-                    "Register or intercept the Java class in DalvikVM",
-                    "Return deterministic app-specific values from Settings/env template",
-                    "Keep the stub narrow and library-specific to avoid unsafe global behavior"
-                )
+private fun EngineRuntime.unidbgStubTemplate(className: String, methodName: String): JSONObject = JSONObject()
+    .put("type", "java-class-stub")
+    .put("className", className.ifBlank { "android/content/Context" })
+    .put("methodName", methodName.ifBlank { "getPackageName" })
+    .put(
+        "purpose",
+        "Use this template when Unidbg fails on missing Android framework class/method resolution."
+    )
+    .put(
+        "kotlinSketch",
+        JSONArray(
+            listOf(
+                "Detect className/methodName in Unidbg failure trace",
+                "Register or intercept the Java class in DalvikVM",
+                "Return deterministic app-specific values from Settings/env template",
+                "Keep the stub narrow and library-specific to avoid unsafe global behavior"
             )
         )
-        .put(
-            "exampleReturnValues",
-            JSONObject()
-                .put("getPackageName", "com.example.target")
-                .put("getFilesDir", "/data/data/com.example.target/files")
-                .put("getCacheDir", "/data/data/com.example.target/cache")
-        )
+    )
+    .put(
+        "exampleReturnValues",
+        JSONObject()
+            .put("getPackageName", "com.example.target")
+            .put("getFilesDir", "/data/data/com.example.target/files")
+            .put("getCacheDir", "/data/data/com.example.target/cache")
+    )
 
-private fun EngineRuntime.unidbgHookTemplate(hookName: String, symbolOrApi: String): JSONObject =
-    JSONObject()
-        .put("type", "native-or-framework-hook")
-        .put("hookName", hookName.ifBlank { "anti_emulator_bypass" })
-        .put("target", symbolOrApi.ifBlank { "__system_property_get / open / access / ptrace" })
-        .put(
-            "purpose",
-            "Use this template when a SO performs environment, filesystem, syscall, or anti-analysis checks."
-        )
-        .put(
-            "strategy",
-            JSONArray(
-                listOf(
-                    "Identify failing API from trace",
-                    "Return realistic device/app data",
-                    "Avoid broad hooks that hide real bugs",
-                    "Record hook hits in diagnostics"
-                )
+private fun EngineRuntime.unidbgHookTemplate(hookName: String, symbolOrApi: String): JSONObject = JSONObject()
+    .put("type", "native-or-framework-hook")
+    .put("hookName", hookName.ifBlank { "anti_emulator_bypass" })
+    .put("target", symbolOrApi.ifBlank { "__system_property_get / open / access / ptrace" })
+    .put(
+        "purpose",
+        "Use this template when a SO performs environment, filesystem, syscall, or anti-analysis checks."
+    )
+    .put(
+        "strategy",
+        JSONArray(
+            listOf(
+                "Identify failing API from trace",
+                "Return realistic device/app data",
+                "Avoid broad hooks that hide real bugs",
+                "Record hook hits in diagnostics"
             )
         )
-        .put(
-            "exampleValues",
-            JSONObject()
-                .put("ro.product.model", "Pixel 7")
-                .put("ro.build.version.sdk", "33")
-                .put("/proc/self/status", "TracerPid:\t0")
-        )
+    )
+    .put(
+        "exampleValues",
+        JSONObject()
+            .put("ro.product.model", "Pixel 7")
+            .put("ro.build.version.sdk", "33")
+            .put("/proc/self/status", "TracerPid:\t0")
+    )
 
 private fun EngineRuntime.unidbgEnvironmentTemplate(): JSONObject = JSONObject()
     .put("packageName", "com.example.target")
@@ -1266,7 +1293,20 @@ internal fun EngineRuntime.emulationStatus(): JSONObject {
                 .put(
                     "requiresHooks",
                     JSONArray(
-                        listOf("Context", "Application", "PackageManager", "Resources", "Build fields", "Settings/Secure", "TelephonyManager", "ActivityThread", "ClassLoader", "filesystem paths", "network/system properties", "anti-debug/anti-emulator checks")
+                        listOf(
+                            "Context",
+                            "Application",
+                            "PackageManager",
+                            "Resources",
+                            "Build fields",
+                            "Settings/Secure",
+                            "TelephonyManager",
+                            "ActivityThread",
+                            "ClassLoader",
+                            "filesystem paths",
+                            "network/system properties",
+                            "anti-debug/anti-emulator checks"
+                        )
                     )
                 )
                 .put(
@@ -1322,13 +1362,7 @@ internal fun EngineRuntime.emulationStatus(): JSONObject {
         )
 }
 
-internal fun EngineRuntime.emulate(
-    workspaceId: String,
-    editSessionId: String,
-    symbolName: String,
-    args: JSONArray,
-    trace: Boolean
-): JSONObject = guarded {
+internal fun EngineRuntime.emulate(workspaceId: String, editSessionId: String, symbolName: String, args: JSONArray, trace: Boolean): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     val result = unidbg.emulate(bytes, elf.architecture, symbolName, args, trace)
@@ -1350,12 +1384,7 @@ internal fun EngineRuntime.emulate(
     )
 }
 
-internal fun EngineRuntime.dumpMemory(
-    workspaceId: String,
-    editSessionId: String,
-    addr: Long,
-    size: Int
-): JSONObject = guarded {
+internal fun EngineRuntime.dumpMemory(workspaceId: String, editSessionId: String, addr: Long, size: Int): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     val result = unidbg.dumpMemory(bytes, elf.architecture, addr, size.coerceIn(1, 65536))

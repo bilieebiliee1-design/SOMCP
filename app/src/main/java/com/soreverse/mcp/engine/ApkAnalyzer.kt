@@ -11,18 +11,9 @@ internal class ApkAnalysisLimitException(message: String) : IllegalArgumentExcep
 internal object ApkAnalyzer {
     const val MAX_INPUT_BYTES = 512L * 1024L * 1024L
 
-    data class Limits(
-        val maxEntries: Int = 100_000,
-        val maxParsedEntryBytes: Int = 128 * 1024 * 1024,
-        val maxParsedTotalBytes: Long = 256L * 1024L * 1024L
-    )
+    data class Limits(val maxEntries: Int = 100_000, val maxParsedEntryBytes: Int = 128 * 1024 * 1024, val maxParsedTotalBytes: Long = 256L * 1024L * 1024L)
 
-    fun analyze(
-        bytes: ByteArray,
-        path: String,
-        entryLimit: Int,
-        limits: Limits = Limits()
-    ): JSONObject {
+    fun analyze(bytes: ByteArray, path: String, entryLimit: Int, limits: Limits = Limits()): JSONObject {
         if (bytes.size.toLong() >
             MAX_INPUT_BYTES
         ) {
@@ -91,9 +82,11 @@ internal object ApkAnalyzer {
                     manifest = parseManifestSummary(data)
                 } else if (!entry.isDirectory && name == "resources.arsc") {
                     resourcesArsc = true
-                } else if (!entry.isDirectory && name.startsWith("META-INF/", true) &&
+                } else if (!entry.isDirectory &&
+                    name.startsWith("META-INF/", true) &&
                     (
-                        name.endsWith(".RSA", true) || name.endsWith(".DSA", true) ||
+                        name.endsWith(".RSA", true) ||
+                            name.endsWith(".DSA", true) ||
                             name.endsWith(".EC", true) ||
                             name.endsWith(".SF", true) ||
                             name.endsWith("MANIFEST.MF", true)
@@ -152,12 +145,7 @@ internal object ApkAnalyzer {
         )
     }
 
-    private fun readEntry(
-        zip: ZipInputStream,
-        name: String,
-        limits: Limits,
-        parsedBefore: Long
-    ): ByteArray {
+    private fun readEntry(zip: ZipInputStream, name: String, limits: Limits, parsedBefore: Long): ByteArray {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(16 * 1024)
         var entryBytes = 0L
@@ -200,7 +188,9 @@ internal object ApkAnalyzer {
         }
         return JSONObject().put("entry", name).put("size", dex.size).put("magic", magic).put(
             "valid",
-            dex.size >= 0x70 && dex[0] == 'd'.code.toByte() && dex[1] == 'e'.code.toByte() &&
+            dex.size >= 0x70 &&
+                dex[0] == 'd'.code.toByte() &&
+                dex[1] == 'e'.code.toByte() &&
                 dex[2] == 'x'.code.toByte() &&
                 dex[3] == '\n'.code.toByte()
         ).put(
@@ -239,8 +229,7 @@ internal object ApkAnalyzer {
         ).put("textPreview", if (printable.isBlank()) JSONObject.NULL else printable)
     }
 
-    private fun sha256(bytes: ByteArray): String =
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
-            "%02x".format(it)
-        }
+    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+        "%02x".format(it)
+    }
 }

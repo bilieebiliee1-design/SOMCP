@@ -16,10 +16,9 @@ class BlutterRunnerService : Service() {
     private val nextToken = AtomicLong(1)
 
     private val binder = object : IBlutterRunner.Stub() {
-        override fun getManifestJson(): String =
-            assets.open("blutter/runners.json").bufferedReader().use {
-                it.readText()
-            }
+        override fun getManifestJson(): String = assets.open("blutter/runners.json").bufferedReader().use {
+            it.readText()
+        }
 
         override fun run(
             jobId: String,

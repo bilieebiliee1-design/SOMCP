@@ -44,13 +44,7 @@ sealed interface UpdateCheckResult {
 
 sealed interface UpdateDownloadEvent {
     data class Probing(val total: Int) : UpdateDownloadEvent
-    data class ProbeResult(
-        val source: String,
-        val reachable: Boolean,
-        val latencyMs: Long,
-        val completed: Int,
-        val total: Int
-    ) : UpdateDownloadEvent
+    data class ProbeResult(val source: String, val reachable: Boolean, val latencyMs: Long, val completed: Int, val total: Int) : UpdateDownloadEvent
     data class Selected(val source: String) : UpdateDownloadEvent
     data class Downloading(val source: String, val percent: Int) : UpdateDownloadEvent
     data object Verifying : UpdateDownloadEvent
@@ -137,160 +131,158 @@ class GitHubUpdateManager(private val context: Context) {
         }
     }
 
-    suspend fun download(
-        release: GitHubRelease,
-        forcedSource: String? = null,
-        onEvent: (UpdateDownloadEvent) -> Unit
-    ): Result<File> = withContext(Dispatchers.IO) {
-        try {
-            downloadMutex.withLock {
-                suspend fun emit(event: UpdateDownloadEvent) {
-                    withContext(Dispatchers.Main.immediate) { onEvent(event) }
-                }
-                // A previous (now-cancelled) attempt may have just completed and
-                // populated the cache; re-check inside the lock so a mirror switch
-                // that raced a finishing download reuses the verified file instead
-                // of downloading again.
-                cachedDownload(release)?.let { return@withLock Result.success(it) }
-                val directory = File(context.cacheDir, "updates").apply { mkdirs() }
-                val target = File(directory, release.apkName.substringAfterLast('/'))
-                val partial = File(directory, "${target.name}.part")
-                val verified = File(directory, "${target.name}.verified")
-                directory.listFiles()?.filter {
-                    it !in setOf(target, verified)
-                }?.forEach { it.delete() }
-                // When the user manually picks a mirror we honour it first and
-                // skip the speed probe entirely (their choice solves the
-                // "fast to probe but slow to download" case); the remaining
-                // mirrors stay as automatic fallbacks after it.
-                val candidates = if (forcedSource != null) {
-                    val all = DownloadMirrorPolicy.candidates(release.apkUrl)
-                    val preferred = all.filter { sourceName(it) == forcedSource }
-                    (preferred + all.filterNot { it in preferred }).ifEmpty { all }
-                } else {
-                    rankedDownloadUrls(release.apkUrl, ::emit)
-                }
-                var lastFailure: Throwable? = null
-                var downloaded = false
-                for (url in candidates) {
-                    ensureActive()
-                    partial.delete()
-                    try {
-                        emit(UpdateDownloadEvent.Selected(sourceName(url)))
-                        val request = Request.Builder()
-                            .url(url)
-                            .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
-                            .build()
-                        client.newCall(request).await().use { response ->
-                            if (!response.isSuccessful) {
-                                error(
-                                    "Download HTTP ${response.code} ${response.message}"
-                                )
-                            }
-                            val body = response.body
-                            val total = body.contentLength().takeIf { it > 0 } ?: release.apkSize
-                            body.byteStream().use { input ->
-                                partial.outputStream().use { output ->
-                                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                                    var copied = 0L
-                                    var lastPercent = -1
-                                    while (true) {
-                                        currentCoroutineContext().ensureActive()
-                                        val count = input.read(buffer)
-                                        if (count < 0) break
-                                        output.write(buffer, 0, count)
-                                        copied += count
-                                        if (total > 0) {
-                                            val percent = ((copied * 100) / total).toInt().coerceIn(
-                                                0,
-                                                100
-                                            )
-                                            if (percent != lastPercent) {
-                                                lastPercent = percent
-                                                emit(
-                                                    UpdateDownloadEvent.Downloading(
-                                                        sourceName(url),
-                                                        percent
-                                                    )
+    suspend fun download(release: GitHubRelease, forcedSource: String? = null, onEvent: (UpdateDownloadEvent) -> Unit): Result<File> =
+        withContext(Dispatchers.IO) {
+            try {
+                downloadMutex.withLock {
+                    suspend fun emit(event: UpdateDownloadEvent) {
+                        withContext(Dispatchers.Main.immediate) { onEvent(event) }
+                    }
+                    // A previous (now-cancelled) attempt may have just completed and
+                    // populated the cache; re-check inside the lock so a mirror switch
+                    // that raced a finishing download reuses the verified file instead
+                    // of downloading again.
+                    cachedDownload(release)?.let { return@withLock Result.success(it) }
+                    val directory = File(context.cacheDir, "updates").apply { mkdirs() }
+                    val target = File(directory, release.apkName.substringAfterLast('/'))
+                    val partial = File(directory, "${target.name}.part")
+                    val verified = File(directory, "${target.name}.verified")
+                    directory.listFiles()?.filter {
+                        it !in setOf(target, verified)
+                    }?.forEach { it.delete() }
+                    // When the user manually picks a mirror we honour it first and
+                    // skip the speed probe entirely (their choice solves the
+                    // "fast to probe but slow to download" case); the remaining
+                    // mirrors stay as automatic fallbacks after it.
+                    val candidates = if (forcedSource != null) {
+                        val all = DownloadMirrorPolicy.candidates(release.apkUrl)
+                        val preferred = all.filter { sourceName(it) == forcedSource }
+                        (preferred + all.filterNot { it in preferred }).ifEmpty { all }
+                    } else {
+                        rankedDownloadUrls(release.apkUrl, ::emit)
+                    }
+                    var lastFailure: Throwable? = null
+                    var downloaded = false
+                    for (url in candidates) {
+                        ensureActive()
+                        partial.delete()
+                        try {
+                            emit(UpdateDownloadEvent.Selected(sourceName(url)))
+                            val request = Request.Builder()
+                                .url(url)
+                                .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
+                                .build()
+                            client.newCall(request).await().use { response ->
+                                if (!response.isSuccessful) {
+                                    error(
+                                        "Download HTTP ${response.code} ${response.message}"
+                                    )
+                                }
+                                val body = response.body
+                                val total = body.contentLength().takeIf { it > 0 } ?: release.apkSize
+                                body.byteStream().use { input ->
+                                    partial.outputStream().use { output ->
+                                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                        var copied = 0L
+                                        var lastPercent = -1
+                                        while (true) {
+                                            currentCoroutineContext().ensureActive()
+                                            val count = input.read(buffer)
+                                            if (count < 0) break
+                                            output.write(buffer, 0, count)
+                                            copied += count
+                                            if (total > 0) {
+                                                val percent = ((copied * 100) / total).toInt().coerceIn(
+                                                    0,
+                                                    100
                                                 )
+                                                if (percent != lastPercent) {
+                                                    lastPercent = percent
+                                                    emit(
+                                                        UpdateDownloadEvent.Downloading(
+                                                            sourceName(url),
+                                                            percent
+                                                        )
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
-                        if (partial.length() > 4 && partial.inputStream().use {
-                                val header = ByteArray(4)
-                                it.read(header) == 4 &&
-                                    header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+                            if (partial.length() > 4 &&
+                                partial.inputStream().use {
+                                    val header = ByteArray(4)
+                                    it.read(header) == 4 &&
+                                        header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+                                }
+                            ) {
+                                downloaded = true
+                                break
                             }
-                        ) {
-                            downloaded = true
-                            break
+                            error("Downloaded asset is not a valid APK archive")
+                        } catch (error: CancellationException) {
+                            partial.delete()
+                            throw error
+                        } catch (error: Throwable) {
+                            lastFailure = error
                         }
-                        error("Downloaded asset is not a valid APK archive")
-                    } catch (error: CancellationException) {
-                        partial.delete()
-                        throw error
-                    } catch (error: Throwable) {
-                        lastFailure = error
                     }
-                }
-                require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
-                emit(UpdateDownloadEvent.Verifying)
-                // Checksum verification is best-effort: the payload has already
-                // been validated as a well-formed APK/ZIP above. If the checksum
-                // asset cannot be fetched in time (mirror down / slow / missing),
-                // we must NOT hang or hard-fail the whole update — we downgrade to
-                // an unverified-but-installable result instead of dying on one
-                // tree. A checksum that is fetched AND mismatches is still a hard
-                // failure (that means tampering / corruption).
-                val verifiedHash = release.checksumUrl?.let { url ->
-                    runCatching { verifyChecksum(partial, url, target.name) }
-                        .onFailure {
-                            emit(
-                                UpdateDownloadEvent.VerifySkipped(
-                                    it.message ?: "checksum unavailable"
+                    require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
+                    emit(UpdateDownloadEvent.Verifying)
+                    // Checksum verification is best-effort: the payload has already
+                    // been validated as a well-formed APK/ZIP above. If the checksum
+                    // asset cannot be fetched in time (mirror down / slow / missing),
+                    // we must NOT hang or hard-fail the whole update — we downgrade to
+                    // an unverified-but-installable result instead of dying on one
+                    // tree. A checksum that is fetched AND mismatches is still a hard
+                    // failure (that means tampering / corruption).
+                    val verifiedHash = release.checksumUrl?.let { url ->
+                        runCatching { verifyChecksum(partial, url, target.name) }
+                            .onFailure {
+                                emit(
+                                    UpdateDownloadEvent.VerifySkipped(
+                                        it.message ?: "checksum unavailable"
+                                    )
                                 )
-                            )
-                        }
-                        .getOrElse { failure ->
-                            if (failure is ChecksumMismatchException) throw failure
-                            null
-                        }
-                } ?: run {
-                    emit(UpdateDownloadEvent.VerifySkipped("no checksum published"))
-                    null
+                            }
+                            .getOrElse { failure ->
+                                if (failure is ChecksumMismatchException) throw failure
+                                null
+                            }
+                    } ?: run {
+                        emit(UpdateDownloadEvent.VerifySkipped("no checksum published"))
+                        null
+                    }
+                    runCatching {
+                        Files.move(
+                            partial.toPath(),
+                            target.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE
+                        )
+                    }.getOrElse {
+                        Files.move(
+                            partial.toPath(),
+                            target.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING
+                        )
+                    }
+                    // Only persist the .verified marker when we actually verified the
+                    // hash; otherwise the cached-download fast path must re-check.
+                    if (verifiedHash != null) verified.writeText(verifiedHash) else verified.delete()
+                    Result.success(target)
                 }
-                runCatching {
-                    Files.move(
-                        partial.toPath(),
-                        target.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE
-                    )
-                }.getOrElse {
-                    Files.move(
-                        partial.toPath(),
-                        target.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING
-                    )
-                }
-                // Only persist the .verified marker when we actually verified the
-                // hash; otherwise the cached-download fast path must re-check.
-                if (verifiedHash != null) verified.writeText(verifiedHash) else verified.delete()
-                Result.success(target)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                File(
+                    File(context.cacheDir, "updates"),
+                    "${release.apkName.substringAfterLast('/')}.part"
+                ).delete()
+                Result.failure(error)
             }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            File(
-                File(context.cacheDir, "updates"),
-                "${release.apkName.substringAfterLast('/')}.part"
-            ).delete()
-            Result.failure(error)
         }
-    }
 
     fun cachedDownload(release: GitHubRelease): File? {
         val file = File(File(context.cacheDir, "updates"), release.apkName.substringAfterLast('/'))
@@ -319,10 +311,7 @@ class GitHubUpdateManager(private val context: Context) {
         return file.takeIf { looksLikeApk }
     }
 
-    private suspend fun rankedDownloadUrls(
-        original: String,
-        emit: suspend (UpdateDownloadEvent) -> Unit
-    ): List<String> = coroutineScope {
+    private suspend fun rankedDownloadUrls(original: String, emit: suspend (UpdateDownloadEvent) -> Unit): List<String> = coroutineScope {
         val candidates = DownloadMirrorPolicy.candidates(original)
         emit(UpdateDownloadEvent.Probing(candidates.size))
         val completed = java.util.concurrent.atomic.AtomicInteger(0)
@@ -365,10 +354,9 @@ class GitHubUpdateManager(private val context: Context) {
         .getOrDefault(url.substringBefore('/'))
 
     /** Distinct, user-selectable mirror host names for [release], in policy order. */
-    fun mirrorSources(release: GitHubRelease): List<String> =
-        DownloadMirrorPolicy.candidates(release.apkUrl).map(::sourceName).filter {
-            it.isNotBlank()
-        }.distinct()
+    fun mirrorSources(release: GitHubRelease): List<String> = DownloadMirrorPolicy.candidates(release.apkUrl).map(::sourceName).filter {
+        it.isNotBlank()
+    }.distinct()
 
     fun install(file: File): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
@@ -422,11 +410,7 @@ class GitHubUpdateManager(private val context: Context) {
         return false
     }
 
-    private suspend fun verifyChecksum(
-        file: File,
-        url: String,
-        assetName: String = file.name
-    ): String {
+    private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
         var expected: String? = null
         var lastFailure: Throwable? = null
         // Bound the total time spent chasing checksum mirrors so a slow/hanging

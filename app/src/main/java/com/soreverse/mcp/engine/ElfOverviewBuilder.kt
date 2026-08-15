@@ -55,14 +55,7 @@ object ElfOverviewBuilder {
         "libaaudio.so" to "AAudio 音频库"
     )
 
-    fun build(
-        elf: ElfFile,
-        bytes: ByteArray,
-        fileName: String,
-        sha256: String,
-        size: Long = bytes.size.toLong(),
-        functionCountHint: Int = -1
-    ): JSONObject {
+    fun build(elf: ElfFile, bytes: ByteArray, fileName: String, sha256: String, size: Long = bytes.size.toLong(), functionCountHint: Int = -1): JSONObject {
         val allSymbols = (elf.symbols + elf.dynSymbols).distinctBy {
             it.name to it.value to
                 it.imported
@@ -604,12 +597,7 @@ object ElfOverviewBuilder {
             )
     }
 
-    private data class SegmentRow(
-        val type: Long,
-        val flags: Long,
-        val filesz: Long,
-        val memsz: Long
-    )
+    private data class SegmentRow(val type: Long, val flags: Long, val filesz: Long, val memsz: Long)
 
     private fun classifySegment(seg: SegmentRow): String = when {
         seg.flags and PF_X != 0L -> "exec"
@@ -641,8 +629,7 @@ object ElfOverviewBuilder {
         return bytes.copyOfRange(start, end).toString(Charsets.UTF_8).takeIf { it.isNotBlank() }
     }
 
-    private fun dynFirst(elf: ElfFile, tag: Long): Long =
-        elf.dynamicEntries.firstOrNull { it.tag == tag }?.value ?: 0L
+    private fun dynFirst(elf: ElfFile, tag: Long): Long = elf.dynamicEntries.firstOrNull { it.tag == tag }?.value ?: 0L
 
     private fun dynHas(elf: ElfFile, tag: Long): Boolean = elf.dynamicEntries.any { it.tag == tag }
 
@@ -877,26 +864,14 @@ object ElfOverviewBuilder {
             )
     }
 
-    private fun feature(
-        id: String,
-        active: Boolean,
-        label: String,
-        tone: String,
-        description: String
-    ): JSONObject = JSONObject()
+    private fun feature(id: String, active: Boolean, label: String, tone: String, description: String): JSONObject = JSONObject()
         .put("id", id)
         .put("active", active)
         .put("label", label)
         .put("tone", tone)
         .put("description", description)
 
-    private fun factorItem(
-        id: String,
-        weight: Double,
-        tone: String,
-        title: String,
-        detail: String
-    ): JSONObject = JSONObject()
+    private fun factorItem(id: String, weight: Double, tone: String, title: String, detail: String): JSONObject = JSONObject()
         .put("id", id)
         .put("weight", weight)
         .put("tone", tone)
@@ -904,21 +879,14 @@ object ElfOverviewBuilder {
         .put("detail", detail)
         .put("text", title)
 
-    private fun recommendItem(id: String, tone: String, title: String, detail: String): JSONObject =
-        JSONObject()
-            .put("id", id)
-            .put("tone", tone)
-            .put("title", title)
-            .put("detail", detail)
-            .put("text", "• $title：$detail")
+    private fun recommendItem(id: String, tone: String, title: String, detail: String): JSONObject = JSONObject()
+        .put("id", id)
+        .put("tone", tone)
+        .put("title", title)
+        .put("detail", detail)
+        .put("text", "• $title：$detail")
 
-    private fun attackItem(
-        id: String,
-        tone: String,
-        title: String,
-        value: String,
-        detail: String
-    ): JSONObject = JSONObject()
+    private fun attackItem(id: String, tone: String, title: String, value: String, detail: String): JSONObject = JSONObject()
         .put("id", id)
         .put("tone", tone)
         .put("title", title)
@@ -957,8 +925,7 @@ object ElfOverviewBuilder {
         else -> elf.machineName
     }
 
-    private fun pct(value: Long, total: Long): Double =
-        if (total > 0) (value * 1000.0 / total).roundToInt() / 10.0 else 0.0
+    private fun pct(value: Long, total: Long): Double = if (total > 0) (value * 1000.0 / total).roundToInt() / 10.0 else 0.0
 
     private fun hex(v: Long): String = "0x${v.toString(16)}"
 
