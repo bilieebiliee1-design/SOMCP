@@ -119,9 +119,12 @@ jobs:
           echo "ktlint check passed."
 
       - name: Dependency review
+        if: github.event.before != '0000000000000000000000000000000000000000'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+          base-ref: ${{ github.event.before }}
+          head-ref: ${{ github.sha }}
 
       - name: Lint check
         run: gradle :app:lintDebug --stacktrace
