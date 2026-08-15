@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -81,6 +82,7 @@ internal fun AnalyzeTab(
     onLeaveDeepReport: () -> Unit,
 ) {
     val context = LocalContext.current
+    val runUsage by deepService.usage.collectAsState()
     val deepChatListState = rememberLazyListState()
     var followDeepOutput by remember { mutableStateOf(true) }
     val deepAtBottom by remember {
@@ -334,6 +336,7 @@ internal fun AnalyzeTab(
                         }
                     },
                 )
+                DeepAnalysisUsagePanel(runUsage, settings, t.zh)
                 LazyColumn(
                     state = deepChatListState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -443,5 +446,48 @@ internal fun AnalyzeTab(
             },
             confirmButton = { TextButton(onClick = { showWorkspaces = false }) { Text(if (t.zh) "完成" else "Done") } },
         )
+    }
+}
+
+@Composable
+private fun DeepAnalysisUsagePanel(
+    usage: com.soreverse.mcp.core.RikkaRunUsage,
+    settings: SettingsStore,
+    zh: Boolean,
+) {
+    val last = usage.lastTurn
+    val total = usage.cumulative
+    val windowText = if (settings.contextWindowIsUnknown) {
+        if (zh) "上下文窗口未知；按 ${settings.contextBudgetTokens} token 保守预算" else
+            "Context window unknown; conservatively budgeting ${settings.contextBudgetTokens} tokens"
+    } else {
+        val percentage = if (last.isEmpty()) null else (last.contextTokens * 100 / settings.effectiveContextWindow).coerceIn(0, 100)
+        if (zh) "本轮上下文 ${last.contextTokens} / ${settings.effectiveContextWindow} token${percentage?.let { "（$it%）" }.orEmpty()}" else
+            "Current context ${last.contextTokens} / ${settings.effectiveContextWindow} tokens${percentage?.let { " ($it%)" }.orEmpty()}"
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 6.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(if (zh) "Token 用量" else "Token usage", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            if (usage.turns == 0) {
+                Text(if (zh) "服务端尚未返回 token usage" else "The provider has not returned token usage yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(
+                    if (zh) "第 ${usage.turns} 轮：输入 ${last.inputTokens}，输出 ${last.outputTokens}，缓存读 ${last.cacheReadTokens}，缓存写 ${last.cacheWriteTokens}${last.reasoningTokens.takeIf { it > 0 }?.let { "，推理 $it" }.orEmpty()}" else
+                        "Turn ${usage.turns}: in ${last.inputTokens}, out ${last.outputTokens}, cache read ${last.cacheReadTokens}, cache write ${last.cacheWriteTokens}${last.reasoningTokens.takeIf { it > 0 }?.let { ", reasoning $it" }.orEmpty()}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    if (zh) "累计：输入 ${total.inputTokens}，输出 ${total.outputTokens}，上下文累计 ${total.contextTokens}" else
+                        "Total: in ${total.inputTokens}, out ${total.outputTokens}, context total ${total.contextTokens}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(windowText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }

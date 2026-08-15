@@ -141,7 +141,10 @@ private fun IntegrityGate(content: @Composable () -> Unit) {
             result = IntegrityGuard.verify(context.applicationContext)
         }
     }
-    if (result.trusted) {
+    // A debug build never matches the pinned release signer, so the gate would
+    // count down and exit on every build from source. Show the content; the
+    // untrusted state is still surfaced through system_control/health.
+    if (result.trusted || !IntegrityGuard.enforcementEnabled()) {
         content()
         return
     }

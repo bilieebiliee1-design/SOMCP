@@ -127,7 +127,11 @@ object SignatureVerifier {
      *         verification fails or the expected digest is not configured
      */
     fun verify(context: Context): Boolean {
-        val expected = nativeGetExpectedSignerDigest().let { normalizeSignerDigest(it) }
+        // Must go through getExpectedSignerDigest(): it checks `loaded` and
+        // catches UnsatisfiedLinkError. Calling the external method directly here
+        // threw out of Application.onCreate on any build whose librz_native.so
+        // lacks the symbol (stub builds, failed extraction), killing startup.
+        val expected = normalizeSignerDigest(getExpectedSignerDigest())
         if (expected.isBlank()) {
             AppLog.i("SignatureVerifier: no release signer pin configured, skipping native verification")
             return true // no pin configured, skip

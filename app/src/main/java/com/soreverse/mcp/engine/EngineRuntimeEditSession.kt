@@ -47,6 +47,14 @@ internal fun EngineRuntime.editRollback(workspaceId: String, editSessionId: Stri
         val idx = if (snapshotIndex < 0) session.snapshots.size - 1 else snapshotIndex
         if (idx !in session.snapshots.indices) return@withSession err("SNAPSHOT_NOT_FOUND", "Snapshot index $idx out of range [0, ${session.snapshots.size - 1}]", "snapshotIndex", snapshotIndex)
         val snap = session.snapshots[idx]
+        if (snap.dataCopy.size != session.data.size) {
+            return@withSession err(
+                "UNSUPPORTED_OPERATION",
+                "Snapshot byte length (${snap.dataCopy.size}) differs from the session's current length (${session.data.size}); rolling back would corrupt the ELF.",
+                "snapshotIndex",
+                idx,
+            )
+        }
         val before = sha256(session.data)
         val keptPatches = session.patches.take(snap.patchCount)
         System.arraycopy(snap.dataCopy, 0, session.data, 0, session.data.size)
@@ -145,7 +153,20 @@ internal fun EngineRuntime.editReset(workspaceId: String, editSessionId: String)
         val beforePatches = session.patches.size
         val beforeUndone = session.undone.size
         val beforeSnapshots = session.snapshots.size
-        System.arraycopy(ws.data, 0, session.data, 0, session.data.size)
+        // A section-recovery session may have a different-sized ELF than the
+        // workspace original. Replacing the fixed-size backing array with
+        // arraycopy(session.data.size) used to throw on reset (or would leave a
+        // stale tail if reversed). A normal reset only applies when both byte
+        // arrays represent the same layout; otherwise fail explicitly.
+        if (session.data.size != ws.data.size) {
+            return@withSession err(
+                "UNSUPPORTED_OPERATION",
+                "This edit session has a reconstructed ELF layout and cannot be reset to the original bytes. Close it and open a new edit session from the workspace instead.",
+                "editSessionId",
+                editSessionId,
+            )
+        }
+        System.arraycopy(ws.data, 0, session.data, 0, ws.data.size)
         session.patches.clear()
         session.undone.clear()
         session.snapshots.clear()

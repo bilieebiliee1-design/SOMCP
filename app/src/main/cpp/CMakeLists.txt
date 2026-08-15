@@ -66,7 +66,18 @@ endif()
 # REQUIRE_NATIVE_BACKENDS (default OFF for local dev) turns a missing real
 # backend into a hard build failure, so release/CI builds can never ship an
 # APK that silently degraded to an empty stub .so.
-option(REQUIRE_NATIVE_BACKENDS "Fail the build if Rizin/LIEF backends are unavailable" OFF)
+# Debug builds retain the stub fallback for UI/protocol development on machines
+# that do not have the large cross-compiled toolchains installed. Release builds
+# must never do that: an APK that quietly replaces its advertised analyzer with a
+# 4 KiB JNI-less stub is not a valid release artifact.
+set(_somcp_require_native_default OFF)
+# Android Gradle normally supplies Release here. Some CMake/AGP combinations
+# leave it empty (the file already treats that as a release-like optimized
+# build below), so empty must be fail-closed too rather than re-enabling stubs.
+if(CMAKE_BUILD_TYPE STREQUAL "Release" OR NOT CMAKE_BUILD_TYPE)
+    set(_somcp_require_native_default ON)
+endif()
+option(REQUIRE_NATIVE_BACKENDS "Fail the build if Rizin/LIEF backends are unavailable" ${_somcp_require_native_default})
 set(RZ_SOURCES "")
 if(RIZIN_AVAILABLE)
     list(APPEND RZ_SOURCES rizin_core.cpp)

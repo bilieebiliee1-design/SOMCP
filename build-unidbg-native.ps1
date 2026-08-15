@@ -36,7 +36,10 @@ $ErrorActionPreference = "Stop"
 # cmake arguments from untrusted input (path-traversal guard).
 $ValidAbis = @("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 if ($ValidAbis -notcontains $Abi) { throw "Unsupported ABI '$Abi' - must be one of: $($ValidAbis -join ', ')" }
-$Project = (Resolve-Path "$PSScriptRoot/..").Path
+# This script lives at the repository root, so the project dir IS the script dir.
+# Resolving "$PSScriptRoot/.." pointed one level above the checkout, which made
+# every third_party/* lookup and the jniLibs output path miss.
+$Project = $PSScriptRoot
 $JniLibs = Join-Path $Project "app/src/main/jniLibs/$Abi"
 New-Item -ItemType Directory -Force -Path $JniLibs | Out-Null
 $Toolchain = Join-Path $Ndk "build/cmake/android.toolchain.cmake"

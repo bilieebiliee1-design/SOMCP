@@ -58,7 +58,7 @@ internal fun EngineRuntime.rzCfg(workspaceId: String, editSessionId: String, loc
     ok(payload)
 }
 
-internal fun EngineRuntime.rzXrefs(workspaceId: String, editSessionId: String, locator: String, direction: String = "to"): JSONObject = guarded {
+internal fun EngineRuntime.rzXrefs(workspaceId: String, editSessionId: String, locator: String, direction: String = "to", limit: Int = 0): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     if (!NativeEngine.active().available()) return@guarded err("RIZIN_UNAVAILABLE", "Rizin native backend not loaded for this ABI")
@@ -141,9 +141,20 @@ internal fun EngineRuntime.rzXrefs(workspaceId: String, editSessionId: String, l
             }
         }
     }
+    // analyze_xrefs advertises `limit`; honour it here. Counts below are computed
+    // from the trimmed array so sourceTypeCounts/xrefCount describe what the
+    // caller actually received.
+    val totalBeforeLimit = xrefs.length()
+    val effectiveLimit = limit.coerceAtLeast(0)
+    if (effectiveLimit in 1 until totalBeforeLimit) {
+        val trimmed = JSONArray()
+        for (i in 0 until effectiveLimit) trimmed.put(xrefs.getJSONObject(i))
+        payload.put("xrefs", trimmed)
+    }
+    val finalXrefs = payload.optJSONArray("xrefs") ?: JSONArray()
     val bySource = JSONObject()
-    for (i in 0 until xrefs.length()) {
-        val st = xrefs.getJSONObject(i).optString("sourceType", "direct")
+    for (i in 0 until finalXrefs.length()) {
+        val st = finalXrefs.getJSONObject(i).optString("sourceType", "direct")
         bySource.put(st, bySource.optInt(st, 0) + 1)
     }
     ok(
@@ -152,6 +163,8 @@ internal fun EngineRuntime.rzXrefs(workspaceId: String, editSessionId: String, l
             .put("symbolName", bareName)
             .put("direction", direction)
             .put("atVa", hex(atVa))
+            .put("truncated", finalXrefs.length() < totalBeforeLimit)
+            .put("totalXrefCount", totalBeforeLimit)
             .put("pltStubVa", pltStubVa?.let(::hex) ?: JSONObject.NULL)
             .put("resolvedVia", when {
                 sym?.imported == true && sym.value == 0L -> "plt_stub"
@@ -160,7 +173,7 @@ internal fun EngineRuntime.rzXrefs(workspaceId: String, editSessionId: String, l
             })
             .put("relocationSlots", JSONArray(relocations.map { hex(it.offset) }))
             .put("sourceTypeCounts", bySource)
-            .put("xrefCount", xrefs.length())
+            .put("xrefCount", finalXrefs.length())
             .put("sourceTypeLegend", JSONObject()
                 .put("direct", "Rizin analysis graph edge")
                 .put("relocation", "ELF relocation slot")

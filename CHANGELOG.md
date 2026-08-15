@@ -1,5 +1,51 @@
 # 更新日志
 
+## 未发布
+
+安全与正确性修复。以下条目对应对 `1.0.17` 的一次完整代码审查。
+
+### 原生签名校验（严重）
+
+- 修复 `signature_verify.cpp` 中的堆越界读：ZIP 条目边界用 `compressed_size` 校验，实际拷贝却用 `uncompressed_size`。伪造这两个字段可越界读取任意长度（实测触发 268 MB 越界读，ASan 崩溃）。现在 stored 条目要求两个长度相等，否则拒绝该条目。
+- 修复中央目录边界检查的 32 位回绕：`central_dir_offset + central_dir_size` 在 `uint32` 内相加后才与文件大小比较，`0xFFFFFF00 + 0x200` 回绕成 `0x100` 从而绕过检查。改为先提升到 `uint64` 再比较。
+- 修复 DER 解析器的死循环与未定义行为：原实现在两块无关堆分配之间做指针相减来推进游标（UB），结果为 0 时会无限 `push_back` 直至内存耗尽；随后又整段丢弃重新解析。现在按 TLV 头长度推进，并递归解析嵌套节点，深度上限 16 层。
+- 因为解析器此前从不递归，`extract_certificate_from_pkcs7()` 始终取不到证书，实际一直退化到按字节扫描的 `extract_certificate_fallback()`（只接受 50..4096 字节的 SEQUENCE，可能取错证书）。修复后走结构化路径。
+- 拒绝 deflate 压缩的签名条目，不再把压缩字节当作 DER 解析。
+- 新增宿主端解析器测试（`app/src/test/native/`），覆盖伪造长度、回绕、深层嵌套、截断输入等 16 项断言。
+
+### 启动与完整性
+
+- 修复自建版本启动即自杀：`IntegrityGuard.enforce()` 对签名不匹配无条件 `killProcess`，而 Debug 版必然使用 debug keystore、fork 后自签名版也必然不匹配，导致任何从源码构建的 APK 无法运行。现在 Debug 构建只记录警告，Release 保持强制。
+- 修复 `SignatureVerifier.verify()` 直接调用 `external` 方法而绕过 `loaded` 检查：在缺少该符号的构建上会从 `Application.onCreate` 抛出 `UnsatisfiedLinkError`，启动即崩溃。
+
+### 构建与 CI
+
+- 修复 `test-v4/v5/v6/v7` 四个 workflow 的无效 YAML：`INCOMPATIBLE_PATTERNS` 的续行未缩进，提前终止了 block scalar。这四个文件从未运行过，其中三个是唯一执行 `assembleRelease` 的流水线。
+- 修复同一处的许可证检查逻辑：反斜杠续行把七个模式拼成一行，循环实际只匹配一个无意义字符串，检查始终"通过"却什么都没查。改为 bash 数组逐项匹配。
+- Release 构建现在默认 `REQUIRE_NATIVE_BACKENDS=ON`：缺少 Rizin/LIEF 时构建失败，而不是静默编译空 stub。这正是 `1.0.17` 发布出 4888 字节 `librz_native.so` 的直接原因（issue #17）。
+- 修复 `build-unidbg-native.ps1` 的项目根目录计算：脚本位于仓库根目录，却用 `$PSScriptRoot/..` 指向了 checkout 的上一层，导致所有 `third_party/*` 与 jniLibs 路径失效，README 给出的命令无法工作。
+
+### 网络与默认暴露面
+
+- 新安装默认绑定 `127.0.0.1` 并开启 token。此前一次性迁移会把所有安装强制改成 `0.0.0.0` + 无认证，而该工具面可读写设备上任意 SO/APK。已有安装的设置不再被改写。
+- 公网隧道现在必须开启 token 才能启动，不再只打印警告就把无认证的工具面发布到互联网。
+- 修复 `so_open(action=open_url)` 的 SSRF 缺口：`instanceFollowRedirects = true` 使初始主机校验形同虚设，任何公网主机 302 到 `127.0.0.1` 即可访问内网。改为手动逐跳跟随并对每一跳复校验，上限 5 跳。
+- 更新下载不再允许"取不到校验和就装"：APK 是可执行代码，ZIP magic 只能证明结构不能证明来源，而候选源包含 19 个第三方代理。同时校验和只从 GitHub 官方地址获取，不再走镜像列表（否则镜像可以给自己的负载签名）。
+- cloudflared 下载按设备 ABI 选择资源，不再对所有 ABI 都下发 arm64 二进制；下载后校验 ELF magic 与 `e_machine`，限制体积上限，改为 owner-only 可执行位，并检查原子替换与 `setExecutable` 的返回值。
+- 内置 cloudflared 路径也检查可执行位，与下载路径保持一致。
+
+### 工具契约
+
+- 修复 `app_config` 的 schema 谎报：`bindHost`、`authEnabled`、`accessToken` 被列为可写，但调用点硬编码 `allowSecurityFields = false`，这三个键永远静默丢弃且返回 `ok=true`。现在这些键已从 schema 移除，且 `applyPatch` 返回 `rejected` 数组列出被拒绝的键。
+- 修复桥接工具失败被记为成功：本地用 `{ok}`、桥接用 MCP 标准 `{isError, content}`，而判定只读 `optBoolean("ok", true)`，导致转发失败、桥接离线、远端报错全部计入成功，`isError` 也被翻回 `false`。
+- `analyze_xrefs` 的 `limit` 参数此前声明但被丢弃，现已生效，并返回 `truncated` 与 `totalXrefCount`。
+- 修复 `unidbg_api` schema 中重复的 `args` 键（后者静默覆盖前者）。
+
+### 编辑会话
+
+- `session_history(action=reset)` 与 `rollback` 现在会在字节长度不一致时返回明确错误。此前 `fix_sections` 产生不同尺寸的会话后，`arraycopy` 会抛越界并被兜成误导性的 `ELF_CORRUPTED`。
+- `BackupCrypto.decrypt` 对截断/畸形备份返回明确的格式错误，而不是 `ArrayIndexOutOfBoundsException`；Argon2 参数改为具名常量并注明属于磁盘格式不可更改，修正文件头注释中 magic 长度写成 8 字节（实为 9 字节）的错误。
+
 ## 1.0.17
 
 本节仅记录 `1.0.16` 发布后到 `1.0.17` 发布之间的变化。

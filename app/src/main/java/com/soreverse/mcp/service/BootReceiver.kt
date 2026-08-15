@@ -13,7 +13,7 @@ class BootReceiver : BroadcastReceiver() {
             intent?.action != "android.intent.action.QUICKBOOT_POWERON" &&
             intent?.action != "com.htc.intent.action.QUICKBOOT_POWERON"
         ) return
-        if (!IntegrityGuard.isTrusted(context.applicationContext)) {
+        if (IntegrityGuard.enforcementEnabled() && !IntegrityGuard.isTrusted(context.applicationContext)) {
             AppLog.e("Boot autostart blocked by integrity guard")
             return
         }

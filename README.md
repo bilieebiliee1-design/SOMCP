@@ -55,7 +55,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - Android 原生前台服务，不依赖 Python 运行环境。
 - Compose + Material 3 界面。
 - Ktor CIO MCP HTTP 服务，默认端口 `8000`。
-- MCP token 访问控制，可绑定 `127.0.0.1` 或 `0.0.0.0`。
+- MCP token 访问控制，可绑定 `127.0.0.1` 或 `0.0.0.0`。新安装默认绑定 `127.0.0.1` 并开启 token；要让局域网设备连接，在设置里改成 `0.0.0.0`。公网隧道必须开启 token 才能启动。
 - 通过系统文件选择器授权工作目录。
 - 支持独立 `.so` 与 APK 内 `lib/<abi>/*.so` 工作流。
 - Rizin 原生后端：函数分析、CFG、xref、crypto 扫描、ESIL、字节搜索、反汇编、汇编。

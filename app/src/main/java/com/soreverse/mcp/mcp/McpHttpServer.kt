@@ -462,15 +462,15 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             JSONObject().put("ok", false).put("error", JSONObject().put("code", "TOOL_NOT_FOUND").put("message", name))
         }
         val elapsedMicros = (System.nanoTime() - started) / 1000
-        val isOk = payload.optBoolean("ok", true)
-        val errMsg = payload.optJSONObject("error")?.optString("message").orEmpty()
-        ToolStats.record(name, isOk, elapsedMicros, errMsg)
+        val isOk = !toolPayloadFailed(payload)
+        ToolStats.record(name, isOk, elapsedMicros, toolPayloadErrorMessage(payload))
         AppLog.i("Tool call $name -> ok=$isOk (${elapsedMicros / 1000.0}ms)")
         return payload
     }
 
     private fun wrapToolResult(payload: JSONObject): JSONObject {
         val settings = SettingsStore(context)
+        val failed = toolPayloadFailed(payload)
         val payloadText = payload.toString().replace("\\/", "/")
         val cap = settings.toolResultMaxChars
         val rendered = if (cap > 0 && payloadText.length > cap) {
@@ -481,7 +481,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .toString()
         } else payloadText
         return JSONObject()
-            .put("isError", payload.optBoolean("ok", true).not())
+            .put("isError", failed)
             .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", rendered)))
     }
 
@@ -849,4 +849,25 @@ class McpHttpServer(private val context: Context, private val port: Int, private
 internal fun tokenConstantTimeEquals(candidate: String, secret: String): Boolean {
     if (candidate.isEmpty() || secret.isEmpty()) return false
     return java.security.MessageDigest.isEqual(candidate.toByteArray(Charsets.UTF_8), secret.toByteArray(Charsets.UTF_8))
+}
+
+/**
+ * True when a tool payload represents a failure.
+ *
+ * Two result shapes flow through here. Built-in handlers return `{ok: Boolean}`;
+ * tools forwarded to a bridged APK MCP server return the wire shape
+ * `{isError: Boolean, content: [...]}` and carry no `ok` key at all. Reading only
+ * `optBoolean("ok", true)` therefore scored every bridge failure as a success and
+ * flipped `isError` back to false on the way out to the client.
+ *
+ * Pure and top-level so it is unit testable without an Android Context.
+ */
+internal fun toolPayloadFailed(payload: JSONObject): Boolean =
+    if (payload.has("ok")) !payload.optBoolean("ok", false) else payload.optBoolean("isError", false)
+
+/** First human-readable error string from either result shape, or "". */
+internal fun toolPayloadErrorMessage(payload: JSONObject): String {
+    payload.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }?.let { return it }
+    if (!payload.optBoolean("isError", false)) return ""
+    return payload.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty()
 }

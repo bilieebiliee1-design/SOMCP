@@ -113,22 +113,78 @@ internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSON
     }
 }
 
+/** Redirect hops allowed by [openUrl] before the download is abandoned. */
+private const val MAX_DOWNLOAD_REDIRECTS = 5
+
+/**
+ * Reject URLs that resolve into address space the app should never fetch from:
+ * loopback, link-local, site-local (RFC1918), wildcard and multicast. Returns an
+ * error payload when the host is disallowed or cannot be resolved at all.
+ */
+private fun hostNotAllowed(target: URL, originalUrl: String): JSONObject? {
+    if (target.protocol !in setOf("http", "https")) {
+        return err("UNSUPPORTED_URL_SCHEME", "Only http and https URLs are supported", "url", target.toString())
+    }
+    val addresses = runCatching { java.net.InetAddress.getAllByName(target.host) }.getOrNull()
+        ?: return err("URL_HOST_UNRESOLVABLE", "Could not resolve download host", "url", target.toString())
+    if (addresses.isEmpty() || addresses.any {
+            it.isLoopbackAddress || it.isAnyLocalAddress || it.isLinkLocalAddress ||
+                it.isSiteLocalAddress || it.isMulticastAddress
+        }
+    ) {
+        return err(
+            "URL_HOST_NOT_ALLOWED",
+            "Refusing to download from a private, loopback, or link-local address",
+            "url",
+            originalUrl,
+        )
+    }
+    return null
+}
+
 internal fun EngineRuntime.openUrl(url: String, outputName: String = "", temporary: Boolean = false): JSONObject = guarded {
     val dir = workDir ?: return@guarded err("WORK_DIRECTORY_NOT_SELECTED", "A work directory must be selected before downloading a SO URL")
     val parsed = runCatching { URL(url.trim()) }.getOrNull() ?: return@guarded err("INVALID_ARGUMENT", "url must be a valid http(s) URL", "url", url)
-    if (parsed.protocol !in setOf("http", "https")) return@guarded err("UNSUPPORTED_URL_SCHEME", "Only http and https URLs are supported", "url", url)
-    runCatching { java.net.InetAddress.getAllByName(parsed.host) }.getOrNull()?.let { addresses ->
-        if (addresses.any { it.isLoopbackAddress || it.isAnyLocalAddress || it.isLinkLocalAddress || it.isSiteLocalAddress || it.isMulticastAddress }) {
-            return@guarded err("URL_HOST_NOT_ALLOWED", "Refusing to download from a private, loopback, or link-local address", "url", url)
-        }
-    }
+    hostNotAllowed(parsed, url)?.let { return@guarded it }
     val timeout = SettingsStore(context).requestTimeoutMs
-    val conn = (parsed.openConnection() as HttpURLConnection).apply { connectTimeout = timeout.coerceAtMost(30_000); readTimeout = timeout; instanceFollowRedirects = true; requestMethod = "GET" }
-    val status = conn.responseCode
-    if (status !in 200..299) return@guarded err("DOWNLOAD_FAILED", "HTTP download failed with status $status", "url", url)
+    // Follow redirects manually. With instanceFollowRedirects=true the initial
+    // host check was pointless: any public host could 302 to 127.0.0.1 or an
+    // RFC1918 address and the redirect target was never re-validated. Each hop is
+    // re-checked here instead.
+    // Residual risk: DNS rebinding between our resolve and the socket connect is
+    // not addressed — HttpURLConnection gives no hook to pin the resolved IP.
+    val redirectCodes = setOf(301, 302, 303, 307, 308)
+    var currentUrl = parsed
+    var conn: HttpURLConnection? = null
+    for (hop in 0..MAX_DOWNLOAD_REDIRECTS) {
+        val candidate = (currentUrl.openConnection() as HttpURLConnection).apply {
+            connectTimeout = timeout.coerceAtMost(30_000)
+            readTimeout = timeout
+            instanceFollowRedirects = false
+            requestMethod = "GET"
+        }
+        val code = candidate.responseCode
+        if (code !in redirectCodes) {
+            if (code !in 200..299) {
+                candidate.disconnect()
+                return@guarded err("DOWNLOAD_FAILED", "HTTP download failed with status $code", "url", currentUrl.toString())
+            }
+            conn = candidate
+            break
+        }
+        val location = candidate.getHeaderField("Location")
+        candidate.disconnect()
+        if (location.isNullOrBlank()) return@guarded err("DOWNLOAD_FAILED", "HTTP $code redirect without a Location header", "url", currentUrl.toString())
+        val next = runCatching { URL(currentUrl, location) }.getOrNull()
+            ?: return@guarded err("INVALID_ARGUMENT", "Redirect Location is not a valid URL", "location", location)
+        hostNotAllowed(next, next.toString())?.let { return@guarded it }
+        currentUrl = next
+    }
+    val connection = conn
+        ?: return@guarded err("TOO_MANY_REDIRECTS", "Download exceeded $MAX_DOWNLOAD_REDIRECTS redirects", "url", url)
     val maxBytes = 256L * 1024L * 1024L
-    if (conn.contentLengthLong > maxBytes) return@guarded err("DOWNLOAD_TOO_LARGE", "SO download exceeds 256 MiB limit", "contentLength", conn.contentLengthLong)
-    val bytes = conn.inputStream.use { input -> java.io.ByteArrayOutputStream().apply { val buf = ByteArray(64 * 1024); var total = 0L; while (true) { val n = input.read(buf); if (n < 0) break; total += n; if (total > maxBytes) return@guarded err("DOWNLOAD_TOO_LARGE", "SO download exceeds 256 MiB limit", "url", url); write(buf, 0, n) } }.toByteArray() }
+    if (connection.contentLengthLong > maxBytes) return@guarded err("DOWNLOAD_TOO_LARGE", "SO download exceeds 256 MiB limit", "contentLength", connection.contentLengthLong)
+    val bytes = connection.inputStream.use { input -> java.io.ByteArrayOutputStream().apply { val buf = ByteArray(64 * 1024); var total = 0L; while (true) { val n = input.read(buf); if (n < 0) break; total += n; if (total > maxBytes) return@guarded err("DOWNLOAD_TOO_LARGE", "SO download exceeds 256 MiB limit", "url", url); write(buf, 0, n) } }.toByteArray() }
     if (bytes.size < 4 || bytes[0] != 0x7f.toByte() || bytes[1] != 'E'.code.toByte() || bytes[2] != 'L'.code.toByte() || bytes[3] != 'F'.code.toByte()) return@guarded err("NOT_ELF_SO", "Downloaded file is not an ELF/SO file", "url", url)
     val rawName = outputName.ifBlank { parsed.path.substringAfterLast('/').substringBefore('?').ifBlank { "downloaded.so" } }
     val safeName = rawName.substringAfterLast('/').substringAfterLast('\\').let { if (it.endsWith(".so", ignoreCase = true)) it else "$it.so" }

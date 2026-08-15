@@ -3,7 +3,6 @@ package com.soreverse.mcp.engine
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
-import kotlin.math.min
 
 class ElfParser(private val data: ByteArray) {
     fun parse(): ElfFile {
@@ -127,10 +126,17 @@ class ElfParser(private val data: ByteArray) {
     }
 
     private fun sectionBytes(section: SectionInfo): ByteArray {
-        if (section.offset < 0 || section.size <= 0) return ByteArray(0)
-        val start = section.offset.toInt().coerceIn(0, data.size)
-        val end = min(data.size, start + section.size.toInt())
-        return data.copyOfRange(start, end)
+        // ELF64 offsets and sizes are uint64 values. Do all bounds arithmetic as
+        // Long before converting to Int: `section.offset.toInt()` / `size.toInt()`
+        // truncated crafted values and `start + size.toInt()` could wrap negative,
+        // turning a malformed ELF into an IndexOutOfBoundsException or reading a
+        // different, small offset from the input.
+        if (section.offset < 0 || section.size <= 0 || section.offset >= data.size.toLong()) return ByteArray(0)
+        val remaining = data.size.toLong() - section.offset
+        val length = minOf(section.size, remaining)
+        if (length <= 0 || length > Int.MAX_VALUE) return ByteArray(0)
+        val start = section.offset.toInt()
+        return data.copyOfRange(start, start + length.toInt())
     }
 
     private fun extractStrings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>) {
@@ -183,10 +189,13 @@ class ElfParser(private val data: ByteArray) {
         val addralign: Long,
         val entsize: Long,
     ) {
+        /** Same Long-arithmetic contract as [ElfParser.sectionBytes]; see the note there. */
         fun bytes(data: ByteArray): ByteArray {
-            val start = offset.toInt().coerceIn(0, data.size)
-            val end = min(data.size, start + size.toInt().coerceAtLeast(0))
-            return data.copyOfRange(start, end)
+            if (offset < 0 || size <= 0 || offset >= data.size.toLong()) return ByteArray(0)
+            val length = minOf(size, data.size.toLong() - offset)
+            if (length <= 0 || length > Int.MAX_VALUE) return ByteArray(0)
+            val start = offset.toInt()
+            return data.copyOfRange(start, start + length.toInt())
         }
     }
 

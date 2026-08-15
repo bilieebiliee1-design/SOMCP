@@ -135,17 +135,16 @@ internal fun SettingsUpdatesPage(
                         }
                         UpdateDownloadEvent.Verifying -> downloadPhase = "verifying"
                         is UpdateDownloadEvent.VerifySkipped -> {
-                            verifyNote = if (t.zh) "已跳过 SHA-256 校验（${event.reason}），文件为有效 APK，可安装。" else "SHA-256 check skipped (${event.reason}); file is a valid APK and installable."
+                            // The download is refused when the checksum cannot be
+                            // obtained, so this is a failure notice, not an "ok to
+                            // install anyway" notice.
+                            verifyNote = if (t.zh) "无法获取 SHA-256 校验值（${event.reason}），已放弃本次更新。" else "Could not obtain the SHA-256 checksum (${event.reason}); the update was refused."
                         }
                     }
                 }
                     .onSuccess {
                         downloadedFile = it
-                        status = if (verifyNote.isNotBlank()) {
-                            if (t.zh) "下载完成（未校验 SHA-256），可以安装。" else "Download complete (SHA-256 not verified). Ready to install."
-                        } else {
-                            if (t.zh) "下载并校验完成，可以安装。" else "Download and verification complete. Ready to install."
-                        }
+                        status = if (t.zh) "下载并校验完成，可以安装。" else "Download and verification complete. Ready to install."
                     }
                     .onFailure { error = it.message ?: if (t.zh) "下载失败" else "Download failed" }
             } finally {
@@ -201,8 +200,10 @@ internal fun SettingsUpdatesPage(
                             verifyNote = verifyNote,
                             onPickSource = { source -> startDownload(update, source) },
                         )
-                    } else if (verifyNote.isNotBlank() && downloadedFile != null) {
-                        Text(verifyNote, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else if (verifyNote.isNotBlank()) {
+                        // A verify note now only appears when the update was
+                        // refused, so show it whether or not a file survived.
+                        Text(verifyNote, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                     }
                     PrimaryActionButton(
                         text = when {

@@ -120,7 +120,9 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
     var model by remember { mutableStateOf(settings.aiModel) }
     var temperature by remember { mutableStateOf(settings.aiTemperature.toString()) }
     var maxIterations by remember { mutableStateOf(settings.aiMaxIterations.toString()) }
-    var historySoftLimit by remember { mutableStateOf(settings.aiHistorySoftLimit.toString()) }
+    var historyCharBudget by remember { mutableStateOf(settings.aiHistoryCharBudget.toString()) }
+    var contextWindowOverride by remember { mutableStateOf(settings.aiContextWindowOverride.toString()) }
+    var contextWindowInfo by remember { mutableStateOf(contextWindowSummary(settings, t.zh)) }
     var headerFields by remember { mutableStateOf(parseRequestFields(settings.aiCustomHeadersJson)) }
     var bodyFields by remember { mutableStateOf(parseRequestFields(settings.aiCustomBodyJson)) }
     var systemPrompt by remember { mutableStateOf(settings.aiSystemPrompt) }
@@ -276,15 +278,31 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
             },
             )
             GroupDivider()
-            NumberSettingRow(if (t.zh) "最大迭代" else "Max iterations", maxIterations, { maxIterations = it }, {
+            NumberSettingRow(if (t.zh) "工具循环安全上限" else "Tool-loop safety limit", maxIterations, { maxIterations = it }, {
                 settings.aiMaxIterations = it
                 maxIterations = settings.aiMaxIterations.toString()
-            }, if (t.zh) "轮" else "runs")
+            }, if (t.zh) "轮（最多 200；上下文由预算管理）" else "turns (max 200; context is budget-managed)")
             GroupDivider()
-            NumberSettingRow(if (t.zh) "历史压缩阈值" else "History soft limit", historySoftLimit, { historySoftLimit = it }, {
-                settings.aiHistorySoftLimit = it
-                historySoftLimit = settings.aiHistorySoftLimit.toString()
-            }, if (t.zh) "条消息" else "msgs")
+            // 0 = infer from the model name. A limit parsed from a real overflow
+            // error takes precedence over both, so the effective value is shown.
+            NumberSettingRow(if (t.zh) "上下文窗口" else "Context window", contextWindowOverride, { contextWindowOverride = it }, {
+                settings.aiContextWindowOverride = it
+                contextWindowOverride = settings.aiContextWindowOverride.toString()
+                contextWindowInfo = contextWindowSummary(settings, t.zh)
+            }, if (t.zh) "token（0=自动）" else "tokens (0=auto)")
+            Text(
+                contextWindowInfo,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+            )
+            GroupDivider()
+            // The value is a character budget applied to the replayed history, not
+            // a message count — the old "条消息 / msgs" unit mislabelled it.
+            NumberSettingRow(if (t.zh) "历史上下文预算" else "History context budget", historyCharBudget, { historyCharBudget = it }, {
+                settings.aiHistoryCharBudget = it
+                historyCharBudget = settings.aiHistoryCharBudget.toString()
+            }, if (t.zh) "字符" else "chars")
         }
         GlassGroup(
             title = if (t.zh) "自定义请求" else "Custom request",
@@ -332,5 +350,31 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
                 settings.aiSystemPrompt = systemPrompt
             }, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp))
         }
+    }
+}
+
+/**
+ * One line describing the window actually in force and where it came from, so a
+ * `0` in the override field does not look like "no limit".
+ */
+private fun contextWindowSummary(settings: SettingsStore, zh: Boolean): String {
+    if (settings.contextWindowIsUnknown) {
+        // Say so plainly. A fabricated number here would look authoritative while
+        // being unverified, which is exactly what the name-inference table did.
+        return if (zh) {
+            "当前生效：未知（服务端未提供，按 ${settings.contextBudgetTokens} token 保守预算）。刷新模型列表可获取，或在此手填。"
+        } else {
+            "In effect: unknown (provider reports none; budgeting conservatively at ${settings.contextBudgetTokens} tokens). Refresh the model list to fetch it, or enter it here."
+        }
+    }
+    val source = when (settings.contextWindowSource) {
+        "measured" -> if (zh) "来自服务端报错实测" else "measured from a provider error"
+        "manual" -> if (zh) "手动设置" else "set manually"
+        else -> if (zh) "服务端模型列表提供" else "reported by the provider's model list"
+    }
+    return if (zh) {
+        "当前生效：${settings.effectiveContextWindow} token（$source）"
+    } else {
+        "In effect: ${settings.effectiveContextWindow} tokens ($source)"
     }
 }

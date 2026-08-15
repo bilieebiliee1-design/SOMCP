@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -63,37 +64,53 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 .build()
         }
 
+        private enum class TransportMode { UNKNOWN, STREAMABLE, LEGACY }
+
+        @Volatile private var probeInFlight = false
+        @Volatile private var sessionId: String? = null
+        @Volatile private var transportMode = TransportMode.UNKNOWN
+
         @Volatile private var healthThread: Thread? = null
         @Volatile private var healthStop = false
 
         @Synchronized
         fun probe(timeoutMs: Int = 8000): State {
+            if (probeInFlight) return state
+            probeInFlight = true
+            if (transportMode != TransportMode.LEGACY) {
+                try {
+                    ensureInitialized(timeoutMs)
+                    transportMode = TransportMode.STREAMABLE
+                } catch (e: Exception) {
+                    // Older MT Manager exposes the legacy one-shot tools/list endpoint
+                    // but does not answer initialize. Remember that capability so every
+                    // later poll does not pay the same timeout again.
+                    sessionId = null
+                    replySessionId = null
+                    transportMode = TransportMode.LEGACY
+                    AppLog.i("apk-mcp $url uses legacy JSON-RPC (${e.message})")
+                }
+            }
             try {
-                val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
-                val start = System.nanoTime()
-                val resp = post(req)
-                val latencyMs = (System.nanoTime() - start) / 1_000_000
-                val parsed = parseTools(resp)
+                val resp = post(buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet()), timeoutMs)
+                val parsed = parseTools(resp.body)
+                if (parsed.isEmpty()) throw IllegalStateException("MCP tools/list returned no tools (${resp.contentType})")
+                val latencyMs = resp.latencyMs
                 val prefix = detectPrefix(parsed)
                 val prev = state
                 val s = State(
-                    url = url,
-                    online = true,
-                    lastError = "",
-                    tools = parsed,
+                    url = url, online = true, lastError = "", tools = parsed,
                     toolPrefix = prefix ?: prev.toolPrefix,
-                    lastCheckedAt = System.currentTimeMillis(),
-                    lastLatencyMs = latencyMs,
-                    probes = prev.probes + 1,
-                    probeFailures = prev.probeFailures,
-                    totalLatencyMs = prev.totalLatencyMs + latencyMs,
-                    maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs),
+                    lastCheckedAt = System.currentTimeMillis(), lastLatencyMs = latencyMs,
+                    probes = prev.probes + 1, probeFailures = prev.probeFailures,
+                    totalLatencyMs = prev.totalLatencyMs + latencyMs, maxLatencyMs = maxOf(prev.maxLatencyMs, latencyMs),
                 )
                 state = s
-                val label = prefixLabel(prefix)
-                AppLog.i("apk-mcp bridge online: ${parsed.size} tools from $url ($label, ${latencyMs}ms)")
+                AppLog.i("apk-mcp bridge online: ${parsed.size} tools from $url (${prefixLabel(prefix)}, ${latencyMs}ms)")
                 return s
             } catch (e: Exception) {
+                sessionId = null
+                if (transportMode == TransportMode.STREAMABLE) transportMode = TransportMode.UNKNOWN
                 val prev = state
                 val s = State(url = url, online = false, lastError = e.message ?: e.javaClass.simpleName,
                     probes = prev.probes + 1, probeFailures = prev.probeFailures + 1,
@@ -101,16 +118,41 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                 state = s
                 AppLog.w("apk-mcp probe failed: $url ${e.message}")
                 return s
+            } finally {
+                probeInFlight = false
             }
         }
+
+        private data class HttpReply(val body: String, val contentType: String, val latencyMs: Long)
+
+        private fun ensureInitialized(timeoutMs: Int) {
+            if (sessionId != null) return
+            val reply = post(buildJsonRpc(url, "initialize", JSONObject()
+                .put("protocolVersion", "2025-03-26")
+                .put("capabilities", JSONObject())
+                .put("clientInfo", JSONObject().put("name", "SOMCP").put("version", "1.0.17")),
+                id = connIdCounter.incrementAndGet()), timeoutMs)
+            val root = parseJsonReply(reply.body)
+            if (root.optJSONObject("result") == null) throw IllegalStateException("MCP initialize returned no result")
+            sessionId = replySessionId
+            post(buildJsonRpc(url, "notifications/initialized", JSONObject(), id = null), timeoutMs)
+        }
+
+        @Volatile private var replySessionId: String? = null
 
         @Synchronized
         fun ping(): State {
             return try {
-                val req = buildJsonRpc(url, "initialize", JSONObject().put("client", "somcp-ping"), id = connIdCounter.incrementAndGet())
                 val start = System.nanoTime()
-                post(req)
+                val reply = if (sessionId != null) {
+                    post(buildJsonRpc(url, "ping", JSONObject(), id = connIdCounter.incrementAndGet()), 8_000)
+                } else {
+                    // Legacy MT has no initialize/ping response; a bounded tools/list
+                    // is the only reliable liveness check for that transport.
+                    post(buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet()), 8_000)
+                }
                 val latencyMs = (System.nanoTime() - start) / 1_000_000
+                if (reply.body.isBlank()) throw IllegalStateException("empty MCP liveness response")
                 val prev = state
                 val s = if (!prev.online) {
                     prev.copy(lastLatencyMs = latencyMs, lastCheckedAt = System.currentTimeMillis(),
@@ -142,7 +184,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             return try {
                 val req = buildJsonRpc(url, "tools/call", params, id = connIdCounter.incrementAndGet())
                 val resp = post(req)
-                parseToolResult(resp)
+                parseToolResult(resp.body)
             } catch (e: Exception) {
                 errorResult(name, "forward failed: ${e.message}")
             }
@@ -159,8 +201,8 @@ class ApkMcpBridge(private val settings: SettingsStore) {
                     if (healthStop) break
                     try {
                         val req = buildJsonRpc(url, "tools/list", JSONObject(), id = connIdCounter.incrementAndGet())
-                        val resp = post(req)
-                        val parsed = parseTools(resp)
+                        val resp = post(req, 8_000)
+                        val parsed = parseTools(resp.body)
                         val prefix = detectPrefix(parsed)
                         if (prefix != null) {
                             val cur = state
@@ -184,28 +226,42 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             healthThread = null
         }
 
-        private fun buildJsonRpc(url: String, method: String, params: JSONObject, id: Int): Request {
+        private fun buildJsonRpc(url: String, method: String, params: JSONObject, id: Int?): Request {
             val body = JSONObject()
                 .put("jsonrpc", "2.0")
-                .put("id", id)
                 .put("method", method)
                 .put("params", params)
-                .toString()
-            val builder = Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType()))
+            if (id != null) body.put("id", id)
+            val builder = Request.Builder().url(url)
+                .header("Accept", "application/json, text/event-stream")
+                .post(body.toString().toRequestBody("application/json".toMediaType()))
+            sessionId?.let { builder.header("Mcp-Session-Id", it) }
             if (token.isNotBlank()) builder.safeHeader("Authorization", "Bearer $token")
             return builder.build()
         }
 
-        private fun post(req: Request): String {
-            client.newCall(req).execute().use { r ->
+        private fun post(req: Request, timeoutMs: Int = 8000): HttpReply {
+            val bounded = client.newBuilder().callTimeout(timeoutMs.toLong().coerceAtLeast(1), TimeUnit.MILLISECONDS).build()
+            val start = System.nanoTime()
+            bounded.newCall(req).execute().use { r ->
                 val body = r.body?.string().orEmpty()
                 if (!r.isSuccessful) throw IllegalStateException("HTTP ${r.code}")
-                return body
+                r.header("Mcp-Session-Id")?.let { replySessionId = it }
+                return HttpReply(body, r.header("Content-Type").orEmpty(), (System.nanoTime() - start) / 1_000_000)
             }
         }
 
+        private fun parseJsonReply(body: String): JSONObject {
+            val json = body.lineSequence()
+                .filter { it.startsWith("data:") }
+                .map { it.removePrefix("data:").trim() }
+                .lastOrNull { it.isNotBlank() && it != "[DONE]" }
+                ?: body.trim()
+            return JSONObject(json)
+        }
+
         private fun parseTools(body: String): List<ToolDef> {
-            val root = JSONObject(body)
+            val root = parseJsonReply(body)
             val result = root.opt("result") as? JSONObject ?: return emptyList()
             val tools = result.optJSONArray("tools") ?: return emptyList()
             val out = ArrayList<ToolDef>(tools.length())
@@ -225,7 +281,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         }
 
         private fun parseToolResult(body: String): JSONObject {
-            val root = JSONObject(body)
+            val root = parseJsonReply(body)
             val result = root.opt("result")
             return (result as? JSONObject) ?: JSONObject().put("raw", body)
         }
@@ -267,6 +323,14 @@ class ApkMcpBridge(private val settings: SettingsStore) {
         val first = connections.firstOrNull()
         if (first != null) return first.state
         return State()
+    }
+
+    fun hasFreshOnlineState(maxAgeMs: Long = 45_000): Boolean {
+        val now = System.currentTimeMillis()
+        return connections.any { connection ->
+            val state = connection.state
+            state.online && state.lastCheckedAt > 0 && now - state.lastCheckedAt <= maxAgeMs
+        }
     }
 
     /** Sync the internal connection list from settings. */

@@ -190,7 +190,7 @@ object ToolCatalog {
             "direction".oneOf("to (default) | from | both", "to", "from", "both")
             "limit" int "Maximum references"
         }) }
-    ) { e, a, s -> e.rzXrefs(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.str("direction", "to")) }
+    ) { e, a, s -> e.rzXrefs(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.str("direction", "to"), a.intValue("limit", s.defaultLimit)) }
 
     private val analyzeEsil = EngineToolHandler(
         ToolMeta("analyze_esil",
@@ -519,7 +519,6 @@ object ToolCatalog {
             "workspaceId" str "Workspace ID"
             "editSessionId" str "Edit session ID"
             "symbolName" str "Exported symbol to call"
-            "args" arr "Integer/string arguments"
             "trace" bool "Enable trace"
             "addr" str "Memory dump VA hex"
             "size" int "Dump size"
@@ -850,14 +849,14 @@ object ToolCatalog {
     private val appConfig = object : ToolHandler {
         override val meta = ToolMeta(
             "app_config",
-            "读写应用全部配置（外观/服务/引擎/隧道/桥接）",
-            "Read and write all app settings: appearance, service, engine limits, tunnel, APK bridge. Designed for AI-driven full configuration of the SOMCP app.",
+            "读写应用配置（外观/服务/引擎/隧道/桥接）。注意：bindHost、authEnabled、accessToken、tunnelNamedToken 只能在应用界面里改，通过 MCP 传入会出现在结果的 rejected 里。",
+            "Read and write app settings: appearance, service, engine limits, tunnel, APK bridge. NOTE: bindHost, authEnabled, accessToken and tunnelNamedToken cannot be changed over MCP — sending them returns them under result.rejected. Use action=reset_token to rotate the access token.",
             "system", ToolClass.META,
         ) {
             objectSchema(props {
                 "action".oneOf("get (default) | set | schema | reset_token", "get", "set", "schema", "reset_token")
                 "maskSecrets" bool "Mask tokens in get output (default true)"
-                "allowSecrets" bool "Allow writing secret fields on set (default true)"
+                "allowSecrets" bool "Allow writing non-security secret fields such as apkMcpToken on set (default true)"
                 "config" str "JSON object string or nested object for set (appearance/service/engine/tunnel/apkBridge or flat keys)"
                 "themeMode".oneOf("Flat set helper", "system", "light", "dark")
                 "accentColor".oneOf("Flat set helper", "blue", "teal", "indigo", "purple", "green", "orange", "red", "mono")
@@ -870,9 +869,6 @@ object ToolCatalog {
                 "showAdvancedHome" bool "Flat set helper"
                 "highContrast" bool "Flat set helper"
                 "port" int "Flat set helper"
-                "bindHost" str "Flat set helper: 0.0.0.0 or 127.0.0.1"
-                "authEnabled" bool "Flat set helper"
-                "accessToken" str "Flat set helper"
                 "leanTools" bool "Flat set helper"
                 "emulationEnabled" bool "Flat set helper"
                 "tunnelMode".oneOf("Flat set helper", "off", "quick", "named")

@@ -61,6 +61,8 @@ jobs:
           fi
           echo "Profanity check passed."
 
+      - name: Native signature-parser tests
+        run: tools/native-tests/run.sh
       - name: Lint check
         run: gradle :app:lintDebug --stacktrace
       - name: Debug build

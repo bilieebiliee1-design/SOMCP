@@ -23,13 +23,37 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     enum class BinaryState { UNKNOWN, NOT_FOUND, DOWNLOADING, READY }
 
     companion object {
-        /** GitHub release URL for the cloudflared Android arm64 binary. */
-        const val CLOUDFLARED_DOWNLOAD_URL =
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
-        const val CLOUDFLARED_MIRROR_URL =
-            "https://mirror.ghproxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
         const val CLOUDFLARED_DIR = "cloudflared"
         const val CLOUDFLARED_FILE = "cloudflared"
+
+        /**
+         * cloudflared publishes one Android build per architecture. Upstream only
+         * ships arm64 for Android, so every other ABI has no downloadable binary
+         * at all — returning the arm64 asset there produced a file that could
+         * never exec (the bundled libcloudflared.so is likewise arm64-only).
+         */
+        private val CLOUDFLARED_ASSET_BY_ABI = mapOf(
+            "arm64-v8a" to "cloudflared-android-arm64",
+        )
+
+        /** ELF e_machine values, used to reject an asset built for another ABI. */
+        private val ELF_MACHINE_BY_ABI = mapOf(
+            "arm64-v8a" to 183, // EM_AARCH64
+        )
+
+        /** Primary ABI of the running device, or empty when unknown. */
+        fun deviceAbi(): String = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
+
+        fun assetNameForAbi(abi: String): String? = CLOUDFLARED_ASSET_BY_ABI[abi]
+
+        fun downloadUrlForAbi(abi: String): String? =
+            assetNameForAbi(abi)?.let { "https://github.com/cloudflare/cloudflared/releases/latest/download/$it" }
+
+        fun mirrorUrlForAbi(abi: String): String? =
+            downloadUrlForAbi(abi)?.let { "https://mirror.ghproxy.com/$it" }
+
+        /** Max accepted cloudflared payload; upstream arm64 builds sit near 25 MiB. */
+        private const val MAX_BINARY_BYTES = 96L * 1024L * 1024L
     }
 
     data class TunnelStatus(
@@ -135,7 +159,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         val ndkDir = context.applicationInfo?.nativeLibraryDir
         if (ndkDir != null) {
             val ndkFile = File(ndkDir, "lib${CLOUDFLARED_FILE}.so")
-            if (ndkFile.exists()) {
+            if (ndkFile.exists() && ndkFile.canExecute()) {
                 _binaryState.set(BinaryState.READY)
                 return ndkFile
             }
@@ -152,17 +176,20 @@ class CloudflareTunnelManager(private val context: Context, private val settings
      * @throws Exception on download / write failure.
      */
     fun downloadBinary(useMirror: Boolean = false) {
+        val abi = deviceAbi()
+        val officialUrl = downloadUrlForAbi(abi)
+            ?: throw UnsupportedOperationException("Cloudflare Tunnel is not available for ABI '$abi'; only arm64-v8a is currently packaged by upstream.")
+        val mirrorUrl = mirrorUrlForAbi(abi)
         _binaryState.set(BinaryState.DOWNLOADING)
         try {
             val dir = File(context.filesDir, CLOUDFLARED_DIR)
             dir.mkdirs()
             val tmp = File(dir, "${CLOUDFLARED_FILE}.download")
             // Try URLs in order: selected source first, then fallback
-            val urls = if (useMirror) {
-                listOf(CLOUDFLARED_MIRROR_URL, CLOUDFLARED_DOWNLOAD_URL)
-            } else {
-                listOf(CLOUDFLARED_DOWNLOAD_URL, CLOUDFLARED_MIRROR_URL)
-            }
+            val urls = listOfNotNull(
+                if (useMirror) mirrorUrl else officialUrl,
+                if (useMirror) officialUrl else mirrorUrl,
+            )
             var lastError: Exception? = null
             for (url in urls) {
                 try {
@@ -177,14 +204,31 @@ class CloudflareTunnelManager(private val context: Context, private val settings
                         val body = resp.body ?: throw IllegalStateException("empty response body")
                         body.byteStream().use { input ->
                             tmp.outputStream().use { output ->
-                                input.copyTo(output)
+                                var total = 0L
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    total += read
+                                    // A mirror can stream unbounded data; cap it so a
+                                    // hostile or broken source cannot fill the device.
+                                    if (total > MAX_BINARY_BYTES) {
+                                        throw IllegalStateException("cloudflared download exceeds ${MAX_BINARY_BYTES / 1024 / 1024} MiB limit")
+                                    }
+                                    output.write(buffer, 0, read)
+                                }
                             }
                         }
                     }
+                    // The download source is a third-party proxy in the mirror case.
+                    // Confirm the payload is at least an executable ELF for this
+                    // device's ABI before it is made executable and spawned.
+                    validateCloudflaredElf(tmp, abi)
                     lastError = null
                     break
                 } catch (e: Exception) {
                     lastError = e
+                    runCatching { tmp.delete() }
                     AppLog.w("cloudflared download failed from $url: ${e.message}")
                 }
             }
@@ -192,14 +236,34 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             // Atomically replace the old binary
             val target = File(dir, CLOUDFLARED_FILE)
             if (target.exists()) target.delete()
-            tmp.renameTo(target)
-            // Make executable
-            target.setExecutable(true, false)
+            if (!tmp.renameTo(target)) throw IllegalStateException("could not move cloudflared into place at ${target.absolutePath}")
+            // Owner-only exec: this file is spawned as a child process, so it must
+            // not be group/world writable or executable.
+            if (!target.setExecutable(true, true)) {
+                throw IllegalStateException("could not mark cloudflared executable at ${target.absolutePath}")
+            }
             _binaryState.set(BinaryState.READY)
             AppLog.i("cloudflared binary downloaded to ${target.absolutePath}")
         } catch (e: Exception) {
             _binaryState.set(BinaryState.NOT_FOUND)
             throw e
+        }
+    }
+
+    private fun validateCloudflaredElf(file: File, abi: String) {
+        val expectedMachine = ELF_MACHINE_BY_ABI[abi]
+            ?: throw UnsupportedOperationException("No cloudflared ELF validation rule for ABI '$abi'")
+        val header = ByteArray(20)
+        val read = file.inputStream().use { it.read(header) }
+        require(read == header.size) { "cloudflared payload is too small to be an ELF executable" }
+        require(
+            header[0] == 0x7f.toByte() && header[1] == 'E'.code.toByte() &&
+                header[2] == 'L'.code.toByte() && header[3] == 'F'.code.toByte()
+        ) { "cloudflared payload is not an ELF executable" }
+        require(header[5].toInt() and 0xff == 1) { "cloudflared ELF is not little-endian" }
+        val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
+        require(machine == expectedMachine) {
+            "cloudflared ELF machine $machine does not match ABI '$abi' (expected $expectedMachine)"
         }
     }
 
@@ -224,17 +288,17 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         if (stopRequested) {
             return _status.get()
         }
-        // A tunnel exposes the MCP service to the public internet. Authentication
-        // is NOT forced by default (per the 1.0.12 UX change): if the user has
-        // enabled auth we require a non-blank token so a credentialed surface is
-        // never published tokenless; if the user has deliberately left auth off,
-        // we honour that choice and start the tunnel, logging a clear warning
-        // about the exposure instead of refusing.
-        if (settings.authEnabled && settings.accessToken.isBlank()) {
-            return fail(mode, targetPort, "Authentication is enabled but no access token is set. Set an access token or disable authentication before starting the tunnel.")
-        }
-        if (!settings.authEnabled) {
-            AppLog.w("Starting Cloudflare tunnel WITHOUT authentication: the MCP service will be reachable publicly with no token. Enable authentication in settings if this is not intended.")
+        // A tunnel publishes the MCP tool surface to the public internet, and that
+        // surface can read and rewrite arbitrary SO/APK files on this device.
+        // Refuse to publish it without a token: unlike a LAN bind, this is
+        // reachable by anyone who learns the URL, and quick-tunnel hostnames appear
+        // in Cloudflare logs. Local (LAN/loopback) use is unaffected.
+        if (!settings.authEnabled || settings.accessToken.isBlank()) {
+            return fail(
+                mode,
+                targetPort,
+                "A public tunnel requires token authentication. Enable authentication and set an access token before starting the tunnel.",
+            )
         }
         // Already running on the same target with the same mode and a live
         // process — nothing to do. Avoids costly stop/restart churn from

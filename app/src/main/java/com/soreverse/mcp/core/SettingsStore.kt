@@ -4,6 +4,23 @@ import android.content.Context
 import android.net.Uri
 import java.security.SecureRandom
 
+private const val SECURITY_FIELD_REJECTION =
+    "security-sensitive field; changeable only from the app UI, not over MCP"
+
+// Agent-loop bounds. Defined once so the setter and every consumer agree; a
+// consumer that re-clamps to a different range makes part of the setting dead.
+internal const val AI_MIN_ITERATIONS = 4
+internal const val AI_MAX_ITERATIONS = 200
+
+// History replay budget, in characters.
+internal const val AI_MIN_HISTORY_CHARS = 500
+internal const val AI_MAX_HISTORY_CHARS = 200_000
+internal const val AI_DEFAULT_HISTORY_CHARS = 4_000
+
+// Context window bounds, in tokens. The ceiling accommodates Gemini's 2M window.
+internal const val AI_MIN_CONTEXT_WINDOW = 2_048
+internal const val AI_MAX_CONTEXT_WINDOW = 20_000_000
+
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("so_reverse_mcp", Context.MODE_PRIVATE)
 
@@ -28,18 +45,12 @@ class SettingsStore(context: Context) {
             }
             prefs.edit().putBoolean("apkDefaultBridgesAdded", true).apply()
         }
-        // One-time correction of misconfiguration introduced by the 1.0.10/1.0.11
-        // updates, which silently forced bindHost=127.0.0.1 and authEnabled=true
-        // onto existing installs and broke the LAN-link experience. Per the
-        // emergency 1.0.12 patch we reset these back to the user-friendly
-        // defaults (LAN on, no token) exactly once; users who prefer the stricter
-        // setup can re-enable it afterwards.
-        if (!prefs.getBoolean("lanDefaultsRestored_v1_0_12", false)) {
-            prefs.edit()
-                .putString("bindHost", "0.0.0.0")
-                .putBoolean("authEnabled", false)
-                .putBoolean("lanDefaultsRestored_v1_0_12", true)
-                .apply()
+        // Older versions force-reset installs to LAN-wide unauthenticated
+        // listening. Do not mutate existing users' deliberate settings here;
+        // fresh installs receive the secure property defaults below instead.
+        // A later UI migration can ask existing users before changing exposure.
+        if (!prefs.getBoolean("secureDefaultsAcknowledged_v1_0_18", false)) {
+            prefs.edit().putBoolean("secureDefaultsAcknowledged_v1_0_18", true).apply()
         }
     }
 
@@ -70,12 +81,19 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt("port", 8000)
         set(value) = prefs.edit().putInt("port", value.coerceIn(1024, 65535)).apply()
 
+    /**
+     * Bind address for the MCP server. Defaults to loopback: the tool surface can
+     * read and rewrite arbitrary SO/APK files, so a fresh install must not be
+     * reachable from the whole LAN before the user opts in. Existing installs keep
+     * whatever they already have stored.
+     */
     var bindHost: String
-        get() = prefs.getString("bindHost", "0.0.0.0") ?: "0.0.0.0"
+        get() = prefs.getString("bindHost", "127.0.0.1") ?: "127.0.0.1"
         set(value) = prefs.edit().putString("bindHost", if (value == "0.0.0.0") "0.0.0.0" else "127.0.0.1").apply()
 
+    /** Token auth, on by default for new installs for the same reason as [bindHost]. */
     var authEnabled: Boolean
-        get() = prefs.getBoolean("authEnabled", false)
+        get() = prefs.getBoolean("authEnabled", true)
         set(value) = prefs.edit().putBoolean("authEnabled", value).apply()
 
     var accessToken: String
@@ -571,19 +589,136 @@ class SettingsStore(context: Context) {
 
     var aiModel: String
         get() = prefs.getString("aiModel", "gpt-4.1-mini") ?: "gpt-4.1-mini"
-        set(value) = prefs.edit().putString("aiModel", value.trim()).apply()
+        set(value) {
+            val next = value.trim()
+            val previous = prefs.getString("aiModel", "") ?: ""
+            val editor = prefs.edit().putString("aiModel", next)
+            // A limit measured from one model's overflow error says nothing about a
+            // different model, so drop it when the model changes. Keeping it would
+            // silently apply e.g. an 8k limit to a 200k model. The provider cache is
+            // keyed by model id, so it needs no invalidation here.
+            if (previous.isNotEmpty() && previous != next) {
+                editor.remove("aiContextWindowMeasured")
+            }
+            editor.apply()
+        }
+
+    /**
+     * Context window in tokens, `0` meaning "derive from the model name".
+     *
+     * Resolution order, weakest to strongest: name-based inference, this manual
+     * override, then a limit measured from a real overflow error
+     * ([aiContextWindowMeasured]). Read [effectiveContextWindow] rather than this.
+     */
+    var aiContextWindowOverride: Int
+        get() = prefs.getInt("aiContextWindowOverride", 0)
+        set(value) = prefs.edit().putInt(
+            "aiContextWindowOverride",
+            if (value <= 0) 0 else value.coerceIn(AI_MIN_CONTEXT_WINDOW, AI_MAX_CONTEXT_WINDOW),
+        ).apply()
+
+    /**
+     * Context limit parsed from a provider overflow error, or `0` if never seen.
+     * Written automatically; cleared when [aiModel] changes.
+     */
+    var aiContextWindowMeasured: Int
+        get() = prefs.getInt("aiContextWindowMeasured", 0)
+        set(value) = prefs.edit().putInt(
+            "aiContextWindowMeasured",
+            if (value <= 0) 0 else value.coerceIn(AI_MIN_CONTEXT_WINDOW, AI_MAX_CONTEXT_WINDOW),
+        ).apply()
+
+    /**
+     * Context window reported by the provider for [aiModel], or `0` when the model
+     * list carried none. Populated by the model-listing call.
+     */
+    val aiContextWindowFromProvider: Int
+        get() = modelContextWindowCache()[aiModel] ?: 0
+
+    /**
+     * The window in force, or [ContextWindow.UNKNOWN] when no source has reported
+     * one. Never inferred from the model name — see [ContextWindow].
+     */
+    val effectiveContextWindow: Int
+        get() = aiContextWindowMeasured.takeIf { it > 0 }
+            ?: aiContextWindowOverride.takeIf { it > 0 }
+            ?: aiContextWindowFromProvider.takeIf { it > 0 }
+            ?: ContextWindow.UNKNOWN
+
+    /** True when nothing has reported a window and the budget uses the floor. */
+    val contextWindowIsUnknown: Boolean
+        get() = effectiveContextWindow <= 0
+
+    /** Tokens the agent loop budgets against, falling back to a conservative floor. */
+    val contextBudgetTokens: Int
+        get() = effectiveContextWindow.takeIf { it > 0 } ?: ContextWindow.CONSERVATIVE_FLOOR
+
+    /** Where [effectiveContextWindow] came from, for display and diagnostics. */
+    val contextWindowSource: String
+        get() = when {
+            aiContextWindowMeasured > 0 -> "measured"
+            aiContextWindowOverride > 0 -> "manual"
+            aiContextWindowFromProvider > 0 -> "provider"
+            else -> "unknown"
+        }
+
+    /**
+     * Provider-reported windows keyed by model id, cached from the last model
+     * listing. Stored as JSON in one preference: the set is small (tens of
+     * entries) and always written whole.
+     */
+    private fun modelContextWindowCache(): Map<String, Int> {
+        val raw = prefs.getString("aiModelContextWindows", "") ?: ""
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val obj = org.json.JSONObject(raw)
+            buildMap {
+                obj.keys().forEach { key ->
+                    obj.optInt(key, 0).takeIf { it > 0 }?.let { put(key, it) }
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /**
+     * Replace the cached provider windows. Called after a model listing; an empty
+     * map clears the cache so a gateway that stopped reporting windows does not
+     * leave a stale number in force.
+     */
+    fun cacheModelContextWindows(windows: Map<String, Int>) {
+        val json = org.json.JSONObject()
+        windows.forEach { (id, window) -> if (window > 0) json.put(id, window) }
+        prefs.edit().putString("aiModelContextWindows", json.toString()).apply()
+    }
 
     var aiTemperature: Float
         get() = prefs.getFloat("aiTemperature", 0.2f)
         set(value) = prefs.edit().putFloat("aiTemperature", value.coerceIn(0f, 2f)).apply()
 
+    /**
+     * Maximum agent turns per deep-analysis run.
+     *
+     * The accepted range must match what the consumer enforces. It previously
+     * clamped to 4..80 here while DeepAnalysisService re-clamped the value it read
+     * to 20..256, so anything set below 20 silently ran 20 turns and the upper
+     * bound of 80 could never reach 256 — the lower half of the setting did
+     * nothing. One range, defined once.
+     */
     var aiMaxIterations: Int
-        get() = prefs.getInt("aiMaxIterations", 28)
-        set(value) = prefs.edit().putInt("aiMaxIterations", value.coerceIn(4, 80)).apply()
+        get() = prefs.getInt("aiMaxIterations", 28).coerceIn(AI_MIN_ITERATIONS, AI_MAX_ITERATIONS)
+        set(value) = prefs.edit().putInt("aiMaxIterations", value.coerceIn(AI_MIN_ITERATIONS, AI_MAX_ITERATIONS)).apply()
 
-    var aiHistorySoftLimit: Int
-        get() = prefs.getInt("aiHistorySoftLimit", 24)
-        set(value) = prefs.edit().putInt("aiHistorySoftLimit", value.coerceIn(8, 120)).apply()
+    /**
+     * Character budget for the conversation history replayed into a follow-up turn.
+     *
+     * Stored in characters, matching how it is consumed. The old 8..120 range was
+     * meaningless: the consumer applied `coerceAtLeast(4_000)`, so every value in
+     * the settable range was raised to 4000 and the control had no effect at all.
+     */
+    var aiHistoryCharBudget: Int
+        get() = prefs.getInt("aiHistoryCharBudget", prefs.getInt("aiHistorySoftLimit", 0).takeIf { it >= AI_MIN_HISTORY_CHARS } ?: AI_DEFAULT_HISTORY_CHARS)
+            .coerceIn(AI_MIN_HISTORY_CHARS, AI_MAX_HISTORY_CHARS)
+        set(value) = prefs.edit().putInt("aiHistoryCharBudget", value.coerceIn(AI_MIN_HISTORY_CHARS, AI_MAX_HISTORY_CHARS)).apply()
 
     var aiCustomHeadersJson: String
         get() = prefs.getString("aiCustomHeadersJson", "{}") ?: "{}"
@@ -713,7 +848,13 @@ class SettingsStore(context: Context) {
                 .put("model", aiModel)
                 .put("temperature", aiTemperature.toDouble())
                 .put("maxIterations", aiMaxIterations)
-                .put("historySoftLimit", aiHistorySoftLimit)
+                .put("historyCharBudget", aiHistoryCharBudget)
+                .put("contextWindow", if (contextWindowIsUnknown) org.json.JSONObject.NULL else effectiveContextWindow)
+                .put("contextWindowSource", contextWindowSource)
+                .put("contextBudgetTokens", contextBudgetTokens)
+                .put("contextWindowOverride", aiContextWindowOverride)
+                .put("contextWindowMeasured", aiContextWindowMeasured)
+                .put("contextWindowFromProvider", aiContextWindowFromProvider)
                 .put("customHeadersJson", aiCustomHeadersJson)
                 .put("customBodyJson", aiCustomBodyJson)
                 .put("systemPromptChars", aiSystemPrompt.length))
@@ -721,7 +862,30 @@ class SettingsStore(context: Context) {
 
     fun applyPatch(patch: org.json.JSONObject, allowSecrets: Boolean = true, allowSecurityFields: Boolean = false): org.json.JSONObject {
         val changed = org.json.JSONArray()
-        fun touch(key: String) { changed.put(key) }
+        val rejected = org.json.JSONArray()
+        // Pre-existing quirk, same cause as the rejection dedup below: a flat
+        // patch is the fallback for every nested section, so each flat key is
+        // applied through both the nested and the flat branch and used to be
+        // reported twice in `changed`.
+        val changedKeys = HashSet<String>()
+        fun touch(key: String) { if (changedKeys.add(key)) changed.put(key) }
+        // Security/secret keys are gated. Record every gated key that the caller
+        // actually tried to set so the response says so, instead of reporting
+        // ok=true with the value silently discarded.
+        // A flat patch is also used as the fallback for every nested section
+        // (`obj("service") ?: patch`), so a flat key reaches both the nested and
+        // the flat branch. Record each rejected key once.
+        val rejectedKeys = HashSet<String>()
+        fun recordRejection(key: String, reason: String) {
+            if (rejectedKeys.add(key)) {
+                rejected.put(org.json.JSONObject().put("key", key).put("reason", reason))
+            }
+        }
+        fun rejectIfPresent(source: org.json.JSONObject?, key: String, reason: String) {
+            if (source != null && source.has(key) && !source.isNull(key)) recordRejection(key, reason)
+        }
+        // Flat-key variant: the caller already established the key is present.
+        fun reject(key: String, reason: String = SECURITY_FIELD_REJECTION) = recordRejection(key, reason)
         fun obj(name: String): org.json.JSONObject? = patch.optJSONObject(name)
         fun applyBool(source: org.json.JSONObject?, key: String, apply: (Boolean) -> Unit) {
             if (source != null && source.has(key) && !source.isNull(key)) {
@@ -757,8 +921,11 @@ class SettingsStore(context: Context) {
         val service = obj("service") ?: patch
         applyInt(service, "port") { port = it }
         if (allowSecurityFields) applyStr(service, "bindHost") { bindHost = it }
+        else rejectIfPresent(service, "bindHost", SECURITY_FIELD_REJECTION)
         if (allowSecurityFields) applyBool(service, "authEnabled") { authEnabled = it }
+        else rejectIfPresent(service, "authEnabled", SECURITY_FIELD_REJECTION)
         if (allowSecrets && allowSecurityFields) applyStr(service, "accessToken") { accessToken = it }
+        else rejectIfPresent(service, "accessToken", SECURITY_FIELD_REJECTION)
         applyStr(service, "defaultWorkDirPath") { defaultWorkDirPath = it }
         applyBool(service, "useDefaultWorkDir") { useDefaultWorkDir = it }
         applyBool(service, "floatingEnabled") { floatingEnabled = it }
@@ -816,6 +983,7 @@ class SettingsStore(context: Context) {
         applyBool(tunnel, "tunnelAutoStart") { tunnelAutoStart = it }
         applyInt(tunnel, "tunnelTargetPort") { tunnelTargetPort = it }
         if (allowSecrets && allowSecurityFields) applyStr(tunnel, "tunnelNamedToken") { tunnelNamedToken = it }
+        else rejectIfPresent(tunnel, "tunnelNamedToken", SECURITY_FIELD_REJECTION)
         applyStr(tunnel, "tunnelProtocol") { tunnelProtocol = it }
         applyStr(tunnel, "tunnelEdgeIpVersion") { tunnelEdgeIpVersion = it }
         applyBool(tunnel, "tunnelReconnect") { tunnelReconnect = it }
@@ -827,6 +995,7 @@ class SettingsStore(context: Context) {
         val apk = obj("apkBridge") ?: patch
         applyStr(apk, "apkMcpUrl") { apkMcpUrl = it }
         if (allowSecrets) applyStr(apk, "apkMcpToken") { apkMcpToken = it }
+        else rejectIfPresent(apk, "apkMcpToken", "secret field; allowSecrets=false")
         // Support setting multiple bridge configs via JSON array
         if (apk.has("apkMcpConfigs") && !apk.isNull("apkMcpConfigs")) {
             try {
@@ -876,9 +1045,9 @@ class SettingsStore(context: Context) {
                 "textScale" -> { textScale = patch.optString(key); touch(key) }
                 "predictiveBackEnabled" -> { predictiveBackEnabled = patch.optBoolean(key); touch(key) }
                 "port" -> { port = patch.optInt(key); touch(key) }
-                "bindHost" -> if (allowSecurityFields) { bindHost = patch.optString(key); touch(key) }
-                "authEnabled" -> if (allowSecurityFields) { authEnabled = patch.optBoolean(key); touch(key) }
-                "accessToken" -> if (allowSecrets && allowSecurityFields) { accessToken = patch.optString(key); touch(key) }
+                "bindHost" -> if (allowSecurityFields) { bindHost = patch.optString(key); touch(key) } else reject(key)
+                "authEnabled" -> if (allowSecurityFields) { authEnabled = patch.optBoolean(key); touch(key) } else reject(key)
+                "accessToken" -> if (allowSecrets && allowSecurityFields) { accessToken = patch.optString(key); touch(key) } else reject(key)
                 "floatingEnabled" -> { floatingEnabled = patch.optBoolean(key); touch(key) }
                 "wakeLockEnabled" -> { wakeLockEnabled = patch.optBoolean(key); touch(key) }
                 "bootAutoStart" -> { bootAutoStart = patch.optBoolean(key); touch(key) }
@@ -893,10 +1062,10 @@ class SettingsStore(context: Context) {
                 "tunnelMode" -> { tunnelMode = patch.optString(key); touch(key) }
                 "tunnelAutoStart" -> { tunnelAutoStart = patch.optBoolean(key); touch(key) }
                 "tunnelTargetPort" -> { tunnelTargetPort = patch.optInt(key); touch(key) }
-                "tunnelNamedToken" -> if (allowSecrets && allowSecurityFields) { tunnelNamedToken = patch.optString(key); touch(key) }
+                "tunnelNamedToken" -> if (allowSecrets && allowSecurityFields) { tunnelNamedToken = patch.optString(key); touch(key) } else reject(key)
                 "tunnelProtocol" -> { tunnelProtocol = patch.optString(key); touch(key) }
                 "apkMcpUrl" -> { apkMcpUrl = patch.optString(key); touch(key) }
-                "apkMcpToken" -> if (allowSecrets) { apkMcpToken = patch.optString(key); touch(key) }
+                "apkMcpToken" -> if (allowSecrets) { apkMcpToken = patch.optString(key); touch(key) } else reject(key, "secret field; allowSecrets=false")
                 "apkMcpAutoProbe" -> { apkMcpAutoProbe = patch.optBoolean(key); touch(key) }
                 "apkMcpMergeTools" -> { apkMcpMergeTools = patch.optBoolean(key); touch(key) }
                 "disabledTools" -> { disabledTools = patch.optString(key); touch(key) }
@@ -910,6 +1079,13 @@ class SettingsStore(context: Context) {
             .put("ok", true)
             .put("changed", changed)
             .put("changedCount", changed.length())
+            .put("rejected", rejected)
+            .put("rejectedCount", rejected.length())
+            .apply {
+                if (rejected.length() > 0) {
+                    put("hint", "Some keys were not applied. Bind host, auth toggle and tokens are only changeable from the app UI, never over MCP.")
+                }
+            }
             .put("config", snapshot(maskSecrets = true))
     }
 

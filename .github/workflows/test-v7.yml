@@ -81,27 +81,30 @@ jobs:
             done <<< "$NEW_SOURCE_FILES"
           fi
           CHANGED_FILES=$(git diff "$BASE"...HEAD --name-only --diff-filter=AM \
-            | grep -E '\.(kt|java|cpp|c|h|hpp|py|rs|go|sh|gradle|groovy|toml|yaml|yml)$' || true)
+            | grep -E '\.(kt|java|cpp|c|h|hpp|py|rs|go|sh|gradle|groovy|toml|yaml|yml)$' \
+            | grep -v '^\.github/workflows/' || true)
           if [ -n "$CHANGED_FILES" ]; then
-            INCOMPATIBLE_PATTERNS="\
-Licensed under the Apache License,\
-Permission is hereby granted.*free of charge.*to deal.*the Software without restriction\
-MIT License\
-BSD License\
-All Rights Reserved\
-Proprietary\
-All rights reserved\
-"
+            # One array element per pattern. The previous form was a single
+            # backslash-continued string, so every pattern collapsed onto one
+            # line and the loop below tested one nonsense value instead of
+            # seven - the check reported "passed" without ever matching.
+            INCOMPATIBLE_PATTERNS=(
+              "Licensed under the Apache License,"
+              "MIT License"
+              "BSD License"
+              "All Rights Reserved"
+              "Proprietary"
+              "Permission is hereby granted, free of charge"
+            )
             while IFS= read -r file; do
               content=$(git diff "$BASE"...HEAD -- "$file" | grep '^+[^+]' || true)
               if [ -z "$content" ]; then continue; fi
-              while IFS= read -r pattern; do
-                [ -z "$pattern" ] && continue
+              for pattern in "${INCOMPATIBLE_PATTERNS[@]}"; do
                 if echo "$content" | grep -qiF "$pattern"; then
                   echo "::error::File '$file' may contain an incompatible license reference: '$pattern'. This project is GPL-3.0-only."
                   exit_code=1
                 fi
-              done <<< "$INCOMPATIBLE_PATTERNS"
+              done
             done <<< "$CHANGED_FILES"
           fi
           if [ $exit_code -eq 0 ]; then
@@ -126,7 +129,7 @@ All rights reserved\
           curl -sSLO "https://github.com/pinterest/ktlint/releases/download/1.5.0/ktlint"
           chmod +x ktlint
           cd -
-          violations=$(/tmp/ktlint --android --relative "app/src/**/*.kt" 2>&1) || true
+          violations=$(/tmp/ktlint --relative "app/src/**/*.kt" 2>&1) || true
           if [ -n "$violations" ]; then
             echo "::error::Kotlin code style violations found:"
             echo "$violations"
@@ -137,6 +140,8 @@ All rights reserved\
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+      - name: Native signature-parser tests
+        run: tools/native-tests/run.sh
       - name: Lint check
         run: gradle :app:lintDebug --stacktrace
       - name: Debug build

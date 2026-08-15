@@ -4,6 +4,7 @@ import android.content.Context
 import com.soreverse.mcp.core.DeepAnalysisEvent
 import com.soreverse.mcp.core.DeepAnalysisService
 import com.soreverse.mcp.core.DeepReportStore
+import com.soreverse.mcp.core.AI_MIN_HISTORY_CHARS
 import com.soreverse.mcp.core.RikkaPart
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.service.McpForegroundService
@@ -13,6 +14,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Conversation turns replayed as context into a follow-up deep-analysis request. */
+private const val DEEP_TURN_HISTORY_MESSAGES = 6
 
 internal fun launchSoScan(
     context: Context,
@@ -80,7 +84,7 @@ internal fun launchDeepAnalysis(
     val turnRequest = buildDeepTurnRequest(
         request = request,
         messages = state.deepMessages,
-        historySoftLimit = settings.aiHistorySoftLimit,
+        historyCharBudget = settings.aiHistoryCharBudget,
     )
     if (request.isBlank()) state.deepMessages = emptyList()
     state.deepTargetPath = path
@@ -176,16 +180,19 @@ internal fun launchDeepAnalysis(
 internal fun buildDeepTurnRequest(
     request: String,
     messages: List<DeepChatMessage>,
-    historySoftLimit: Int,
+    historyCharBudget: Int,
 ): String {
     if (request.isBlank()) return request
+    // Honour the configured budget as given. The previous
+    // `coerceAtLeast(4_000)` raised every value the setting could hold (8..120)
+    // to 4000, so the control was inert.
     val history = messages
-        .takeLast(6)
+        .takeLast(DEEP_TURN_HISTORY_MESSAGES)
         .joinToString("\n\n") { message ->
             val role = if (message.role == DeepChatRole.USER) "用户" else "AI"
             "$role: ${message.text}"
         }
-        .takeLast(historySoftLimit.coerceAtLeast(4_000))
+        .takeLast(historyCharBudget.coerceAtLeast(AI_MIN_HISTORY_CHARS))
     return if (history.isBlank()) request else """以下是最近对话上下文：
 $history
 

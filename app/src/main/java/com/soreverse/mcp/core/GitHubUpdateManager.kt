@@ -54,11 +54,11 @@ sealed interface UpdateDownloadEvent {
     data class Selected(val source: String) : UpdateDownloadEvent
     data class Downloading(val source: String, val percent: Int) : UpdateDownloadEvent
     data object Verifying : UpdateDownloadEvent
-    /** Emitted when checksum verification is skipped (asset missing/unreachable). */
+    /** Emitted when checksum verification cannot run, so the update is refused. */
     data class VerifySkipped(val reason: String) : UpdateDownloadEvent
 }
 
-/** The checksum asset could not be fetched; verification is skipped (soft). */
+/** The checksum asset could not be fetched; updates fail closed rather than offering an unverified APK. */
 class ChecksumUnavailableException(message: String) : Exception(message)
 
 /** A checksum was fetched but did not match the download; hard failure. */
@@ -216,32 +216,26 @@ class GitHubUpdateManager(private val context: Context) {
                 }
                 require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
                 emit(UpdateDownloadEvent.Verifying)
-                // Checksum verification is best-effort: the payload has already
-                // been validated as a well-formed APK/ZIP above. If the checksum
-                // asset cannot be fetched in time (mirror down / slow / missing),
-                // we must NOT hang or hard-fail the whole update — we downgrade to
-                // an unverified-but-installable result instead of dying on one
-                // tree. A checksum that is fetched AND mismatches is still a hard
-                // failure (that means tampering / corruption).
-                val verifiedHash = release.checksumUrl?.let { url ->
-                    runCatching { verifyChecksum(partial, url, target.name) }
-                        .onFailure { emit(UpdateDownloadEvent.VerifySkipped(it.message ?: "checksum unavailable")) }
-                        .getOrElse { failure ->
-                            if (failure is ChecksumMismatchException) throw failure
-                            null
-                        }
-                } ?: run {
-                    emit(UpdateDownloadEvent.VerifySkipped("no checksum published"))
-                    null
+                // An APK update is executable code. A ZIP magic check proves only
+                // structure, not provenance, so do not turn a missing checksum into
+                // an installable result. In particular, a third-party proxy could
+                // serve a modified APK and make its checksum URL time out.
+                val checksumUrl = release.checksumUrl
+                    ?: throw ChecksumUnavailableException("Release does not publish a SHA-256 checksum asset")
+                val verifiedHash = try {
+                    verifyChecksum(partial, checksumUrl, target.name)
+                } catch (failure: Throwable) {
+                    emit(UpdateDownloadEvent.VerifySkipped(failure.message ?: "checksum unavailable"))
+                    throw failure
                 }
                 runCatching {
                     Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
                 }.getOrElse {
                     Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
                 }
-                // Only persist the .verified marker when we actually verified the
-                // hash; otherwise the cached-download fast path must re-check.
-                if (verifiedHash != null) verified.writeText(verifiedHash) else verified.delete()
+                // A verified marker contains the hash of the exact bytes moved
+                // into place. cachedDownload re-hashes before trusting it.
+                verified.writeText(verifiedHash)
                 Result.success(target)
                 }
             } catch (error: CancellationException) {
@@ -259,22 +253,10 @@ class GitHubUpdateManager(private val context: Context) {
         val sizeOk = release.apkSize <= 0 || file.length() == release.apkSize
         if (!sizeOk) return null
         val expectedHash = verified.readTextOrNull()?.trim()?.lowercase()?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
-        if (expectedHash != null) {
-            // Re-hash the actual bytes: a predictable marker alone must never be trusted.
-            val actualHash = runCatching { fileSha256(file) }.getOrNull() ?: return null
-            return file.takeIf { actualHash == expectedHash }
-        }
-        // No verified marker (checksum was unavailable at download time). Fall back
-        // to a structural check so a previously downloaded APK is still reusable
-        // instead of forcing a slow re-download that would likely be unverifiable
-        // again anyway.
-        val looksLikeApk = runCatching {
-            file.inputStream().use {
-                val header = ByteArray(4)
-                it.read(header) == 4 && header.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
-            }
-        }.getOrDefault(false)
-        return file.takeIf { looksLikeApk }
+        if (expectedHash == null) return null
+        // Re-hash the actual bytes: a predictable marker alone must never be trusted.
+        val actualHash = runCatching { fileSha256(file) }.getOrNull() ?: return null
+        return file.takeIf { actualHash == expectedHash }
     }
 
     private suspend fun rankedDownloadUrls(
@@ -366,10 +348,12 @@ class GitHubUpdateManager(private val context: Context) {
     private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
         var expected: String? = null
         var lastFailure: Throwable? = null
-        // Bound the total time spent chasing checksum mirrors so a slow/hanging
-        // mirror cannot make the whole update appear stuck. Try a limited number
-        // of ranked candidates, each already under probeClient/client timeouts.
-        val candidates = rankedDownloadUrls(url) {}.take(CHECKSUM_MIRROR_ATTEMPTS)
+        // The checksum must NOT be fetched through the same third-party proxy list
+        // as the APK. A mirror that serves both gets to sign off on its own
+        // payload, which makes verification meaningless. Only the canonical
+        // GitHub origin is trusted here; if it is unreachable the update fails
+        // closed rather than installing unverified bytes.
+        val candidates = listOf(url)
         for (candidate in candidates) {
             try {
                 val request = Request.Builder().url(candidate).header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}").build()
@@ -415,6 +399,5 @@ class GitHubUpdateManager(private val context: Context) {
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
         private const val LATEST_RELEASE_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases/latest"
-        private const val CHECKSUM_MIRROR_ATTEMPTS = 4
     }
 }

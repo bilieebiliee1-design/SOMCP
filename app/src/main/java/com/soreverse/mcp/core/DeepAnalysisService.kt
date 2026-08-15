@@ -42,10 +42,21 @@ class DeepAnalysisService(private val appContext: Context) {
     val partsDraft: StateFlow<List<RikkaPart>> = _partsDraft
     private val _workspaceId = MutableStateFlow("")
     val workspaceId: StateFlow<String> = _workspaceId
+    private var analysisRunId = 0L
+
+    /**
+     * Token usage reported by the provider for the run in progress, updated after
+     * each agent turn. Empty when the endpoint returns no `usage` (some gateways
+     * strip it, and OpenAI-compatible servers only send it when
+     * `stream_options.include_usage` is accepted).
+     */
+    private val _usage = MutableStateFlow(RikkaRunUsage())
+    val usage: StateFlow<RikkaRunUsage> = _usage
 
     fun resetReportDraft(resetWorkspace: Boolean = true) {
         _reportDraft.value = ""
         _partsDraft.value = emptyList()
+        _usage.value = RikkaRunUsage()
         if (resetWorkspace) _workspaceId.value = ""
     }
 
@@ -63,6 +74,7 @@ class DeepAnalysisService(private val appContext: Context) {
             .build()
         val customHeaders = parseStringMap(settings.aiCustomHeadersJson)
         val models = linkedSetOf<String>()
+        val windows = mutableMapOf<String, Int>()
         val seenCursors = mutableSetOf<String>()
         var cursor: String? = null
         var nextUrl: String? = null
@@ -90,13 +102,21 @@ class DeepAnalysisService(private val appContext: Context) {
                 parseModelPage(body)
             }
             models.addAll(page.models)
-            if (models.size >= 5_000) return models.take(5_000).sorted()
+            windows.putAll(page.contextWindows)
+            if (models.size >= 5_000) {
+                settings.cacheModelContextWindows(windows)
+                return models.take(5_000).sorted()
+            }
             val continuation = page.nextUrl ?: page.cursor
-            if (!page.hasMore || continuation.isNullOrBlank()) return models.sorted()
+            if (!page.hasMore || continuation.isNullOrBlank()) {
+                settings.cacheModelContextWindows(windows)
+                return models.sorted()
+            }
             if (!seenCursors.add(continuation)) error("Model pagination cursor did not advance")
             nextUrl = page.nextUrl
             cursor = page.cursor
         }
+        settings.cacheModelContextWindows(windows)
         return models.sorted()
     }
 
@@ -136,6 +156,19 @@ class DeepAnalysisService(private val appContext: Context) {
                 }
             }
         }
+        // Capture the context window alongside the id. This is the authoritative
+        // source when the provider publishes it; entries without one are simply
+        // absent from the map, which keeps the window honestly unknown rather than
+        // inviting a guess from the model name.
+        val windows = buildMap {
+            for (index in 0 until array.length()) {
+                val item = array.opt(index) as? OrgJSONObject ?: continue
+                val id = listOf("id", "model_id", "model", "name")
+                    .firstNotNullOfOrNull { key -> item.optString(key).takeIf(String::isNotBlank) }
+                    ?: continue
+                ContextWindow.parseFromModelEntry(item)?.let { put(id, it) }
+            }
+        }
         val pagination = root?.optJSONObject("pagination")
         val nextValue = listOfNotNull(
             root?.optString("next_cursor")?.takeIf(String::isNotBlank),
@@ -148,11 +181,13 @@ class DeepAnalysisService(private val appContext: Context) {
         ).firstOrNull()
         val hasMore = root?.optBoolean("has_more", false) == true ||
             nextValue != null || nextUrl != null
-        return ModelPage(models, hasMore, nextValue, nextUrl)
+        return ModelPage(models, windows, hasMore, nextValue, nextUrl)
     }
 
     private data class ModelPage(
         val models: List<String>,
+        /** Model id to context window, for entries that report one. */
+        val contextWindows: Map<String, Int>,
         val hasMore: Boolean,
         val cursor: String?,
         val nextUrl: String?,
@@ -184,6 +219,7 @@ class DeepAnalysisService(private val appContext: Context) {
 
     private suspend fun analyzeOnce(path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            // Declared here so the AgentTurnLimitException handler below can reach it.
             if (!McpForegroundService.isRunning()) {
                 error(if (zh) "请先开启 MCP 服务后再进行 AI 深度分析" else "Start the MCP service before AI deep analysis")
             }
@@ -202,14 +238,29 @@ class DeepAnalysisService(private val appContext: Context) {
             )
             val tools = buildRikkaTools(settings, zh)
             var lastReasoning = ""
+            // Context management runs inside the loop but needs a model call for
+            // summarisation, so it is supplied from here.
+            val runDir = java.io.File(appContext.cacheDir, "ai-offload/run-${++analysisRunId}").apply {
+                if (!exists()) mkdirs()
+            }
+            val contextManager = ContextManager(
+                contextWindow = settings.contextBudgetTokens,
+                offloadDir = runDir,
+                summarise = { messages -> summariseMessages(messages, settings) },
+                onEvent = { note -> emit(DeepAnalysisEvent.Kind.STATUS, note) },
+            )
             val finalReport = engine.run(
-                settings.aiSystemPrompt,
-                userPrompt,
-                tools,
-                settings.aiMaxIterations.coerceIn(20, 256),
+                systemPrompt = settings.aiSystemPrompt,
+                userPrompt = userPrompt,
+                tools = tools,
+                maxSteps = settings.aiMaxIterations,
                 requiredTools = REQUIRED_EVIDENCE_TOOLS,
+                contextManager = contextManager,
             ) { parts ->
                 _partsDraft.value = parts
+                // engine.runUsage is refreshed once per completed turn; mirror it so
+                // the UI can show real context pressure instead of a guessed limit.
+                if (engine.runUsage.turns != _usage.value.turns) _usage.value = engine.runUsage
                 val report = parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text }
                 if (report.isNotEmpty()) _reportDraft.value = report
                 val reasoning = parts.filterIsInstance<RikkaPart.Reasoning>().joinToString("") { it.text }
@@ -218,15 +269,126 @@ class DeepAnalysisService(private val appContext: Context) {
                     lastReasoning = reasoning
                 }
             }
+            _usage.value = engine.runUsage
             if (finalReport.isBlank()) error(if (zh) "模型返回了空的分析结果" else "The model returned an empty analysis result")
             _reportDraft.value = finalReport
             emit(DeepAnalysisEvent.Kind.DONE, finalReport)
             finalReport
-        }.onFailure { Log.e("SOMCP-DeepAnalysis", "AI deep analysis failed", it) }
+        }.recoverCatching { error ->
+            // Hitting the turn ceiling is a stop condition, not a lost run: keep the
+            // prose already produced and label it, instead of discarding everything.
+            val limit = generateSequence(error) { it.cause }
+                .filterIsInstance<AgentTurnLimitException>()
+                .firstOrNull() ?: throw error
+            val note = if (zh) {
+                "已达到 ${limit.limit} 轮工具调用上限并停止，以防止无限循环。以下是已完成的部分分析。"
+            } else {
+                "Stopped at the ${limit.limit}-turn tool-call ceiling to prevent a runaway loop. Partial analysis follows."
+            }
+            emit(DeepAnalysisEvent.Kind.STATUS, note)
+            val partial = limit.partialText.ifBlank { _reportDraft.value }
+            if (partial.isBlank()) throw error
+            val combined = "$note\n\n$partial"
+            _reportDraft.value = combined
+            emit(DeepAnalysisEvent.Kind.DONE, combined)
+            combined
+        }.onFailure { error ->
+            recordContextOverflow(error, settings)
+            Log.e("SOMCP-DeepAnalysis", "AI deep analysis failed", error)
+        }
+    }
+
+    /**
+     * When a run fails because the context window overflowed, persist the limit the
+     * provider reported so subsequent runs budget against a measured number rather
+     * than a name-derived guess.
+     *
+     * Only a strictly smaller value is stored: some gateways report the limit of a
+     * larger upstream model, and raising the figure on a failure would leave the
+     * budget higher than the request that just failed.
+     */
+    private suspend fun summariseMessages(
+        messages: List<RikkaMessage>,
+        settings: SettingsStore,
+        depth: Int = 0,
+    ): String {
+        val transcript = ContextCompactor.buildTranscript(messages)
+        return try {
+            summariseTranscript(transcript, settings)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            if (!ContextWindow.isOverflowError(error.message) || messages.size < 2 || depth >= 3) throw error
+            val midpoint = messages.size / 2
+            val older = summariseMessages(messages.take(midpoint), settings, depth + 1)
+            val newer = summariseMessages(messages.drop(midpoint), settings, depth + 1)
+            summariseTranscript(
+                buildString {
+                    append("Merge these partial context summaries into one. Frame all facts as past events, not an ongoing goal or todo list. ")
+                    append("Preserve paths, identifiers, tool outcomes, decisions, and constraints verbatim. Prefer Part 2 when space is tight.\n\n")
+                    append("Part 1:\n").append(older).append("\n\nPart 2:\n").append(newer)
+                },
+                settings,
+            )
+        }
+    }
+
+    /**
+     * One-shot summarisation call used by [ContextManager].
+     *
+     * Deliberately does not reuse the agent engine: no tools are offered, so the
+     * model cannot start doing work while summarising, and a low temperature keeps
+     * identifiers verbatim. [summariseMessages] retries an overflow by splitting
+     * on message boundaries, matching OpenMinis' bounded split/merge ladder.
+     */
+    private suspend fun summariseTranscript(transcript: String, settings: SettingsStore): String {
+        val engine = RikkaAgentEngine(
+            client = OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(4, TimeUnit.MINUTES)
+                .writeTimeout(120, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build(),
+            provider = settings.aiProvider,
+            endpoint = settings.aiEndpoint,
+            apiKey = settings.aiApiKey,
+            model = settings.aiModel,
+            temperature = 0f,
+            customHeaders = parseStringMap(settings.aiCustomHeadersJson),
+            customBody = buildAdditionalProperties(settings),
+        )
+        return engine.run(
+            systemPrompt = ContextCompactor.SUMMARY_SYSTEM_PROMPT,
+            userPrompt = "Compact this conversation into a context summary:\n\n$transcript",
+            tools = emptyList(),
+            maxSteps = 1,
+            contextBudgetTokens = settings.contextBudgetTokens,
+            summaryRequest = true,
+        ) { }
+    }
+
+    private fun recordContextOverflow(error: Throwable, settings: SettingsStore) {
+        val overflow = generateSequence(error) { it.cause }.filterIsInstance<ContextOverflowException>().firstOrNull()
+            ?: return
+        val limit = overflow.reportedLimit ?: return
+        if (limit < AI_MIN_CONTEXT_WINDOW) return
+        val current = settings.effectiveContextWindow
+        // Accept the measured value when nothing was known, or when it is strictly
+        // smaller than what is in force. Raising the budget after a failure would
+        // leave it above the request that just failed — some gateways report the
+        // limit of a larger upstream model.
+        if (current <= 0 || limit < current) {
+            settings.aiContextWindowMeasured = limit
+            Log.i("SOMCP-DeepAnalysis", "context window measured from provider error: $limit (was ${if (current <= 0) "unknown" else current.toString()})")
+        }
     }
 
     private fun isRetryable(error: Throwable): Boolean {
         val message = generateSequence(error) { it.cause }.joinToString("\n") { it.message.orEmpty() }
+        // A context overflow is deterministic: the same oversized request fails
+        // identically every time, so retrying only burns quota. Some gateways
+        // return it as HTTP 400 or 500, which the status regex below would
+        // otherwise treat as transient.
+        if (ContextWindow.isOverflowError(message)) return false
         return Regex("(?:Status code:|SSE HTTP|HTTP)\\s*(408|409|425|429|5\\d\\d)", RegexOption.IGNORE_CASE).containsMatchIn(message) ||
             message.contains("rate_limit_error", true) ||
             message.contains("rate limit", true) ||

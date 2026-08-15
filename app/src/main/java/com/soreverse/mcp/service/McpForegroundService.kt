@@ -114,7 +114,7 @@ class McpForegroundService : Service() {
     }
 
     private fun startServer() {
-        if (!IntegrityGuard.isTrusted(applicationContext)) {
+        if (IntegrityGuard.enforcementEnabled() && !IntegrityGuard.isTrusted(applicationContext)) {
             AppLog.e("MCP service start blocked by integrity guard")
             running = false
             stopSelf()
@@ -445,7 +445,7 @@ class McpForegroundService : Service() {
         fun isRunning(): Boolean = running
 
         fun start(context: Context) {
-            if (!IntegrityGuard.isTrusted(context.applicationContext)) {
+            if (IntegrityGuard.enforcementEnabled() && !IntegrityGuard.isTrusted(context.applicationContext)) {
                 AppLog.e("MCP service start rejected before dispatch by integrity guard")
                 return
             }

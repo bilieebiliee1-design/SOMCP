@@ -61,7 +61,7 @@ class NativeSoEngine(context: Context) {
     fun rzAnalyze(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.rzAnalyze(workspaceId, editSessionId)
     fun rzFunctions(workspaceId: String, editSessionId: String = "", limit: Int = SettingsStore(appContext).defaultLimit, cursor: String = ""): JSONObject = runtime.rzFunctions(workspaceId, editSessionId, limit, cursor)
     fun rzCfg(workspaceId: String, editSessionId: String, locator: String): JSONObject = runtime.rzCfg(workspaceId, editSessionId, locator)
-    fun rzXrefs(workspaceId: String, editSessionId: String, locator: String, direction: String = "to"): JSONObject = runtime.rzXrefs(workspaceId, editSessionId, locator, direction)
+    fun rzXrefs(workspaceId: String, editSessionId: String, locator: String, direction: String = "to", limit: Int = 0): JSONObject = runtime.rzXrefs(workspaceId, editSessionId, locator, direction, limit)
     fun rzSearchBytes(workspaceId: String, editSessionId: String, pattern: String, fromVa: Long = 0, toVa: Long = 0): JSONObject = runtime.rzSearchBytes(workspaceId, editSessionId, pattern, fromVa, toVa)
     fun rzScanCrypto(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.rzScanCrypto(workspaceId, editSessionId)
     fun rzEsilStep(workspaceId: String, editSessionId: String, locator: String, stepCount: Int = 1): JSONObject = runtime.rzEsilStep(workspaceId, editSessionId, locator, stepCount)

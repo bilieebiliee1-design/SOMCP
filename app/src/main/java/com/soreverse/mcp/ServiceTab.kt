@@ -46,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +67,7 @@ import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.service.McpForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -77,6 +79,7 @@ internal fun ServiceTab(
     onOpenTunnel: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var treeUri by remember { mutableStateOf(settings.treeUri) }
     var port by remember { mutableStateOf(settings.port.toString()) }
     var running by remember { mutableStateOf(McpForegroundService.isRunning()) }
@@ -103,12 +106,15 @@ internal fun ServiceTab(
 
     LaunchedEffect(Unit) {
         treeUri?.let { EngineProvider.get(context).setWorkDirectory(it) }
-        apkConnected = withContext(Dispatchers.IO) {
-            val bridge = activeBridge(context)
-            when {
-                settings.apkMcpConfigs.isNotEmpty() -> bridge.probe().online
-                settings.apkMcpAutoProbe -> bridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT).online
-                else -> false
+        val initialBridge = activeBridge(context)
+        val cached = initialBridge.state()
+        apkConnected = cached.online
+        if (!cached.online && settings.apkMcpAutoProbe) {
+            // Refresh in the background without holding the whole ServiceTab in its
+            // initial Checking state. Settings and Console share this bridge instance.
+            scope.launch(Dispatchers.IO) {
+                val result = if (settings.apkMcpConfigs.isNotEmpty()) initialBridge.probe() else initialBridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT)
+                apkConnected = result.online || initialBridge.allPrefixes().isNotEmpty()
             }
         }
         while (true) {
@@ -126,10 +132,12 @@ internal fun ServiceTab(
             if (anyOnline) {
                 apkConnected = true
             } else if (settings.apkMcpAutoProbe) {
-                apkConnected = withContext(Dispatchers.IO) {
-                    val bridge = activeBridge(context)
-                    val result = if (settings.apkMcpConfigs.isNotEmpty()) bridge.probe() else bridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT)
-                    result.online
+                val bridge = activeBridge(context)
+                if (!bridge.hasFreshOnlineState()) {
+                    scope.launch(Dispatchers.IO) {
+                        val result = if (settings.apkMcpConfigs.isNotEmpty()) bridge.probe() else bridge.autoDiscover(ApkMcpBridge.DEFAULT_PORT)
+                        apkConnected = result.online || bridge.allPrefixes().isNotEmpty()
+                    }
                 }
             } else if (liveBridge != null || settings.apkMcpConfigs.isEmpty()) {
                 apkConnected = false

@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Debug
 import android.os.Process
+import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.nativecore.SignatureVerifier
 import java.io.File
 import java.net.InetSocketAddress
@@ -43,6 +44,23 @@ object IntegrityGuard {
      *   hook BOTH the Java PackageManager AND the native JNI bridge,
      *   significantly raising the effort required.
      */
+    /**
+     * Whether a failed integrity result may terminate the process or block a
+     * feature.
+     *
+     * A debug build is signed with the local debug keystore and can never match
+     * the pinned release signer, so enforcing would make every build from source
+     * exit at startup — including the project's own `assembleDebug`. Debug builds
+     * therefore report untrusted (so the state stays visible) but are never
+     * killed.
+     *
+     * Every enforcement point must consult this instead of testing
+     * `BuildConfig.DEBUG` locally: there are four independent call sites
+     * ([enforce], MainActivity's integrity gate, McpForegroundService, and
+     * BootReceiver), and gating only one of them still leaves the app exiting.
+     */
+    fun enforcementEnabled(): Boolean = !BuildConfig.DEBUG
+
     fun enforce(context: Context) {
         // 1. Java-level check (can be hooked by kstools-style tools)
         val javaResult = verify(context)
@@ -51,13 +69,18 @@ object IntegrityGuard {
         // 2. Native-level check (reads APK directly, bypasses PackageManager hook)
         val nativePass = SignatureVerifier.verify(context)
 
-        if (!javaPass || !nativePass) {
-            val reasons = mutableListOf<String>()
-            if (!javaPass) reasons.add("Java: ${javaResult.reason}")
-            if (!nativePass) reasons.add("Native: APK signer mismatch detected by filesystem-level verification")
-            AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
-            terminateWithContext(context)
+        if (javaPass && nativePass) return
+
+        val reasons = mutableListOf<String>()
+        if (!javaPass) reasons.add("Java: ${javaResult.reason}")
+        if (!nativePass) reasons.add("Native: APK signer mismatch detected by filesystem-level verification")
+
+        if (!enforcementEnabled()) {
+            AppLog.w("Integrity check failed on a debug build, continuing anyway: ${reasons.joinToString("; ")}")
+            return
         }
+        AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
+        terminateWithContext(context)
     }
 
     fun verify(context: Context): Result {
