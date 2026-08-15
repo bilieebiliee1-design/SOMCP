@@ -48,20 +48,32 @@ internal fun SettingsServiceConfigPage(t: UiText, settings: SettingsStore) {
     var authEnabled by remember { mutableStateOf(settings.authEnabled) }
     var accessToken by remember { mutableStateOf(settings.accessToken) }
     var refreshKey by remember { mutableStateOf(0) }
-    val pickTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            }.onFailure { AppLog.w("Unable to persist directory permission: ${it.message}") }
-            settings.treeUri = uri
-            settings.useDefaultWorkDir = false
-            treeUri = uri
-            EngineProvider.get(context).setWorkDirectory(uri)
+    val pickTree =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+            if (uri != null) {
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                }.onFailure { AppLog.w("Unable to persist directory permission: ${it.message}") }
+                settings.treeUri = uri
+                settings.useDefaultWorkDir = false
+                treeUri = uri
+                EngineProvider.get(context).setWorkDirectory(uri)
+            }
         }
-    }
-    val endpoints = remember(settings.port, settings.bindHost, refreshKey) { filteredEndpoints(context, settings, settings.port) }
-    val loopback = endpoints.firstOrNull { it.url.contains("127.0.0.1") }?.url ?: "http://127.0.0.1:${settings.port}/mcp"
-    val preferred = endpoints.firstOrNull { !it.url.contains("127.0.0.1") && !it.url.contains("[::1]") }?.url ?: loopback
+    val endpoints =
+        remember(settings.port, settings.bindHost, refreshKey) {
+            filteredEndpoints(context, settings, settings.port)
+        }
+    val loopback =
+        endpoints.firstOrNull { it.url.contains("127.0.0.1") }?.url
+            ?: "http://127.0.0.1:${settings.port}/mcp"
+    val preferred =
+        endpoints.firstOrNull { !it.url.contains("127.0.0.1") && !it.url.contains("[::1]") }?.url
+            ?: loopback
     val publicUrl = activeServer(context)?.tunnel?.status()?.publicUrl?.takeIf { it.isNotBlank() }
     PageScroll {
         GlassGroup(title = if (t.zh) "工作目录" else "Work directory") {
@@ -70,27 +82,46 @@ internal fun SettingsServiceConfigPage(t: UiText, settings: SettingsStore) {
                 subtitle = if (t.zh) "用于扫描、打开、修改与导出 SO" else "Used to scan, open, edit and export SO files",
                 icon = Icons.Default.FolderOpen,
                 trailing = if (t.zh) "选择" else "Choose",
-                onClick = { pickTree.launch(null) },
+                onClick = { pickTree.launch(null) }
             )
         }
-        GlassGroup(title = if (t.zh) "服务端口" else "Service port", footer = portStatusText(portText.toIntOrNull() ?: settings.port, McpForegroundService.isRunning(), t.zh)) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        GlassGroup(
+            title = if (t.zh) "服务端口" else "Service port",
+            footer = portStatusText(
+                portText.toIntOrNull() ?: settings.port,
+                McpForegroundService.isRunning(),
+                t.zh
+            )
+        ) {
+            Row(
+                Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 OutlinedTextField(
                     value = portText,
                     onValueChange = { portText = it.filter(Char::isDigit).take(5) },
                     label = { Text(t.port) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f)
                 )
                 PrimaryActionButton(if (t.zh) "应用" else "Apply", {
                     val next = portText.toIntOrNull()?.coerceIn(1024, 65535) ?: settings.port
-                    if (isPortAvailable(next, McpForegroundService.isRunning() && next == settings.port)) {
+                    if (isPortAvailable(
+                            next,
+                            McpForegroundService.isRunning() && next == settings.port
+                        )
+                    ) {
                         settings.port = next
                         portText = next.toString()
                         refreshKey++
                     } else {
-                        Toast.makeText(context, if (t.zh) "端口不可用" else "Port unavailable", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            if (t.zh) "端口不可用" else "Port unavailable",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 })
             }
@@ -100,31 +131,63 @@ internal fun SettingsServiceConfigPage(t: UiText, settings: SettingsStore) {
                 if (index > 0) GroupDivider()
                 val display = displayEndpoint(endpoint, t.zh)
                 val url = if (settings.authEnabled) "${endpoint.url}?token=${settings.accessToken}" else endpoint.url
-                NavRow(display.first, url, Icons.Default.Link, trailing = if (t.zh) "复制" else "Copy", onClick = { copy(context, url, t.copied) })
+                NavRow(display.first, url, Icons.Default.Link, trailing = if (t.zh) "复制" else "Copy", onClick = {
+                    copy(context, url, t.copied)
+                })
             }
             if (publicUrl != null) {
                 GroupDivider()
-                NavRow(if (t.zh) "公网隧道" else "Public tunnel", "$publicUrl/mcp", Icons.Default.Public, trailing = if (t.zh) "复制" else "Copy", onClick = { copy(context, "$publicUrl/mcp", t.copied) })
+                NavRow(if (t.zh) "公网隧道" else "Public tunnel", "$publicUrl/mcp", Icons.Default.Public, trailing = if (t.zh) "复制" else "Copy", onClick = {
+                    copy(context, "$publicUrl/mcp", t.copied)
+                })
             }
         }
-        GlassGroup(title = if (t.zh) "客户端配置" else "Client configuration", footer = if (t.zh) "桌面客户端优先使用 NPX 或 UVX 配置" else "Prefer NPX or UVX for desktop clients") {
-            Text(clientConfig(preferred, settings), modifier = Modifier.padding(14.dp), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-            FlowRow(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                PrimaryActionButton(if (t.zh) "复制 NPX" else "Copy NPX", { copy(context, clientConfig(preferred, settings), t.copied) })
-                PrimaryActionButton(if (t.zh) "复制 UVX" else "Copy UVX", { copy(context, clientConfigUvx(preferred, settings), t.copied) })
-                SecondaryActionButton(if (t.zh) "复制直连" else "Copy direct") { copy(context, clientConfigDirect(preferred, settings), t.copied) }
+        GlassGroup(
+            title = if (t.zh) "客户端配置" else "Client configuration",
+            footer = if (t.zh) "桌面客户端优先使用 NPX 或 UVX 配置" else "Prefer NPX or UVX for desktop clients"
+        ) {
+            Text(
+                clientConfig(preferred, settings),
+                modifier = Modifier.padding(14.dp),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall
+            )
+            FlowRow(
+                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PrimaryActionButton(if (t.zh) "复制 NPX" else "Copy NPX", {
+                    copy(context, clientConfig(preferred, settings), t.copied)
+                })
+                PrimaryActionButton(if (t.zh) "复制 UVX" else "Copy UVX", {
+                    copy(context, clientConfigUvx(preferred, settings), t.copied)
+                })
+                SecondaryActionButton(if (t.zh) "复制直连" else "Copy direct") {
+                    copy(context, clientConfigDirect(preferred, settings), t.copied)
+                }
             }
         }
-        GlassGroup(title = if (t.zh) "访问控制" else "Access control", footer = if (t.zh) "修改端口、绑定地址或 Token 后需重启服务。" else "Restart the service after changing port, bind address, or token.") {
+        GlassGroup(
+            title = if (t.zh) "访问控制" else "Access control",
+            footer = if (t.zh) "修改端口、绑定地址或 Token 后需重启服务。" else "Restart the service after changing port, bind address, or token."
+        ) {
             ToggleRow(if (t.zh) "启用访问 Token" else "Require access token", authEnabled) {
                 authEnabled = it
                 settings.authEnabled = it
             }
             GroupDivider()
-            Text(if (t.zh) "绑定地址" else "Bind address", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.labelMedium)
+            Text(
+                if (t.zh) "绑定地址" else "Bind address",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.labelMedium
+            )
             ChipRow(
-                listOf("0.0.0.0" to if (t.zh) "允许局域网" else "LAN", "127.0.0.1" to if (t.zh) "仅本机" else "Local only"),
-                bindHost,
+                listOf(
+                    "0.0.0.0" to if (t.zh) "允许局域网" else "LAN",
+                    "127.0.0.1" to if (t.zh) "仅本机" else "Local only"
+                ),
+                bindHost
             ) {
                 bindHost = it
                 settings.bindHost = it
@@ -133,15 +196,27 @@ internal fun SettingsServiceConfigPage(t: UiText, settings: SettingsStore) {
             GroupDivider()
             OutlinedTextField(
                 value = accessToken,
-                onValueChange = { accessToken = it; settings.accessToken = it },
+                onValueChange = {
+                    accessToken = it
+                    settings.accessToken = it
+                },
                 label = { Text(if (t.zh) "访问 Token" else "Access token") },
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                modifier = Modifier.fillMaxWidth().padding(14.dp)
             )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
-                PrimaryActionButton(if (t.zh) "重新生成" else "Regenerate", { accessToken = settings.resetAccessToken() })
-                SecondaryActionButton(if (t.zh) "复制 Token" else "Copy token") { copy(context, accessToken, t.copied) }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                PrimaryActionButton(if (t.zh) "重新生成" else "Regenerate", {
+                    accessToken =
+                        settings.resetAccessToken()
+                })
+                SecondaryActionButton(if (t.zh) "复制 Token" else "Copy token") {
+                    copy(context, accessToken, t.copied)
+                }
             }
         }
     }
@@ -164,7 +239,11 @@ private fun displayEndpoint(endpoint: EndpointInfo, zh: Boolean): Pair<String, S
     return label to note
 }
 
-internal fun filteredEndpoints(context: Context, settings: SettingsStore, port: Int): List<EndpointInfo> {
+internal fun filteredEndpoints(
+    context: Context,
+    settings: SettingsStore,
+    port: Int
+): List<EndpointInfo> {
     // Always surface every reachable endpoint (loopback + LAN + routable), the
     // same behaviour as 1.0.9. Earlier 1.0.10 hid all non-loopback URLs whenever
     // bindHost defaulted to 127.0.0.1, which regressed the "show my LAN link"

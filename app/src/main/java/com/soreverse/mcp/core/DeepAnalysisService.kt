@@ -6,6 +6,7 @@ import com.soreverse.mcp.mcp.SchemaBuilder
 import com.soreverse.mcp.mcp.ToolCatalog
 import com.soreverse.mcp.mcp.ToolContext
 import com.soreverse.mcp.service.McpForegroundService
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -17,19 +18,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
-import org.json.JSONArray
-import org.json.JSONObject
-import org.json.JSONObject as OrgJSONObject
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
+import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONObject as OrgJSONObject
 
-data class DeepAnalysisEvent(
-    val kind: Kind,
-    val text: String,
-    val toolName: String = "",
-) {
+data class DeepAnalysisEvent(val kind: Kind, val text: String, val toolName: String = "") {
     enum class Kind { STATUS, THINKING, TOOL, FINALIZING, TEXT, ERROR, DONE }
 }
 
@@ -49,12 +45,13 @@ class DeepAnalysisService(private val appContext: Context) {
         if (resetWorkspace) _workspaceId.value = ""
     }
 
-    suspend fun listModels(settings: SettingsStore): Result<List<String>> = withContext(Dispatchers.IO) {
-        runCatching {
-            requireModelCatalogConfigured(settings)
-            fetchModelCatalog(settings)
-        }.onFailure { Log.e("SOMCP-DeepAnalysis", "Model listing failed", it) }
-    }
+    suspend fun listModels(settings: SettingsStore): Result<List<String>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                requireModelCatalogConfigured(settings)
+                fetchModelCatalog(settings)
+            }.onFailure { Log.e("SOMCP-DeepAnalysis", "Model listing failed", it) }
+        }
 
     private fun fetchModelCatalog(settings: SettingsStore): List<String> {
         val client = OkHttpClient.Builder()
@@ -130,8 +127,11 @@ class DeepAnalysisService(private val appContext: Context) {
             for (index in 0 until array.length()) {
                 when (val item = array.opt(index)) {
                     is String -> item.takeIf(String::isNotBlank)?.let(::add)
+
                     is OrgJSONObject -> listOf("id", "model_id", "model", "name")
-                        .firstNotNullOfOrNull { key -> item.optString(key).takeIf(String::isNotBlank) }
+                        .firstNotNullOfOrNull { key ->
+                            item.optString(key).takeIf(String::isNotBlank)
+                        }
                         ?.let(::add)
                 }
             }
@@ -140,11 +140,11 @@ class DeepAnalysisService(private val appContext: Context) {
         val nextValue = listOfNotNull(
             root?.optString("next_cursor")?.takeIf(String::isNotBlank),
             root?.optString("last_id")?.takeIf(String::isNotBlank),
-            pagination?.optString("next_cursor")?.takeIf(String::isNotBlank),
+            pagination?.optString("next_cursor")?.takeIf(String::isNotBlank)
         ).firstOrNull()
         val nextUrl = listOfNotNull(
             root?.optString("next")?.takeIf { it.startsWith("http") },
-            pagination?.optString("next")?.takeIf { it.startsWith("http") },
+            pagination?.optString("next")?.takeIf { it.startsWith("http") }
         ).firstOrNull()
         val hasMore = root?.optBoolean("has_more", false) == true ||
             nextValue != null || nextUrl != null
@@ -155,10 +155,15 @@ class DeepAnalysisService(private val appContext: Context) {
         val models: List<String>,
         val hasMore: Boolean,
         val cursor: String?,
-        val nextUrl: String?,
+        val nextUrl: String?
     )
 
-    suspend fun analyze(path: String, settings: SettingsStore, zh: Boolean, request: String = ""): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun analyze(
+        path: String,
+        settings: SettingsStore,
+        zh: Boolean,
+        request: String = ""
+    ): Result<String> = withContext(Dispatchers.IO) {
         _reportDraft.value = ""
         var lastFailure: Throwable? = null
         repeat(3) { attempt ->
@@ -175,30 +180,48 @@ class DeepAnalysisService(private val appContext: Context) {
             val waitSeconds = retryAfterSeconds(failure)
             emit(
                 DeepAnalysisEvent.Kind.STATUS,
-                if (zh) "服务繁忙，${waitSeconds} 秒后自动重试（${attempt + 2}/3）…" else "Service busy. Retrying in ${waitSeconds}s (${attempt + 2}/3)…",
+                if (zh) "服务繁忙，$waitSeconds 秒后自动重试（${attempt + 2}/3）…" else "Service busy. Retrying in ${waitSeconds}s (${attempt + 2}/3)…"
             )
             delay(waitSeconds * 1_000L)
         }
-        Result.failure(lastFailure ?: IllegalStateException(if (zh) "AI 深度分析失败" else "AI deep analysis failed"))
+        Result.failure(
+            lastFailure ?: IllegalStateException(if (zh) "AI 深度分析失败" else "AI deep analysis failed")
+        )
     }
 
-    private suspend fun analyzeOnce(path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> = withContext(Dispatchers.IO) {
+    private suspend fun analyzeOnce(
+        path: String,
+        settings: SettingsStore,
+        zh: Boolean,
+        request: String
+    ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             if (!McpForegroundService.isRunning()) {
-                error(if (zh) "请先开启 MCP 服务后再进行 AI 深度分析" else "Start the MCP service before AI deep analysis")
+                error(
+                    if (zh) "请先开启 MCP 服务后再进行 AI 深度分析" else "Start the MCP service before AI deep analysis"
+                )
             }
             requireConfigured(settings)
-            emit(DeepAnalysisEvent.Kind.STATUS, if (zh) "正在初始化 AI 会话…" else "Initializing AI session…")
+            emit(
+                DeepAnalysisEvent.Kind.STATUS,
+                if (zh) "正在初始化 AI 会话…" else "Initializing AI session…"
+            )
             val userPrompt = buildUserPrompt(path, zh, request)
             val engine = RikkaAgentEngine(
-                client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(10, TimeUnit.MINUTES).writeTimeout(120, TimeUnit.SECONDS).retryOnConnectionFailure(true).build(),
+                client = OkHttpClient.Builder().connectTimeout(
+                    20,
+                    TimeUnit.SECONDS
+                ).readTimeout(
+                    10,
+                    TimeUnit.MINUTES
+                ).writeTimeout(120, TimeUnit.SECONDS).retryOnConnectionFailure(true).build(),
                 provider = settings.aiProvider,
                 endpoint = settings.aiEndpoint,
                 apiKey = settings.aiApiKey,
                 model = settings.aiModel,
                 temperature = settings.aiTemperature,
                 customHeaders = parseStringMap(settings.aiCustomHeadersJson),
-                customBody = buildAdditionalProperties(settings),
+                customBody = buildAdditionalProperties(settings)
             )
             val tools = buildRikkaTools(settings, zh)
             var lastReasoning = ""
@@ -207,18 +230,24 @@ class DeepAnalysisService(private val appContext: Context) {
                 userPrompt,
                 tools,
                 settings.aiMaxIterations.coerceIn(20, 256),
-                requiredTools = REQUIRED_EVIDENCE_TOOLS,
+                requiredTools = REQUIRED_EVIDENCE_TOOLS
             ) { parts ->
                 _partsDraft.value = parts
                 val report = parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text }
                 if (report.isNotEmpty()) _reportDraft.value = report
-                val reasoning = parts.filterIsInstance<RikkaPart.Reasoning>().joinToString("") { it.text }
+                val reasoning = parts.filterIsInstance<RikkaPart.Reasoning>().joinToString("") {
+                    it.text
+                }
                 if (reasoning.length > lastReasoning.length) {
                     emit(DeepAnalysisEvent.Kind.THINKING, reasoning.drop(lastReasoning.length))
                     lastReasoning = reasoning
                 }
             }
-            if (finalReport.isBlank()) error(if (zh) "模型返回了空的分析结果" else "The model returned an empty analysis result")
+            if (finalReport.isBlank()) {
+                error(
+                    if (zh) "模型返回了空的分析结果" else "The model returned an empty analysis result"
+                )
+            }
             _reportDraft.value = finalReport
             emit(DeepAnalysisEvent.Kind.DONE, finalReport)
             finalReport
@@ -226,8 +255,13 @@ class DeepAnalysisService(private val appContext: Context) {
     }
 
     private fun isRetryable(error: Throwable): Boolean {
-        val message = generateSequence(error) { it.cause }.joinToString("\n") { it.message.orEmpty() }
-        return Regex("(?:Status code:|SSE HTTP|HTTP)\\s*(408|409|425|429|5\\d\\d)", RegexOption.IGNORE_CASE).containsMatchIn(message) ||
+        val message = generateSequence(error) {
+            it.cause
+        }.joinToString("\n") { it.message.orEmpty() }
+        return Regex(
+            "(?:Status code:|SSE HTTP|HTTP)\\s*(408|409|425|429|5\\d\\d)",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(message) ||
             message.contains("rate_limit_error", true) ||
             message.contains("rate limit", true) ||
             message.contains("concurrency limit", true) ||
@@ -237,22 +271,38 @@ class DeepAnalysisService(private val appContext: Context) {
     }
 
     private fun retryAfterSeconds(error: Throwable): Int {
-        val message = generateSequence(error) { it.cause }.joinToString("\n") { it.message.orEmpty() }
+        val message = generateSequence(error) {
+            it.cause
+        }.joinToString("\n") { it.message.orEmpty() }
         return Regex("retry_after[\\\"']?\\s*[:=]\\s*(\\d+)", RegexOption.IGNORE_CASE)
             .find(message)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(3, 120)
             ?: if (message.contains("concurrency limit", true)) 5 else 10
     }
 
     private fun friendlyError(error: Throwable, zh: Boolean): String {
-        val message = generateSequence(error) { it.cause }.joinToString("\n") { it.message.orEmpty() }
-        val status = Regex("(?:Status code:|SSE HTTP|HTTP)\\s*(\\d{3})", RegexOption.IGNORE_CASE).find(message)?.groupValues?.getOrNull(1)
+        val message = generateSequence(error) {
+            it.cause
+        }.joinToString("\n") { it.message.orEmpty() }
+        val status = Regex(
+            "(?:Status code:|SSE HTTP|HTTP)\\s*(\\d{3})",
+            RegexOption.IGNORE_CASE
+        ).find(message)?.groupValues?.getOrNull(1)
         val retryAfter = retryAfterSeconds(error)
         return when {
             status == "504" -> if (zh) "模型服务网关超时（504）。已自动重试仍未恢复，请等待约 $retryAfter 秒后再试。" else "Model gateway timed out (504). Automatic retry did not recover; try again in about ${retryAfter}s."
+
             status == "429" -> if (zh) "模型服务请求过于频繁（429），请等待约 $retryAfter 秒后重试。" else "Model service rate limit reached (429). Retry in about ${retryAfter}s."
-            message.contains("concurrency limit", true) || message.contains("rate_limit_error", true) -> if (zh) "模型服务并发额度仍然繁忙，已自动重试 3 次，请稍后再试。" else "The model service concurrency limit is still busy after 3 retries. Try again later."
+
+            message.contains("concurrency limit", true) ||
+                message.contains(
+                    "rate_limit_error",
+                    true
+                ) -> if (zh) "模型服务并发额度仍然繁忙，已自动重试 3 次，请稍后再试。" else "The model service concurrency limit is still busy after 3 retries. Try again later."
+
             status != null -> if (zh) "模型服务请求失败（HTTP $status），请检查端点状态或稍后重试。" else "Model request failed (HTTP $status). Check the endpoint or retry later."
-            else -> error.message?.lineSequence()?.firstOrNull()?.take(220) ?: if (zh) "AI 深度分析失败" else "AI deep analysis failed"
+
+            else -> error.message?.lineSequence()?.firstOrNull()?.take(220)
+                ?: if (zh) "AI 深度分析失败" else "AI deep analysis failed"
         }
     }
 
@@ -292,13 +342,19 @@ Only after gathering the necessary evidence, return the final Markdown report. D
             RikkaTool(
                 name = name,
                 description = if (zh) handler.meta.zh else handler.meta.en,
-                schema = schema,
+                schema = schema
             ) { args ->
-                emit(DeepAnalysisEvent.Kind.TOOL, if (zh) "调用工具 $name" else "Calling tool $name", name)
+                emit(
+                    DeepAnalysisEvent.Kind.TOOL,
+                    if (zh) "调用工具 $name" else "Calling tool $name",
+                    name
+                )
                 AppLog.i("AI tool call $name args=${args.toString().take(600)}")
                 val effectiveArgs = JSONObject(args.toString()).apply {
                     if (name != "so_open" && optString("workspaceId").isBlank()) {
-                        _workspaceId.value.takeIf(String::isNotBlank)?.let { put("workspaceId", it) }
+                        _workspaceId.value.takeIf(String::isNotBlank)?.let {
+                            put("workspaceId", it)
+                        }
                     }
                 }
                 runCatching { handler.handle(ctx, effectiveArgs) }
@@ -317,9 +373,26 @@ Only after gathering the necessary evidence, return the final Markdown report. D
                     .let { payload ->
                         val text = payload.toString()
                         val limit = settings.toolResultMaxChars
-                        val result = if (limit <= 0 || text.length <= limit) text else text.take(limit) + "…"
-                        emit(DeepAnalysisEvent.Kind.TOOL, if (zh) "工具完成 $name" else "Tool completed $name", name)
-                        if (name == "analysis_report") emit(DeepAnalysisEvent.Kind.FINALIZING, if (zh) "MCP 取证已完成" else "MCP evidence complete")
+                        val result = if (limit <= 0 ||
+                            text.length <= limit
+                        ) {
+                            text
+                        } else {
+                            text.take(limit) + "…"
+                        }
+                        emit(
+                            DeepAnalysisEvent.Kind.TOOL,
+                            if (zh) "工具完成 $name" else "Tool completed $name",
+                            name
+                        )
+                        if (name ==
+                            "analysis_report"
+                        ) {
+                            emit(
+                                DeepAnalysisEvent.Kind.FINALIZING,
+                                if (zh) "MCP 取证已完成" else "MCP evidence complete"
+                            )
+                        }
                         result
                     }
             }
@@ -327,7 +400,8 @@ Only after gathering the necessary evidence, return the final Markdown report. D
     }
 
     private fun parseStringMap(raw: String): Map<String, String> {
-        val obj = runCatching { OrgJSONObject(raw.ifBlank { "{}" }) }.getOrNull() ?: return emptyMap()
+        val obj =
+            runCatching { OrgJSONObject(raw.ifBlank { "{}" }) }.getOrNull() ?: return emptyMap()
         return buildMap {
             val keys = obj.keys()
             while (keys.hasNext()) {
@@ -339,8 +413,9 @@ Only after gathering the necessary evidence, return the final Markdown report. D
 
     private fun buildAdditionalProperties(settings: SettingsStore): Map<String, JsonElement> {
         val properties = LinkedHashMap<String, JsonElement>()
-        val body = runCatching { OrgJSONObject(settings.aiCustomBodyJson.ifBlank { "{}" }) }.getOrNull()
-            ?: return properties
+        val body =
+            runCatching { OrgJSONObject(settings.aiCustomBodyJson.ifBlank { "{}" }) }.getOrNull()
+                ?: return properties
         val keys = body.keys()
         while (keys.hasNext()) {
             val key = keys.next().trim()
@@ -352,13 +427,12 @@ Only after gathering the necessary evidence, return the final Markdown report. D
                         null, OrgJSONObject.NULL -> "null"
                         is String -> OrgJSONObject.quote(value)
                         else -> value.toString()
-                    },
+                    }
                 )
             }.getOrElse { JsonPrimitive(value?.toString().orEmpty()) }
         }
         return properties
     }
-
 
     private fun requireConfigured(settings: SettingsStore) {
         if (settings.aiApiKey.isBlank()) error("AI API key is empty")
@@ -388,7 +462,7 @@ Only after gathering the necessary evidence, return the final Markdown report. D
             "read_disasm",
             "read_hexdump",
             "list_sos",
-            "meta_info",
+            "meta_info"
         )
         val REQUIRED_EVIDENCE_TOOLS = listOf(
             "so_open",
@@ -396,8 +470,7 @@ Only after gathering the necessary evidence, return the final Markdown report. D
             "analyze_cfg",
             "analyze_xrefs",
             "analyze_crypto",
-            "analysis_report",
+            "analysis_report"
         )
-
     }
 }

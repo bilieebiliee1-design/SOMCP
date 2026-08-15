@@ -2,10 +2,10 @@ package com.soreverse.mcp
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
-import android.content.pm.PackageManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,9 +16,9 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -50,11 +50,15 @@ internal fun NumberSettingRow(
     value: String,
     onValue: (String) -> Unit,
     onApply: (Int) -> Unit,
-    suffix: String = "",
+    suffix: String = ""
 ) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.controlRadius)
-    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         Text(label, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
         OutlinedTextField(
             value = value,
@@ -66,9 +70,11 @@ internal fun NumberSettingRow(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                 focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                    alpha = 0.35f
+                )
             ),
-            modifier = Modifier.width(116.dp),
+            modifier = Modifier.width(116.dp)
         )
         TextButton(onClick = { value.toIntOrNull()?.let(onApply) }) { Text("OK") }
     }
@@ -81,12 +87,15 @@ internal fun DecimalSettingRow(
     suffix: String,
     supporting: String,
     onValue: (String) -> Unit,
-    onApply: (Float) -> Unit,
+    onApply: (Float) -> Unit
 ) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.controlRadius)
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Text(label, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
             OutlinedTextField(
                 value = value,
@@ -101,22 +110,32 @@ internal fun DecimalSettingRow(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                     focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                        alpha = 0.35f
+                    )
                 ),
-                modifier = Modifier.width(140.dp),
+                modifier = Modifier.width(140.dp)
             )
             TextButton(onClick = { value.toFloatOrNull()?.let(onApply) }) { Text("OK") }
         }
-        Text(supporting, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            supporting,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 @Composable
-internal fun ChipRow(items: List<Pair<String, String>>, selected: String, onSelected: (String) -> Unit) {
+internal fun ChipRow(
+    items: List<Pair<String, String>>,
+    selected: String,
+    onSelected: (String) -> Unit
+) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         items.forEach { (value, label) ->
             FilterChip(
@@ -128,14 +147,14 @@ internal fun ChipRow(items: List<Pair<String, String>>, selected: String, onSele
                     selectedContainerColor = MaterialTheme.colorScheme.primary,
                     selectedLabelColor = Color.White,
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    labelColor = MaterialTheme.colorScheme.onSurface,
+                    labelColor = MaterialTheme.colorScheme.onSurface
                 ),
                 border = FilterChipDefaults.filterChipBorder(
                     enabled = true,
                     selected = selected == value,
                     borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
-                    selectedBorderColor = Color.Transparent,
-                ),
+                    selectedBorderColor = Color.Transparent
+                )
             )
         }
     }
@@ -155,24 +174,30 @@ internal fun SecondaryActionButton(text: String, onClick: () -> Unit, modifier: 
         shape = shape,
         colors = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            contentColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.primary
         ),
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
-        modifier = modifier.height(50.dp),
+        modifier = modifier.height(50.dp)
     ) { Text(text, fontWeight = FontWeight.Medium) }
 }
 
 @Composable
-internal fun SurfacePanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+internal fun SurfacePanel(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
     val shape = RoundedCornerShape(LocalUiMetrics.current.cardRadius)
     Column(
         modifier
             .fillMaxWidth()
             .clip(shape)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
-            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)), shape)
+            .border(
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)),
+                shape
+            )
             .padding(14.dp),
-        content = content,
+        content = content
     )
 }
 
@@ -184,11 +209,19 @@ internal fun SettingsKeepAlivePage(t: UiText, settings: SettingsStore) {
     var bootAutoStart by remember { mutableStateOf(settings.bootAutoStart) }
     PageScroll {
         GlassGroup {
-            ToggleRow(t.wakeLock, wakeLock) { wakeLock = it; settings.wakeLockEnabled = it }
+            ToggleRow(t.wakeLock, wakeLock) {
+                wakeLock = it
+                settings.wakeLockEnabled = it
+            }
             GroupDivider()
             ToggleRow(t.floating, floating) {
                 if (it && !AndroidSettings.canDrawOverlays(context)) {
-                    context.startActivity(Intent(AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+                    context.startActivity(
+                        Intent(
+                            AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                    )
                 }
                 floating = it
                 settings.floatingEnabled = it
@@ -204,27 +237,54 @@ internal fun SettingsKeepAlivePage(t: UiText, settings: SettingsStore) {
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             val checks = listOf(
                 (if (t.zh) "WakeLock" else "WakeLock") to wakeLock,
-                (if (t.zh) "电池无限制" else "Battery unrestricted") to (Build.VERSION.SDK_INT < 23 || powerManager.isIgnoringBatteryOptimizations(context.packageName)),
-                (if (t.zh) "通知权限" else "Notification permission") to (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED),
-                (if (t.zh) "悬浮窗权限（非保活核心）" else "Overlay permission (not keepalive)") to AndroidSettings.canDrawOverlays(context),
-                (if (t.zh) "开机自启" else "Boot autostart") to bootAutoStart,
+                (if (t.zh) "电池无限制" else "Battery unrestricted") to
+                    (
+                        Build.VERSION.SDK_INT < 23 ||
+                            powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                        ),
+                (if (t.zh) "通知权限" else "Notification permission") to
+                    (
+                        Build.VERSION.SDK_INT < 33 ||
+                            context.checkSelfPermission(
+                                android.Manifest.permission.POST_NOTIFICATIONS
+                            ) ==
+                            PackageManager.PERMISSION_GRANTED
+                        ),
+                (if (t.zh) "悬浮窗权限（非保活核心）" else "Overlay permission (not keepalive)") to
+                    AndroidSettings.canDrawOverlays(context),
+                (if (t.zh) "开机自启" else "Boot autostart") to bootAutoStart
             )
             checks.forEachIndexed { index, (label, ready) ->
                 if (index > 0) GroupDivider()
-                Text("${if (ready) "✓" else "○"} $label", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${if (ready) "✓" else "○"} $label",
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    color = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
             GroupDivider()
             Text(
                 if (t.zh) "开机自启依赖系统允许自启动/后台启动，并与隧道自动启动相互独立。" else "Boot autostart depends on system permissions and is independent from tunnel auto-start.",
                 modifier = Modifier.padding(14.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             GroupDivider()
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(14.dp)) {
-                PrimaryActionButton(t.battery, { openBatterySettings(context) }, Modifier.fillMaxWidth())
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(14.dp)
+            ) {
+                PrimaryActionButton(t.battery, {
+                    openBatterySettings(context)
+                }, Modifier.fillMaxWidth())
                 SecondaryActionButton(t.permissions, {
-                    context.startActivity(Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
+                    context.startActivity(
+                        Intent(
+                            AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                    )
                 }, Modifier.fillMaxWidth())
             }
         }
@@ -233,7 +293,9 @@ internal fun SettingsKeepAlivePage(t: UiText, settings: SettingsStore) {
 
 internal fun isKeepAliveReady(context: Context, settings: SettingsStore): Boolean {
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    val batteryReady = Build.VERSION.SDK_INT < 23 || powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    val batteryReady =
+        Build.VERSION.SDK_INT < 23 ||
+            powerManager.isIgnoringBatteryOptimizations(context.packageName)
     return settings.wakeLockEnabled && batteryReady
 }
 
@@ -245,10 +307,32 @@ internal fun keepAliveAdvice(zh: Boolean): String {
         "Allow auto-start, background activity, unrestricted battery, notifications, overlay, and lock the app in recents."
     }
     return when {
-        brand.contains("xiaomi") || brand.contains("redmi") -> if (zh) "$base\n小米/红米/HyperOS：安全中心 -> 自启动；省电策略 -> 无限制。" else "$base\nMIUI/HyperOS: Security -> Autostart; Battery saver -> No restrictions."
-        brand.contains("huawei") || brand.contains("honor") -> if (zh) "$base\n华为/荣耀：手机管家 -> 应用启动管理 -> 手动管理并允许后台活动。" else "$base\nHuawei/Honor: Phone Manager -> App launch -> Manage manually and allow background activity."
-        brand.contains("oppo") || brand.contains("realme") || brand.contains("oneplus") -> if (zh) "$base\nOPPO/realme/OnePlus：电池 -> 后台耗电管理 -> 允许。" else "$base\nOPPO/realme/OnePlus: Battery -> Background power usage -> Allow."
-        brand.contains("vivo") || brand.contains("iqoo") -> if (zh) "$base\nvivo/iQOO：电池 -> 后台高耗电 -> 允许；权限 -> 自启动。" else "$base\nvivo/iQOO: Battery -> Background high power usage -> Allow; Permissions -> Autostart."
+        brand.contains(
+            "xiaomi"
+        ) || brand.contains(
+            "redmi"
+        ) -> if (zh) "$base\n小米/红米/HyperOS：安全中心 -> 自启动；省电策略 -> 无限制。" else "$base\nMIUI/HyperOS: Security -> Autostart; Battery saver -> No restrictions."
+
+        brand.contains(
+            "huawei"
+        ) || brand.contains(
+            "honor"
+        ) -> if (zh) "$base\n华为/荣耀：手机管家 -> 应用启动管理 -> 手动管理并允许后台活动。" else "$base\nHuawei/Honor: Phone Manager -> App launch -> Manage manually and allow background activity."
+
+        brand.contains(
+            "oppo"
+        ) || brand.contains(
+            "realme"
+        ) || brand.contains(
+            "oneplus"
+        ) -> if (zh) "$base\nOPPO/realme/OnePlus：电池 -> 后台耗电管理 -> 允许。" else "$base\nOPPO/realme/OnePlus: Battery -> Background power usage -> Allow."
+
+        brand.contains(
+            "vivo"
+        ) || brand.contains(
+            "iqoo"
+        ) -> if (zh) "$base\nvivo/iQOO：电池 -> 后台高耗电 -> 允许；权限 -> 自启动。" else "$base\nvivo/iQOO: Battery -> Background high power usage -> Allow; Permissions -> Autostart."
+
         else -> base
     }
 }
@@ -261,7 +345,11 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
     var accessToken by remember { mutableStateOf(settings.accessToken) }
     PageScroll {
         GlassGroup {
-            Text(if (t.zh) "谁能连接" else "Who can connect", modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (t.zh) "谁能连接" else "Who can connect",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.titleSmall
+            )
             Text(
                 when {
                     settings.tunnelMode != "off" -> if (t.zh) "Cloudflare 隧道已配置：公网访问必须启用 Token。" else "Cloudflare Tunnel is configured: public access requires a token."
@@ -270,7 +358,7 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
                 },
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             GroupDivider()
             ToggleRow(if (t.zh) "启用访问 token" else "Require access token", authEnabled) {
@@ -280,7 +368,10 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
         }
         GlassGroup(title = if (t.zh) "绑定地址" else "Bind address") {
             ChipRow(
-                listOf("0.0.0.0" to if (t.zh) "允许局域网" else "LAN", "127.0.0.1" to if (t.zh) "仅本机" else "Local only"),
+                listOf(
+                    "0.0.0.0" to if (t.zh) "允许局域网" else "LAN",
+                    "127.0.0.1" to if (t.zh) "仅本机" else "Local only"
+                ),
                 bindHost,
                 {
                     bindHost = it
@@ -289,13 +380,18 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
                         authEnabled = true
                         settings.authEnabled = true
                     }
-                },
+                }
             )
         }
-        GlassGroup(footer = if (t.zh) "修改端口、绑定地址或 token 后，重启服务生效。" else "Restart the service after changing port, bind address, or token.") {
+        GlassGroup(
+            footer = if (t.zh) "修改端口、绑定地址或 token 后，重启服务生效。" else "Restart the service after changing port, bind address, or token."
+        ) {
             OutlinedTextField(
                 value = accessToken,
-                onValueChange = { accessToken = it; settings.accessToken = it },
+                onValueChange = {
+                    accessToken = it
+                    settings.accessToken = it
+                },
                 label = { Text(if (t.zh) "访问 token" else "Access token") },
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
@@ -303,13 +399,24 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                     focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                        alpha = 0.35f
+                    )
                 ),
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                modifier = Modifier.fillMaxWidth().padding(14.dp)
             )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(14.dp)) {
-                PrimaryActionButton(if (t.zh) "重新生成" else "Regenerate", { accessToken = settings.resetAccessToken() })
-                SecondaryActionButton(if (t.zh) "复制 token" else "Copy token") { copy(context, accessToken, t.copied) }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(14.dp)
+            ) {
+                PrimaryActionButton(if (t.zh) "重新生成" else "Regenerate", {
+                    accessToken =
+                        settings.resetAccessToken()
+                })
+                SecondaryActionButton(if (t.zh) "复制 token" else "Copy token") {
+                    copy(context, accessToken, t.copied)
+                }
             }
         }
     }
@@ -325,17 +432,37 @@ internal fun SettingsLimitsPage(t: UiText, settings: SettingsStore) {
     var maxRequestKb by remember { mutableStateOf(settings.maxRequestKb.toString()) }
     PageScroll {
         GlassGroup {
-            NumberSettingRow(if (t.zh) "默认 limit" else "Default limit", defaultLimit, { defaultLimit = it }, { settings.defaultLimit = it }, if (t.zh) "条" else "items")
+            NumberSettingRow(if (t.zh) "默认 limit" else "Default limit", defaultLimit, {
+                defaultLimit =
+                    it
+            }, { settings.defaultLimit = it }, if (t.zh) "条" else "items")
             GroupDivider()
-            NumberSettingRow(if (t.zh) "字符串 limit" else "String limit", stringLimit, { stringLimit = it }, { settings.stringLimit = it }, if (t.zh) "条" else "items")
+            NumberSettingRow(if (t.zh) "字符串 limit" else "String limit", stringLimit, {
+                stringLimit =
+                    it
+            }, { settings.stringLimit = it }, if (t.zh) "条" else "items")
             GroupDivider()
-            NumberSettingRow(if (t.zh) "反汇编指令数" else "Disasm instructions", disasmLimit, { disasmLimit = it }, { settings.disasmLimit = it }, if (t.zh) "条" else "insns")
+            NumberSettingRow(if (t.zh) "反汇编指令数" else "Disasm instructions", disasmLimit, {
+                disasmLimit =
+                    it
+            }, { settings.disasmLimit = it }, if (t.zh) "条" else "insns")
             GroupDivider()
-            NumberSettingRow(if (t.zh) "反汇编窗口" else "Disasm window", disasmBytes, { disasmBytes = it }, { settings.disasmMaxBytes = it }, "B")
+            NumberSettingRow(if (t.zh) "反汇编窗口" else "Disasm window", disasmBytes, {
+                disasmBytes = it
+            }, {
+                settings.disasmMaxBytes =
+                    it
+            }, "B")
             GroupDivider()
-            NumberSettingRow(if (t.zh) "Hexdump 读取量" else "Hexdump size", hexdumpBytes, { hexdumpBytes = it }, { settings.hexdumpMaxBytes = it }, "B")
+            NumberSettingRow(if (t.zh) "Hexdump 读取量" else "Hexdump size", hexdumpBytes, {
+                hexdumpBytes =
+                    it
+            }, { settings.hexdumpMaxBytes = it }, "B")
             GroupDivider()
-            NumberSettingRow(if (t.zh) "请求上限" else "Request limit", maxRequestKb, { maxRequestKb = it }, { settings.maxRequestKb = it }, "KB")
+            NumberSettingRow(if (t.zh) "请求上限" else "Request limit", maxRequestKb, {
+                maxRequestKb =
+                    it
+            }, { settings.maxRequestKb = it }, "KB")
         }
     }
 }
@@ -349,7 +476,13 @@ internal fun SettingsExportPage(t: UiText, settings: SettingsStore) {
     var maxBuildOutputs by remember { mutableStateOf(settings.maxBuildOutputs.toString()) }
     PageScroll {
         GlassGroup(title = if (t.zh) "文件名冲突" else "File conflict") {
-            ChipRow(listOf("rename" to if (t.zh) "自动改名" else "Auto rename", "overwrite" to if (t.zh) "覆盖" else "Overwrite"), conflictStrategy) {
+            ChipRow(
+                listOf(
+                    "rename" to if (t.zh) "自动改名" else "Auto rename",
+                    "overwrite" to if (t.zh) "覆盖" else "Overwrite"
+                ),
+                conflictStrategy
+            ) {
                 conflictStrategy = it
                 settings.outputConflictStrategy = it
             }
@@ -365,9 +498,15 @@ internal fun SettingsExportPage(t: UiText, settings: SettingsStore) {
                 settings.buildCopyToWorkDir = it
             }
             GroupDivider()
-            NumberSettingRow(if (t.zh) "单 patch 上限" else "Max patch size", maxPatchBytes, { maxPatchBytes = it }, { settings.maxPatchBytes = it }, "B")
+            NumberSettingRow(if (t.zh) "单 patch 上限" else "Max patch size", maxPatchBytes, {
+                maxPatchBytes =
+                    it
+            }, { settings.maxPatchBytes = it }, "B")
             GroupDivider()
-            NumberSettingRow(if (t.zh) "构建产物列表上限" else "Max build outputs", maxBuildOutputs, { maxBuildOutputs = it }, { settings.maxBuildOutputs = it }, if (t.zh) "项" else "items")
+            NumberSettingRow(if (t.zh) "构建产物列表上限" else "Max build outputs", maxBuildOutputs, {
+                maxBuildOutputs =
+                    it
+            }, { settings.maxBuildOutputs = it }, if (t.zh) "项" else "items")
         }
     }
 }
@@ -379,26 +518,43 @@ internal fun SettingsProbePage(t: UiText, settings: SettingsStore) {
         GlassGroup(footer = t.reachabilityHelp) {
             OutlinedTextField(
                 value = probeUrl,
-                onValueChange = { probeUrl = it; settings.externalProbeUrl = it },
+                onValueChange = {
+                    probeUrl = it
+                    settings.externalProbeUrl = it
+                },
                 label = { Text(t.probeServiceUrl) },
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                     focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                        alpha = 0.35f
+                    )
                 ),
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                modifier = Modifier.fillMaxWidth().padding(14.dp)
             )
-            Text(t.externalProbeExample, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                t.externalProbeExample,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 private fun openBatterySettings(context: Context) {
     runCatching {
-        context.startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
+        context.startActivity(
+            Intent(
+                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:${context.packageName}")
+            )
+        )
     }.onFailure {
-        context.startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        context.startActivity(
+            Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        )
     }
 }

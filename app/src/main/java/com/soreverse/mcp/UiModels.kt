@@ -11,7 +11,27 @@ import org.json.JSONObject
 internal enum class MainTab { Service, Analyze, Logs, Settings }
 internal enum class SetupTarget { Directory, ApkMcp, KeepAlive }
 internal enum class SettingsDest {
-    Root, ServiceConfig, Appearance, KeepAlive, Access, Limits, Export, Audit, Blutter, Tunnel, ApkBridge, AiDeep, Updates, Probe, ToolStats, TunnelStats, Instructions, Credits, Disclaimer, About, BackupRestore
+    Root,
+    ServiceConfig,
+    Appearance,
+    KeepAlive,
+    Access,
+    Limits,
+    Export,
+    Audit,
+    Blutter,
+    Tunnel,
+    ApkBridge,
+    AiDeep,
+    Updates,
+    Probe,
+    ToolStats,
+    TunnelStats,
+    Instructions,
+    Credits,
+    Disclaimer,
+    About,
+    BackupRestore
 }
 
 internal data class WorkspaceUi(
@@ -22,7 +42,7 @@ internal data class WorkspaceUi(
     val architecture: String,
     val bits: Int,
     val temporary: Boolean,
-    val hasLocalAiReport: Boolean,
+    val hasLocalAiReport: Boolean
 )
 
 internal data class SoSourceUi(
@@ -33,7 +53,7 @@ internal data class SoSourceUi(
     val architecture: String,
     val bits: Int,
     val size: Long,
-    val stripped: Boolean,
+    val stripped: Boolean
 )
 
 internal data class SoDetailUi(
@@ -50,7 +70,7 @@ internal data class SoDetailUi(
     val symbolCount: Int,
     val dynsymCount: Int,
     val stringCount: Int,
-    val overview: JSONObject = JSONObject(),
+    val overview: JSONObject = JSONObject()
 )
 
 internal enum class DeepChatRole { USER, ASSISTANT }
@@ -62,7 +82,7 @@ internal data class DeepChatMessage(
     val events: List<DeepAnalysisEvent> = emptyList(),
     val parts: List<RikkaPart> = emptyList(),
     val streaming: Boolean = false,
-    val error: String = "",
+    val error: String = ""
 )
 
 internal class AnalyzeUiState {
@@ -157,5 +177,5 @@ internal data class UiText(
     val backupWrongPassword: String,
     val backupDecrypting: String,
     val confirm: String,
-    val cancel: String,
+    val cancel: String
 )

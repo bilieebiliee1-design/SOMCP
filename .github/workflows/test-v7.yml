@@ -99,10 +99,10 @@ jobs:
       - name: ktlint — Kotlin code style check
         run: |
           cd /tmp
-          curl -sSLO "https://github.com/pinterest/ktlint/releases/download/1.5.0/ktlint"
+          curl -sSLO -L "https://github.com/ktlint/ktlint/releases/download/1.5.0/ktlint"
           chmod +x ktlint
           cd -
-          violations=$(/tmp/ktlint --android --relative "app/src/**/*.kt" 2>&1) || true
+          violations=$(/tmp/ktlint --relative "app/src/**/*.kt" 2>&1) || true
           if [ -n "$violations" ]; then
             echo "::error::Kotlin code style violations found:"
             echo "$violations"

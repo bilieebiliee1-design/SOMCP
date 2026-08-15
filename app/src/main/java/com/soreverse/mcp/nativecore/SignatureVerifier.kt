@@ -129,7 +129,9 @@ object SignatureVerifier {
     fun verify(context: Context): Boolean {
         val expected = nativeGetExpectedSignerDigest().let { normalizeSignerDigest(it) }
         if (expected.isBlank()) {
-            AppLog.i("SignatureVerifier: no release signer pin configured, skipping native verification")
+            AppLog.i(
+                "SignatureVerifier: no release signer pin configured, skipping native verification"
+            )
             return true // no pin configured, skip
         }
 

@@ -28,7 +28,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -37,12 +36,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.BackupCrypto
 import com.soreverse.mcp.core.SettingsStore
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
 
 @Composable
 internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
@@ -82,10 +81,13 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
 
     // ----- export: encrypted file launcher (REMOTE) -----
     val encryptedExportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json"),
+        contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
         val password = pendingExportPassword ?: return@rememberLauncherForActivityResult
-        if (uri == null) { pendingExportPassword = null; return@rememberLauncherForActivityResult }
+        if (uri == null) {
+            pendingExportPassword = null
+            return@rememberLauncherForActivityResult
+        }
         scope.launch {
             runCatching {
                 val json = settings.toJsonString(maskSecrets = !includeSecrets)
@@ -110,7 +112,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
 
     // ----- export: plain file launcher (REMOTE, no encryption) -----
     val plainExportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json"),
+        contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -140,7 +142,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
 
     // ----- import launcher -----
     val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -160,7 +162,11 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     // Try JSON format (REMOTE)
                     val content = bytes.decodeToString()
                     val json = withContext(Dispatchers.Default) {
-                        try { JSONObject(content) } catch (_: Exception) { null }
+                        try {
+                            JSONObject(content)
+                        } catch (_: Exception) {
+                            null
+                        }
                     }
                     if (json != null && BackupCrypto.isEncryptedBackup(json)) {
                         pendingImportContent = content
@@ -197,27 +203,34 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     Text(
                         t.backupDecryptPasswordHint,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
                         value = decryptPassword,
-                        onValueChange = { decryptPassword = it; decryptError = null },
+                        onValueChange = {
+                            decryptPassword = it
+                            decryptError = null
+                        },
                         label = { Text(t.backupEncryptPassword) },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
+                                alpha = 0.35f
+                            ),
                             focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                                alpha = 0.35f
+                            )
                         ),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     decryptError?.let {
                         Text(
                             it,
                             color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
                 }
@@ -231,7 +244,12 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                                 val json = withContext(Dispatchers.IO) {
                                     BackupCrypto.decrypt(bytes, decryptPassword)
                                 }
-                                check(settings.fromJsonString(json, allowSecrets = includeSecrets).optBoolean("ok", false))
+                                check(
+                                    settings.fromJsonString(
+                                        json,
+                                        allowSecrets = includeSecrets
+                                    ).optBoolean("ok", false)
+                                )
                                 decryptDialogVisible = false
                                 pendingEncryptedBytes = null
                                 decryptPassword = ""
@@ -239,7 +257,9 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                                 resultMessage = t.backupImportSuccess
                             }.onFailure { error ->
                                 decryptError = error.message?.let {
-                                    if (it.contains("password") || it.contains("tag mismatch") || it.contains("AEADBadTagException")) {
+                                    if (it.contains("password") || it.contains("tag mismatch") ||
+                                        it.contains("AEADBadTagException")
+                                    ) {
                                         t.backupDecryptFailed
                                     } else {
                                         "${t.backupImportError}: $it"
@@ -248,7 +268,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                             }
                         }
                     },
-                    enabled = decryptPassword.isNotBlank(),
+                    enabled = decryptPassword.isNotBlank()
                 ) { Text(t.backupImport) }
             },
             dismissButton = {
@@ -258,7 +278,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     decryptPassword = ""
                     decryptError = null
                 }) { Text(if (t.zh) "取消" else "Cancel") }
-            },
+            }
         )
     }
 
@@ -274,7 +294,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 Text(
                     t.backupEncryptWarning,
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium
                 )
             },
             confirmButton = {
@@ -290,7 +310,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     showEncryptWarning = false
                     pendingEncryptEnable = false
                 }) { Text(if (t.zh) "取消" else "Cancel") }
-            },
+            }
         )
     }
 
@@ -303,24 +323,34 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = exportPassword,
-                        onValueChange = { exportPassword = it; exportPasswordError = null },
+                        onValueChange = {
+                            exportPassword = it
+                            exportPasswordError = null
+                        },
                         label = { Text(t.backupPasswordLabel) },
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = exportPasswordConfirm,
-                        onValueChange = { exportPasswordConfirm = it; exportPasswordError = null },
+                        onValueChange = {
+                            exportPasswordConfirm = it
+                            exportPasswordError = null
+                        },
                         label = { Text(t.backupPasswordConfirm) },
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     exportPasswordError?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             },
@@ -343,33 +373,43 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 TextButton(onClick = { showExportPasswordDialog = false }) {
                     Text(t.cancel)
                 }
-            },
+            }
         )
     }
 
     // --- import password dialog (REMOTE) ---
     if (showImportPasswordDialog) {
         AlertDialog(
-            onDismissRequest = { showImportPasswordDialog = false; pendingImportContent = null },
+            onDismissRequest = {
+                showImportPasswordDialog = false
+                pendingImportContent = null
+            },
             title = { Text(t.backupDecryptPrompt) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         t.backupEncryptWarning,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = MaterialTheme.colorScheme.error
                     )
                     OutlinedTextField(
                         value = importPassword,
-                        onValueChange = { importPassword = it; importPasswordError = null },
+                        onValueChange = {
+                            importPassword = it
+                            importPasswordError = null
+                        },
                         label = { Text(t.backupPasswordLabel) },
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     importPasswordError?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             },
@@ -410,10 +450,13 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showImportPasswordDialog = false; pendingImportContent = null }) {
+                TextButton(onClick = {
+                    showImportPasswordDialog = false
+                    pendingImportContent = null
+                }) {
                     Text(t.cancel)
                 }
-            },
+            }
         )
     }
 
@@ -424,7 +467,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = LocalUiMetrics.current.pagePad, vertical = 8.dp)
             .padding(bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(LocalUiMetrics.current.sectionGap),
+        verticalArrangement = Arrangement.spacedBy(LocalUiMetrics.current.sectionGap)
     ) {
         GlassGroup(title = t.backupLocal) {
             ToggleRow(t.backupIncludeSecrets, includeSecrets) { includeSecrets = it }
@@ -433,7 +476,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 t.backupSecretsMasked,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             GroupDivider()
             ToggleRow(t.backupEncryptToggle, encryptEnabled) { enabled ->
@@ -457,11 +500,19 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
+                            alpha = 0.35f
+                        ),
                         focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                            alpha = 0.35f
+                        )
                     ),
-                    modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(
+                        start = 14.dp,
+                        end = 14.dp,
+                        top = 8.dp
+                    )
                 )
                 OutlinedTextField(
                     value = encryptConfirm,
@@ -470,29 +521,41 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     isError = encryptConfirm.isNotEmpty() && encryptPassword != encryptConfirm,
-                    supportingText = if (encryptConfirm.isNotEmpty() && encryptPassword != encryptConfirm) {
+                    supportingText = if (encryptConfirm.isNotEmpty() &&
+                        encryptPassword != encryptConfirm
+                    ) {
                         { Text(t.backupPasswordMismatch, color = MaterialTheme.colorScheme.error) }
-                    } else null,
+                    } else {
+                        null
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
+                            alpha = 0.35f
+                        ),
                         focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                            alpha = 0.35f
+                        )
                     ),
-                    modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(
+                        start = 14.dp,
+                        end = 14.dp,
+                        top = 8.dp
+                    )
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
                     t.backupEncryptWarning,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
             GroupDivider()
             Row(
                 Modifier.fillMaxWidth().padding(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 PrimaryActionButton(
                     text = t.backupExport,
@@ -507,12 +570,12 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                             plainExportLauncher.launch("somcp_settings_backup.json")
                         }
                     },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f)
                 )
                 SecondaryActionButton(
                     text = t.backupImport,
                     onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f)
                 )
             }
         }
@@ -523,7 +586,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     message,
                     modifier = Modifier.padding(14.dp),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (resultOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    color = if (resultOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
             }
         }
@@ -535,10 +598,12 @@ private fun applyImport(
     t: UiText,
     settings: SettingsStore,
     includeSecrets: Boolean,
-    onResult: (Boolean, String) -> Unit,
+    onResult: (Boolean, String) -> Unit
 ) {
     runCatching {
-        check(settings.fromJsonString(content, allowSecrets = includeSecrets).optBoolean("ok", false))
+        check(
+            settings.fromJsonString(content, allowSecrets = includeSecrets).optBoolean("ok", false)
+        )
     }.onSuccess {
         onResult(true, t.backupImportSuccess)
     }.onFailure { error ->

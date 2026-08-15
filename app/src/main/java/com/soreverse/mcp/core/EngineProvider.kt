@@ -6,10 +6,8 @@ import com.soreverse.mcp.engine.NativeSoEngine
 object EngineProvider {
     @Volatile private var engine: NativeSoEngine? = null
 
-    fun get(context: Context): NativeSoEngine {
-        return engine ?: synchronized(this) {
-            engine ?: NativeSoEngine(context.applicationContext).also { engine = it }
-        }
+    fun get(context: Context): NativeSoEngine = engine ?: synchronized(this) {
+        engine ?: NativeSoEngine(context.applicationContext).also { engine = it }
     }
 
     fun restoreWorkDirectory(context: Context) {

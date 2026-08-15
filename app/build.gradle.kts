@@ -68,7 +68,13 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = rootProject.file(releaseKeystoreProperties.getProperty("storeFile", "release/so-reverse-mcp-release.jks"))
+            storeFile =
+                rootProject.file(
+                    releaseKeystoreProperties.getProperty(
+                        "storeFile",
+                        "release/so-reverse-mcp-release.jks"
+                    )
+                )
             storePassword = releaseKeystoreProperties.getProperty("storePassword", "")
             keyAlias = releaseKeystoreProperties.getProperty("keyAlias", "")
             keyPassword = releaseKeystoreProperties.getProperty("keyPassword", "")
@@ -91,7 +97,7 @@ android {
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
+                "proguard-rules.pro"
             )
         }
     }
@@ -131,7 +137,7 @@ android {
                 "natives/windows_*/**",
                 "com/sun/jna/aix-*/**",
                 "com/sun/jna/darwin-*/**",
-                "com/sun/jna/win32-*/**",
+                "com/sun/jna/win32-*/**"
             )
         }
     }
