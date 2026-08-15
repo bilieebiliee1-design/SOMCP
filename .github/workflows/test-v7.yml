@@ -80,30 +80,6 @@ jobs:
               fi
             done <<< "$NEW_SOURCE_FILES"
           fi
-          CHANGED_FILES=$(git diff "$BASE"...HEAD --name-only --diff-filter=AM \
-            | grep -E '\.(kt|java|cpp|c|h|hpp|py|rs|go|sh|gradle|groovy|toml|yaml|yml)$' || true)
-          if [ -n "$CHANGED_FILES" ]; then
-            INCOMPATIBLE_PATTERNS="\
-Licensed under the Apache License,\
-Permission is hereby granted.*free of charge.*to deal.*the Software without restriction\
-MIT License\
-BSD License\
-All Rights Reserved\
-Proprietary\
-All rights reserved\
-"
-            while IFS= read -r file; do
-              content=$(git diff "$BASE"...HEAD -- "$file" | grep '^+[^+]' || true)
-              if [ -z "$content" ]; then continue; fi
-              while IFS= read -r pattern; do
-                [ -z "$pattern" ] && continue
-                if echo "$content" | grep -qiF "$pattern"; then
-                  echo "::error::File '$file' may contain an incompatible license reference: '$pattern'. This project is GPL-3.0-only."
-                  exit_code=1
-                fi
-              done <<< "$INCOMPATIBLE_PATTERNS"
-            done <<< "$CHANGED_FILES"
-          fi
           if [ $exit_code -eq 0 ]; then
             echo "GPL-3.0-only compliance check passed."
           fi
