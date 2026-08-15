@@ -160,7 +160,9 @@ internal fun AnalyzeTab(
                 Triple(it.index, it.offset, it.size)
             }
         }.distinctUntilChanged().collect {
-            if (state.showDeepReport && followDeepOutput && !deepAtBottom &&
+            if (state.showDeepReport &&
+                followDeepOutput &&
+                !deepAtBottom &&
                 state.deepMessages.isNotEmpty()
             ) {
                 deepChatListState.scrollToItem(state.deepMessages.size)
@@ -184,8 +186,9 @@ internal fun AnalyzeTab(
                     Row {
                         IconButton(
                             enabled =
-                                !state.scanning && state.analyzingSoPath == null &&
-                                    state.deepAnalyzingPath == null,
+                            !state.scanning &&
+                                state.analyzingSoPath == null &&
+                                state.deepAnalyzingPath == null,
                             onClick = {
                                 scope.launch {
                                     withContext(Dispatchers.IO) {
@@ -304,10 +307,14 @@ internal fun AnalyzeTab(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    val sourceLabel =
+                                        if (t.zh) {
+                                            if (src.source == "filesystem") "文件系统" else src.source
+                                        } else {
+                                            src.source
+                                        }
                                     Text(
-                                        "${if (t.zh) (if (src.source == "filesystem") "文件系统" else src.source) else src.source} ${src.abi} ${src.architecture}/${src.bits} ${formatBytes(
-                                            src.size
-                                        )}",
+                                        "$sourceLabel ${src.abi} ${src.architecture}/${src.bits} ${formatBytes(src.size)}",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -323,8 +330,8 @@ internal fun AnalyzeTab(
                                 Column(horizontalAlignment = Alignment.End) {
                                     TextButton(
                                         enabled =
-                                            state.analyzingSoPath == null &&
-                                                state.deepAnalyzingPath == null,
+                                        state.analyzingSoPath == null &&
+                                            state.deepAnalyzingPath == null,
                                         onClick = {
                                             if (state.perSoDetail[src.path] != null) {
                                                 state.expandedSoPath = src.path
@@ -349,8 +356,8 @@ internal fun AnalyzeTab(
                                     }
                                     TextButton(
                                         enabled =
-                                            state.analyzingSoPath == null &&
-                                                state.deepAnalyzingPath == null,
+                                        state.analyzingSoPath == null &&
+                                            state.deepAnalyzingPath == null,
                                         onClick = { startDeepAnalysis(src.path) }
                                     ) {
                                         Text(
@@ -500,7 +507,7 @@ internal fun AnalyzeTab(
                                     }
                                 },
                                 enabled =
-                                    state.deepAnalyzingPath != null || state.deepInput.isNotBlank(),
+                                state.deepAnalyzingPath != null || state.deepInput.isNotBlank(),
                                 modifier = Modifier.size(50.dp),
                                 shape = CircleShape,
                                 colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(

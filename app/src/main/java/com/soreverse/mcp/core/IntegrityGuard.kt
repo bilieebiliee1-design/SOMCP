@@ -15,13 +15,7 @@ import java.security.MessageDigest
 import kotlin.system.exitProcess
 
 object IntegrityGuard {
-    data class Result(
-        val trusted: Boolean,
-        val reason: String,
-        val expected: String,
-        val actual: List<String>,
-        val threats: List<String> = emptyList()
-    )
+    data class Result(val trusted: Boolean, val reason: String, val expected: String, val actual: List<String>, val threats: List<String> = emptyList())
 
     @Volatile private var cached: Pair<Long, Result>? = null
 

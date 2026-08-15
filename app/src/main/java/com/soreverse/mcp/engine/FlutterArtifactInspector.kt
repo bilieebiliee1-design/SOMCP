@@ -77,11 +77,7 @@ internal object FlutterArtifactInspector {
         return result.put("selected", JSONObject(selected.value).put("abi", selected.key))
     }
 
-    fun extractLibraries(
-        bytes: ByteArray,
-        path: String,
-        requestedAbi: String = "auto"
-    ): FlutterLibraries {
+    fun extractLibraries(bytes: ByteArray, path: String, requestedAbi: String = "auto"): FlutterLibraries {
         val inventory = inspectApk(bytes, path, requestedAbi)
         val selected =
             inventory.optJSONObject("selected")
@@ -141,14 +137,14 @@ internal object FlutterArtifactInspector {
             os = if (app.machine == 183 || app.machine == 62) "android" else null,
             compressedPointers = snapshot.flags.any { it == "compressed-pointers" },
             confidence =
-                listOf(
-                    snapshot.hash != null,
-                    engine.engineIds.isNotEmpty(),
-                    app.machine == 183
-                ).count {
-                    it
-                } /
-                    3.0,
+            listOf(
+                snapshot.hash != null,
+                engine.engineIds.isNotEmpty(),
+                app.machine == 183
+            ).count {
+                it
+            } /
+                3.0,
             evidence = snapshot.evidence + engine.evidence
         )
         return JSONObject()
@@ -163,10 +159,7 @@ internal object FlutterArtifactInspector {
 
     private data class AbiCandidate(val key: String, val value: Map<String, Any>)
 
-    private fun selectAbi(
-        candidates: Map<String, MutableMap<String, Any>>,
-        requested: String
-    ): AbiCandidate? {
+    private fun selectAbi(candidates: Map<String, MutableMap<String, Any>>, requested: String): AbiCandidate? {
         val order = if (requested ==
             "auto"
         ) {
@@ -182,23 +175,18 @@ internal object FlutterArtifactInspector {
         }.firstOrNull()
     }
 
-    private fun candidatesJson(candidates: Map<String, MutableMap<String, Any>>): JSONArray =
-        JSONArray().also { out ->
-            candidates.forEach { (abi, value) ->
-                out.put(
-                    JSONObject(value).put("abi", abi).put(
-                        "complete",
-                        value.containsKey("libappEntry") && value.containsKey("libflutterEntry")
-                    )
+    private fun candidatesJson(candidates: Map<String, MutableMap<String, Any>>): JSONArray = JSONArray().also { out ->
+        candidates.forEach { (abi, value) ->
+            out.put(
+                JSONObject(value).put("abi", abi).put(
+                    "complete",
+                    value.containsKey("libappEntry") && value.containsKey("libflutterEntry")
                 )
-            }
+            )
         }
+    }
 
-    private data class ElfInfo(
-        val machine: Int,
-        val dynamicSymbols: List<Symbol>,
-        val rodata: ByteArray
-    ) {
+    private data class ElfInfo(val machine: Int, val dynamicSymbols: List<Symbol>, val rodata: ByteArray) {
         fun toJson(): JSONObject = JSONObject().put("machine", machine).put(
             "architecture",
             if (machine ==
@@ -215,22 +203,9 @@ internal object FlutterArtifactInspector {
         ).put("dynamicSymbolCount", dynamicSymbols.size).put("hasRodata", rodata.isNotEmpty())
     }
 
-    private data class Symbol(
-        val name: String,
-        val value: Long,
-        val size: Long,
-        val fileOffset: Long = value
-    )
-    private data class SnapshotEvidence(
-        val hash: String?,
-        val flags: List<String>,
-        val evidence: List<String>
-    )
-    private data class EngineEvidence(
-        val engineIds: List<String>,
-        val dartVersion: String?,
-        val evidence: List<String>
-    )
+    private data class Symbol(val name: String, val value: Long, val size: Long, val fileOffset: Long = value)
+    private data class SnapshotEvidence(val hash: String?, val flags: List<String>, val evidence: List<String>)
+    private data class EngineEvidence(val engineIds: List<String>, val dartVersion: String?, val evidence: List<String>)
 
     private fun parseElf(bytes: ByteArray, label: String): ElfInfo {
         require(
@@ -277,28 +252,10 @@ internal object FlutterArtifactInspector {
         return ElfInfo(machine, symbols, rodata)
     }
 
-    private data class Section(
-        val nameOffset: Long,
-        val type: Long,
-        val offset: Long,
-        val size: Long,
-        val link: Long,
-        val entsize: Long
-    )
-    private data class LoadSegment(
-        val virtualAddress: Long,
-        val fileOffset: Long,
-        val fileSize: Long
-    )
+    private data class Section(val nameOffset: Long, val type: Long, val offset: Long, val size: Long, val link: Long, val entsize: Long)
+    private data class LoadSegment(val virtualAddress: Long, val fileOffset: Long, val fileSize: Long)
 
-    private fun readSections(
-        bytes: ByteArray,
-        offset: Long,
-        entrySize: Int,
-        count: Int,
-        klass: Int,
-        order: ByteOrder
-    ): List<Section> = (
+    private fun readSections(bytes: ByteArray, offset: Long, entrySize: Int, count: Int, klass: Int, order: ByteOrder): List<Section> = (
         0 until
             count
         ).mapNotNull { index ->
@@ -335,21 +292,13 @@ internal object FlutterArtifactInspector {
         }
     }
 
-    private fun sectionNames(
-        bytes: ByteArray,
-        sections: List<Section>,
-        stringIndex: Int
-    ): List<String> {
+    private fun sectionNames(bytes: ByteArray, sections: List<Section>, stringIndex: Int): List<String> {
         val strings = sections.getOrNull(stringIndex) ?: return sections.map { "" }
         val table = slice(bytes, strings.offset, strings.size)
         return sections.map { readCString(table, it.nameOffset.toInt()) }
     }
 
-    private fun readLoadSegments(
-        bytes: ByteArray,
-        klass: Int,
-        order: ByteOrder
-    ): List<LoadSegment> {
+    private fun readLoadSegments(bytes: ByteArray, klass: Int, order: ByteOrder): List<LoadSegment> {
         val offset = if (klass == 2) u64(bytes, 0x20L, order) else u32(bytes, 0x1cL, order)
         val entrySize = if (klass == 2) u16(bytes, 0x36L, order) else u16(bytes, 0x2aL, order)
         val count = if (klass == 2) u16(bytes, 0x38L, order) else u16(bytes, 0x2cL, order)
@@ -433,15 +382,14 @@ internal object FlutterArtifactInspector {
         }
     }
 
-    private fun virtualToFileOffset(value: Long, loads: List<LoadSegment>): Long =
-        loads.firstOrNull {
-            value >= it.virtualAddress && value - it.virtualAddress < it.fileSize
-        }?.let {
-            it.fileOffset +
-                value -
-                it.virtualAddress
-        }
-            ?: value
+    private fun virtualToFileOffset(value: Long, loads: List<LoadSegment>): Long = loads.firstOrNull {
+        value >= it.virtualAddress && value - it.virtualAddress < it.fileSize
+    }?.let {
+        it.fileOffset +
+            value -
+            it.virtualAddress
+    }
+        ?: value
 
     private fun snapshotEvidence(bytes: ByteArray, symbols: List<Symbol>): SnapshotEvidence {
         val symbol =
@@ -498,8 +446,7 @@ internal object FlutterArtifactInspector {
         )
     }
 
-    private fun fileJson(name: String, bytes: ByteArray): JSONObject =
-        JSONObject().put("name", name).put("size", bytes.size).put("sha256", sha256(bytes))
+    private fun fileJson(name: String, bytes: ByteArray): JSONObject = JSONObject().put("name", name).put("size", bytes.size).put("sha256", sha256(bytes))
     private fun readLimited(zip: ZipInputStream, name: String): ByteArray {
         val output = java.io.ByteArrayOutputStream()
         val buffer = ByteArray(64 * 1024)
@@ -536,18 +483,13 @@ internal object FlutterArtifactInspector {
         }
         return bytes.copyOfRange(offset, end).toString(Charsets.UTF_8)
     }
-    private fun u16(bytes: ByteArray, offset: Long, order: ByteOrder): Int =
-        ByteBuffer.wrap(bytes, offset.toInt(), 2).order(order).short.toInt() and 0xffff
+    private fun u16(bytes: ByteArray, offset: Long, order: ByteOrder): Int = ByteBuffer.wrap(bytes, offset.toInt(), 2).order(order).short.toInt() and 0xffff
     private fun u32(bytes: ByteArray, offset: Long, order: ByteOrder): Long =
         ByteBuffer.wrap(bytes, offset.toInt(), 4).order(order).int.toLong() and 0xffffffffL
-    private fun u16(bytes: ByteArray, offset: Int, order: ByteOrder): Int =
-        u16(bytes, offset.toLong(), order)
-    private fun u32(bytes: ByteArray, offset: Int, order: ByteOrder): Long =
-        u32(bytes, offset.toLong(), order)
-    private fun u64(bytes: ByteArray, offset: Long, order: ByteOrder): Long =
-        ByteBuffer.wrap(bytes, offset.toInt(), 8).order(order).long
-    private fun sha256(bytes: ByteArray): String =
-        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
-            "%02x".format(it)
-        }
+    private fun u16(bytes: ByteArray, offset: Int, order: ByteOrder): Int = u16(bytes, offset.toLong(), order)
+    private fun u32(bytes: ByteArray, offset: Int, order: ByteOrder): Long = u32(bytes, offset.toLong(), order)
+    private fun u64(bytes: ByteArray, offset: Long, order: ByteOrder): Long = ByteBuffer.wrap(bytes, offset.toInt(), 8).order(order).long
+    private fun sha256(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+        "%02x".format(it)
+    }
 }

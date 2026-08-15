@@ -80,10 +80,10 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
     LaunchedEffect(Unit) {
         val tunnel = activeTunnel(context)
         if (tunnel != null) {
-            binaryState = tunnel.binaryState()
+            binaryState = tunnel.binaryState
             // Trigger a re-check so binary() updates the state
             tunnel.binary()
-            binaryState = tunnel.binaryState()
+            binaryState = tunnel.binaryState
         }
         tunnelStatus = tunnelStatusOf(context)
         while (true) {
@@ -138,10 +138,10 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                                     tunnel.downloadBinary(settings.tunnelUseMirror)
                                 }
                             }.onSuccess {
-                                binaryState = tunnel.binaryState()
+                                binaryState = tunnel.binaryState
                             }.onFailure { e ->
                                 downloadError = e.message ?: "download failed"
-                                binaryState = tunnel.binaryState()
+                                binaryState = tunnel.binaryState
                             }
                             isDownloading = false
                         }
@@ -172,7 +172,11 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                 tunnelStatus?.publicUrl.isNullOrBlank()
             ) {
                 Text(
-                    if (t.zh) "永久隧道已连接，但需要在下方填写 Cloudflare 已发布应用的公网主机名/URL 才能显示可复制地址。" else "Named tunnel is connected, but enter the Cloudflare published application hostname/URL below to display a copyable public address.",
+                    if (t.zh) {
+                        "永久隧道已连接，但需要在下方填写 Cloudflare 已发布应用的公网主机名/URL 才能显示可复制地址。"
+                    } else {
+                        "Named tunnel is connected, but enter the Cloudflare published application hostname/URL below to display a copyable public address."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
@@ -180,16 +184,22 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             }
             if (settings.authEnabled && settings.accessToken.isNotBlank()) {
                 GroupDivider()
-                NavRow(if (t.zh) "复制当前访问 Token" else "Copy current access token", if (t.zh) "公网隧道必须携带 token 访问 /mcp" else "Public tunnel access must include this token for /mcp", Icons.Default.Link, onClick = {
-                    copy(context, settings.accessToken, t.copied)
-                })
+                NavRow(
+                    if (t.zh) "复制当前访问 Token" else "Copy current access token",
+                    if (t.zh) "公网隧道必须携带 token 访问 /mcp" else "Public tunnel access must include this token for /mcp",
+                    Icons.Default.Link,
+                    onClick = {
+                        copy(context, settings.accessToken, t.copied)
+                    }
+                )
             }
             tunnelStatus?.publicUrl?.takeIf { it.isNotBlank() }?.let { url ->
                 GroupDivider()
                 NavRow(url, if (t.zh) "点击复制公网地址" else "Tap to copy public URL", Icons.Default.Public, onClick = {
                     copy(context, url, t.copied)
                 })
-                if (settings.authEnabled && settings.accessToken.isNotBlank() &&
+                if (settings.authEnabled &&
+                    settings.accessToken.isNotBlank() &&
                     url.startsWith("https://")
                 ) {
                     GroupDivider()
@@ -202,7 +212,12 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
         }
         GlassGroup(
             title = if (t.zh) "模式" else "Mode",
-            footer = if (t.zh) "临时隧道无需账号，URL 重启变化；永久隧道需 Cloudflare Tunnel token，并需在 Cloudflare 后台把公网域名路由到本机 MCP 端口。" else "Quick tunnel needs no account; named tunnel needs a Cloudflare token and a Cloudflare published application route to the local MCP port."
+            footer =
+            if (t.zh) {
+                "临时隧道无需账号，URL 重启变化；永久隧道需 Cloudflare Tunnel token，并需在 Cloudflare 后台把公网域名路由到本机 MCP 端口。"
+            } else {
+                "Quick tunnel needs no account; named tunnel needs a Cloudflare token and a Cloudflare published application route to the local MCP port."
+            }
         ) {
             ChipRow(
                 listOf(
@@ -225,7 +240,11 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     label = { Text(if (t.zh) "Tunnel token" else "Tunnel token") },
                     supportingText = {
                         Text(
-                            if (t.zh) "从 Cloudflare Tunnel 安装命令中复制 --token 后面的完整值。" else "Copy the full value after --token from the Cloudflare Tunnel install command."
+                            if (t.zh) {
+                                "从 Cloudflare Tunnel 安装命令中复制 --token 后面的完整值。"
+                            } else {
+                                "Copy the full value after --token from the Cloudflare Tunnel install command."
+                            }
                         )
                     },
                     singleLine = true,
@@ -251,7 +270,11 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     label = { Text(if (t.zh) "公网主机名或 URL" else "Public hostname or URL") },
                     supportingText = {
                         Text(
-                            if (t.zh) "例如 mcp.example.com；必须先在 Cloudflare Tunnel Routes/Published application 中映射到 http://localhost:${settings.tunnelTargetPort}" else "For example mcp.example.com; first map it in Cloudflare Tunnel Routes/Published application to http://localhost:${settings.tunnelTargetPort}"
+                            if (t.zh) {
+                                "例如 mcp.example.com；必须先在 Cloudflare Tunnel Routes/Published application 中映射到 http://localhost:${settings.tunnelTargetPort}"
+                            } else {
+                                "For example mcp.example.com; first map it in Cloudflare Tunnel Routes/Published application to http://localhost:${settings.tunnelTargetPort}"
+                            }
                         )
                     },
                     singleLine = true,
@@ -387,7 +410,11 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     } else if (settings.authEnabled && settings.accessToken.isBlank()) {
                         Toast.makeText(
                             context,
-                            if (t.zh) "已开启鉴权但未设置访问 Token，请先设置 Token 或关闭鉴权后再启动隧道" else "Authentication is on but no access token is set. Set a token or turn auth off before starting the tunnel",
+                            if (t.zh) {
+                                "已开启鉴权但未设置访问 Token，请先设置 Token 或关闭鉴权后再启动隧道"
+                            } else {
+                                "Authentication is on but no access token is set. Set a token or turn auth off before starting the tunnel"
+                            },
                             Toast.LENGTH_LONG
                         ).show()
                     } else if (mode == CloudflareTunnelManager.Mode.NAMED &&
@@ -395,14 +422,22 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     ) {
                         Toast.makeText(
                             context,
-                            if (t.zh) "建议先填写 Cloudflare 公网主机名/URL，否则连接成功后不会显示公网地址" else "Enter the Cloudflare public hostname/URL first; otherwise the public address cannot be displayed",
+                            if (t.zh) {
+                                "建议先填写 Cloudflare 公网主机名/URL，否则连接成功后不会显示公网地址"
+                            } else {
+                                "Enter the Cloudflare public hostname/URL first; otherwise the public address cannot be displayed"
+                            },
                             Toast.LENGTH_LONG
                         ).show()
                     } else {
                         if (!settings.authEnabled) {
                             Toast.makeText(
                                 context,
-                                if (t.zh) "提示：隧道将以无鉴权方式公开暴露 MCP 服务。如需保护请在设置中开启鉴权。" else "Note: the tunnel will expose the MCP service publicly with no authentication. Enable auth in settings to protect it.",
+                                if (t.zh) {
+                                    "提示：隧道将以无鉴权方式公开暴露 MCP 服务。如需保护请在设置中开启鉴权。"
+                                } else {
+                                    "Note: the tunnel will expose the MCP service publicly with no authentication. Enable auth in settings to protect it."
+                                },
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -564,7 +599,7 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
 private fun activeTunnel(context: Context): CloudflareTunnelManager? = activeServer(context)?.tunnel
 
 private fun tunnelStatusOf(context: Context): CloudflareTunnelManager.TunnelStatus =
-    activeServer(context)?.tunnel?.status() ?: CloudflareTunnelManager.TunnelStatus()
+    activeServer(context)?.tunnel?.status ?: CloudflareTunnelManager.TunnelStatus()
 
 private fun maskToken(token: String): String {
     if (token.length <= 8) return if (token.isBlank()) "(empty)" else "****"

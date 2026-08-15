@@ -15,17 +15,11 @@ internal class PageStore {
         val totalCount: Int
     )
 
-    private data class PageState(
-        val field: String,
-        val items: List<JSONObject>,
-        val offset: Int,
-        val limit: Int
-    )
+    private data class PageState(val field: String, val items: List<JSONObject>, val offset: Int, val limit: Int)
 
     private val pages = ConcurrentHashMap<String, PageState>()
 
-    fun first(field: String, items: List<JSONObject>, limit: Int): PageSlice =
-        slice(PageState(field, items, 0, limit.coerceIn(1, 5000)))
+    fun first(field: String, items: List<JSONObject>, limit: Int): PageSlice = slice(PageState(field, items, 0, limit.coerceIn(1, 5000)))
 
     fun consume(cursor: String): PageSlice? = pages.remove(cursor)?.let(::slice)
 

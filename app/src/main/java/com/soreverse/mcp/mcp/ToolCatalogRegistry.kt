@@ -16,7 +16,8 @@ class ToolCatalogRegistry(handlers: List<ToolHandler>) {
     fun leanNames(popularity: Map<String, Long>? = null, promotionSlots: Int = 5): List<String> {
         val base = handlers
             .filter {
-                it.meta.cls == ToolClass.CORE || it.meta.cls == ToolClass.META ||
+                it.meta.cls == ToolClass.CORE ||
+                    it.meta.cls == ToolClass.META ||
                     it.meta.category == "lowlevel"
             }
             .mapTo(linkedSetOf()) { it.meta.name }
@@ -37,8 +38,7 @@ class ToolCatalogRegistry(handlers: List<ToolHandler>) {
         return base.toList()
     }
 
-    fun description(name: String, zh: Boolean): String =
-        byName[name]?.let { if (zh) it.meta.zh else it.meta.en } ?: name
+    fun description(name: String, zh: Boolean): String = byName[name]?.let { if (zh) it.meta.zh else it.meta.en } ?: name
 
     fun categoryOf(name: String): String? = byName[name]?.meta?.category
 }
