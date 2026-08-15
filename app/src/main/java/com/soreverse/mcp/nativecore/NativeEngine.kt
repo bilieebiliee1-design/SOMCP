@@ -37,13 +37,7 @@ import java.io.File
 interface NativeEngine {
     val backendName: String
 
-    fun disassemble(
-        bytes: ByteArray,
-        arch: String,
-        address: Long,
-        thumb: Boolean,
-        limit: Int
-    ): String
+    fun disassemble(bytes: ByteArray, arch: String, address: Long, thumb: Boolean, limit: Int): String
 
     fun assemble(asm: String, arch: String, address: Long, thumb: Boolean): ByteArray
 
@@ -59,13 +53,7 @@ interface NativeEngine {
 
     fun xrefs(bytes: ByteArray, arch: String, atVa: Long, direction: String = "to"): String
 
-    fun searchBytes(
-        bytes: ByteArray,
-        arch: String,
-        pattern: String,
-        fromVa: Long = 0,
-        toVa: Long = 0
-    ): String
+    fun searchBytes(bytes: ByteArray, arch: String, pattern: String, fromVa: Long = 0, toVa: Long = 0): String
 
     fun scanCrypto(bytes: ByteArray, arch: String): String
 
@@ -157,7 +145,8 @@ object RizinNativeEngine : NativeEngine {
             // 降级（pseudo-fallback / {"error":"failed"}）。
             val selfTest = runCatching { rzSelfTest() }
             val selfTestText = selfTest.getOrNull().orEmpty().trim()
-            if (selfTest.isSuccess && selfTestText.isNotEmpty() &&
+            if (selfTest.isSuccess &&
+                selfTestText.isNotEmpty() &&
                 !selfTestText.startsWith("ERROR:")
             ) {
                 loaded = true
@@ -178,25 +167,13 @@ object RizinNativeEngine : NativeEngine {
 
     // JNI surface implemented in cpp/rizin_core.cpp.
     external fun rzSelfTest(): String
-    external fun rzDisassemble(
-        bytes: ByteArray,
-        arch: String,
-        address: Long,
-        thumb: Boolean,
-        limit: Int
-    ): String
+    external fun rzDisassemble(bytes: ByteArray, arch: String, address: Long, thumb: Boolean, limit: Int): String
     external fun rzAssemble(asm: String, arch: String, address: Long, thumb: Boolean): ByteArray
     external fun rzXrefs(bytes: ByteArray, arch: String, atVa: Long, direction: String): String
     external fun rzAnalyze(bytes: ByteArray, arch: String): String
     external fun rzFunctions(bytes: ByteArray, arch: String): String
     external fun rzCfg(bytes: ByteArray, arch: String, funcVa: Long): String
-    external fun rzSearchBytes(
-        bytes: ByteArray,
-        arch: String,
-        pattern: String,
-        fromVa: Long,
-        toVa: Long
-    ): String
+    external fun rzSearchBytes(bytes: ByteArray, arch: String, pattern: String, fromVa: Long, toVa: Long): String
     external fun rzScanCrypto(bytes: ByteArray, arch: String): String
     external fun rzEsilStep(bytes: ByteArray, arch: String, startVa: Long, stepCount: Int): String
     external fun rzDiff(bytesA: ByteArray, bytesB: ByteArray): String
@@ -247,13 +224,7 @@ object RizinNativeEngine : NativeEngine {
         }
     }
 
-    override fun disassemble(
-        bytes: ByteArray,
-        arch: String,
-        address: Long,
-        thumb: Boolean,
-        limit: Int
-    ): String {
+    override fun disassemble(bytes: ByteArray, arch: String, address: Long, thumb: Boolean, limit: Int): String {
         if (!available()) return ""
         return serial {
             runCatching { rzDisassemble(bytes, arch, address, thumb, limit) }.getOrDefault("")
@@ -293,13 +264,7 @@ object RizinNativeEngine : NativeEngine {
         }
     }
 
-    override fun searchBytes(
-        bytes: ByteArray,
-        arch: String,
-        pattern: String,
-        fromVa: Long,
-        toVa: Long
-    ): String {
+    override fun searchBytes(bytes: ByteArray, arch: String, pattern: String, fromVa: Long, toVa: Long): String {
         if (!available()) return "{\"hits\":[]}"
         return serial {
             runCatching {

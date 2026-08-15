@@ -304,13 +304,7 @@ class LiefEngine {
         return data.copyOfRange(start, end)
     }
 
-    private fun extractUtf8Strings(
-        bytes: ByteArray,
-        base: Long,
-        section: String,
-        out: MutableList<StringInfo>,
-        seen: MutableSet<String>
-    ) {
+    private fun extractUtf8Strings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
         var start = 0
         var i = 0
         while (i <= bytes.size) {
@@ -371,13 +365,7 @@ class LiefEngine {
         }
     }
 
-    private fun extractUtf16LeStrings(
-        bytes: ByteArray,
-        base: Long,
-        section: String,
-        out: MutableList<StringInfo>,
-        seen: MutableSet<String>
-    ) {
+    private fun extractUtf16LeStrings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
         var start = -1
         var i = 0
         while (i + 1 < bytes.size) {
@@ -450,7 +438,8 @@ class LiefEngine {
             Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
         }
         val hasStrongTextSignal =
-            likelyAsciiUtf16 || hasHan ||
+            likelyAsciiUtf16 ||
+                hasHan ||
                 clean.any { it.code > 0x7f && Character.isLetterOrDigit(it) }
         val entropyPenalty =
             clean.toSet().size >= clean.length * 3 / 4 && letters < clean.length / 3
@@ -460,7 +449,11 @@ class LiefEngine {
             hasStrongTextSignal && mostlyText && spaces > 0 -> 0.7
             else -> 0.35
         }
-        if (useful && mostlyText && hasStrongTextSignal && !entropyPenalty && confidence >= 0.7 &&
+        if (useful &&
+            mostlyText &&
+            hasStrongTextSignal &&
+            !entropyPenalty &&
+            confidence >= 0.7 &&
             seen.add("UTF-16LE:${base + start}:$clean")
         ) {
             out +=
@@ -496,16 +489,8 @@ class LiefEngine {
     private external fun nativeFixSections(data: ByteArray): ByteArray
     private external fun nativePatchAddress(data: ByteArray, va: Long, patch: ByteArray): ByteArray
     private external fun nativeGetSectionContent(data: ByteArray, sectionName: String): ByteArray
-    private external fun nativeSetSectionContent(
-        data: ByteArray,
-        sectionName: String,
-        content: ByteArray
-    ): ByteArray
-    private external fun nativeAddExportedFunction(
-        data: ByteArray,
-        addr: Long,
-        name: String
-    ): ByteArray
+    private external fun nativeSetSectionContent(data: ByteArray, sectionName: String, content: ByteArray): ByteArray
+    private external fun nativeAddExportedFunction(data: ByteArray, addr: Long, name: String): ByteArray
     private external fun nativeRemoveSymbol(data: ByteArray, name: String): ByteArray
     private external fun nativeAvailable(): Boolean
 

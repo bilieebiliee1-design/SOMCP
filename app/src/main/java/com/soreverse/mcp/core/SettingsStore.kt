@@ -383,7 +383,7 @@ class SettingsStore(context: Context) {
     var toolCallRateLimitPerMin: Int
         get() = prefs.getInt("toolCallRateLimitPerMin", 0)
         set(
-            value
+        value
         ) = prefs.edit().putInt("toolCallRateLimitPerMin", value.coerceIn(0, 60000)).apply()
 
     /**
@@ -528,7 +528,7 @@ class SettingsStore(context: Context) {
     var tunnelKeepaliveIntervalSec: Int
         get() = prefs.getInt("tunnelKeepaliveIntervalSec", 15)
         set(
-            value
+        value
         ) = prefs.edit().putInt("tunnelKeepaliveIntervalSec", value.coerceIn(5, 300)).apply()
 
     /**
@@ -649,7 +649,7 @@ class SettingsStore(context: Context) {
     var apkMcpProbeTimeoutMs: Int
         get() = prefs.getInt("apkMcpProbeTimeoutMs", 8000)
         set(
-            value
+        value
         ) = prefs.edit().putInt("apkMcpProbeTimeoutMs", value.coerceIn(2000, 30000)).apply()
 
     // ---- UX / combo ----
@@ -853,11 +853,7 @@ class SettingsStore(context: Context) {
             )
     }
 
-    fun applyPatch(
-        patch: org.json.JSONObject,
-        allowSecrets: Boolean = true,
-        allowSecurityFields: Boolean = false
-    ): org.json.JSONObject {
+    fun applyPatch(patch: org.json.JSONObject, allowSecrets: Boolean = true, allowSecurityFields: Boolean = false): org.json.JSONObject {
         val changed = org.json.JSONArray()
         fun touch(key: String) {
             changed.put(key)
@@ -1251,12 +1247,11 @@ class SettingsStore(context: Context) {
     fun toJsonString(maskSecrets: Boolean = true): String = snapshot(maskSecrets).toString(2)
 
     /** Import settings from a JSON string. Returns the applyPatch result. */
-    fun fromJsonString(json: String, allowSecrets: Boolean = false): org.json.JSONObject =
-        applyPatch(
-            org.json.JSONObject(json),
-            allowSecrets = allowSecrets,
-            allowSecurityFields = allowSecrets
-        )
+    fun fromJsonString(json: String, allowSecrets: Boolean = false): org.json.JSONObject = applyPatch(
+        org.json.JSONObject(json),
+        allowSecrets = allowSecrets,
+        allowSecurityFields = allowSecrets
+    )
 
     companion object {
         const val DEFAULT_AI_SYSTEM_PROMPT =

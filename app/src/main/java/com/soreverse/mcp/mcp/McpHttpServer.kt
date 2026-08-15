@@ -215,7 +215,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         // empty body per the MCP streamable-HTTP spec. Sending a JSON-RPC
         // response (or an id=null result) for a notification breaks strict
         // clients such as rmcp.
-        if (response === NoResponse) {
+        if (response === noResponse) {
             call.respondText("", ContentType.Application.Json, status = HttpStatusCode.Accepted)
             return
         }
@@ -278,11 +278,11 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 } else {
                     dispatch(req)
                 }
-                // Skip notifications (NoResponse) — a batch of only notifications
+                // Skip notifications (noResponse) — a batch of only notifications
                 // yields an empty array, which the caller turns into 202 No body.
-                if (res !== NoResponse) out.put(res)
+                if (res !== noResponse) out.put(res)
             }
-            return if (out.length() == 0) NoResponse else out
+            return if (out.length() == 0) noResponse else out
         }
         val req = try {
             JSONObject(trimmed)
@@ -303,9 +303,9 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         // client sends after the handshake. Returning a response object here
         // (previously an id=null result) makes strict clients such as rmcp
         // reject the stream with an "initialized notification" protocol error.
-        // We signal "no response" with NoResponse and let the caller answer 202.
+        // We signal "no response" with noResponse and let the caller answer 202.
         val isNotification = !req.has("id") || method.startsWith("notifications/")
-        if (isNotification) return NoResponse
+        if (isNotification) return noResponse
         val params = req.optJSONObject("params") ?: JSONObject()
         val result = when (method) {
             "initialize" -> JSONObject()
@@ -370,7 +370,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
 
     // Sentinel meaning "this request was a notification; emit no JSON-RPC
     // response". Compared by identity (===). Never serialized to a client.
-    private val NoResponse: JSONObject = JSONObject().put("__noResponse", true)
+    private val noResponse: JSONObject = JSONObject().put("__noResponse", true)
 
     private fun toolUsageGuide(): JSONObject = JSONObject()
         .put(
@@ -488,10 +488,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         releaseSnapshots = ::releaseBatchSnapshots
     ).execute(args)
 
-    private fun ensureBatchSnapshot(
-        args: JSONObject,
-        snapshots: MutableMap<String, String>
-    ): JSONObject? {
+    private fun ensureBatchSnapshot(args: JSONObject, snapshots: MutableMap<String, String>): JSONObject? {
         val workspaceId = args.optString("workspaceId")
         val editSessionId = args.optString("editSessionId")
         if (workspaceId.isBlank() || editSessionId.isBlank()) return null
@@ -684,8 +681,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return constantTimeEquals(bearer, token) || constantTimeEquals(queryToken, token)
     }
 
-    private fun constantTimeEquals(candidate: String, secret: String): Boolean =
-        tokenConstantTimeEquals(candidate, secret)
+    private fun constantTimeEquals(candidate: String, secret: String): Boolean = tokenConstantTimeEquals(candidate, secret)
 
     private fun authError(): JSONObject = JSONObject().put(
         "jsonrpc",
@@ -811,7 +807,9 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val onlinePrefixes = apkBridge.allPrefixes()
         val integrationOnline = onlinePrefixes.isNotEmpty()
         val integrationHint = when {
-            onlineBridgeCount == 0 -> "APK MCP is offline. Install MT Manager or NP Manager, enable the APK MCP feature, keep it running in background, then set its /mcp URL in settings and call system_control (action=apk_probe)."
+            onlineBridgeCount == 0 ->
+                "APK MCP is offline. Install MT Manager or NP Manager, enable the APK MCP feature, " +
+                    "keep it running in background, then set its /mcp URL in settings and call system_control (action=apk_probe)."
 
             onlineBridgeCount == 1 -> {
                 val prefix = apkBridge.bridgedPrefix()
@@ -860,7 +858,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                         .put("hint", integrationHint)
                 )
                 .put("cloudflaredAvailable", tunnel.binary()?.exists() == true)
-                .put("cloudflaredBinaryState", tunnel.binaryState().name)
+                .put("cloudflaredBinaryState", tunnel.binaryState.name)
         )
     }
 
@@ -1186,7 +1184,18 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                         )
                     )
                     .put(
-                        workflow("safe_patch", "Atomic patch workflow", "so_open", "session_open", "session_history snapshot", "edit_hex/edit_asm dryRun=true", "edit_* dryRun=false", "session_history check", "session_audit persist", "build_so writeReport=true")
+                        workflow(
+                            "safe_patch",
+                            "Atomic patch workflow",
+                            "so_open",
+                            "session_open",
+                            "session_history snapshot",
+                            "edit_hex/edit_asm dryRun=true",
+                            "edit_* dryRun=false",
+                            "session_history check",
+                            "session_audit persist",
+                            "build_so writeReport=true"
+                        )
                     )
                     .put(
                         workflow(
@@ -1256,11 +1265,10 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             )
     )
 
-    private fun workflow(name: String, description: String, vararg steps: String): JSONObject =
-        JSONObject()
-            .put("name", name)
-            .put("description", description)
-            .put("steps", JSONArray(steps.toList()))
+    private fun workflow(name: String, description: String, vararg steps: String): JSONObject = JSONObject()
+        .put("name", name)
+        .put("description", description)
+        .put("steps", JSONArray(steps.toList()))
 
     private fun suggestions(args: JSONObject): JSONObject {
         val workspaceId = args.str("workspaceId")
@@ -1312,9 +1320,11 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                         "INVALID_ARGUMENT", "UNKNOWN_ACTION", "UNKNOWN_TOOL", "BAD_REQUEST", "TOO_MANY_STEPS", "INVALID_CURSOR",
                         "SO_NOT_FOUND", "WORKSPACE_NOT_FOUND", "EDIT_SESSION_NOT_FOUND", "SECTION_NOT_FOUND", "FUNCTION_NOT_FOUND",
                         "INVALID_LOCATOR", "OFFSET_OUT_OF_RANGE", "INVALID_HEX", "PATCH_TOO_LARGE", "ASM_SYNTAX_ERROR", "SIZE_MISMATCH",
-                        "UNSUPPORTED_OPERATION", "ELF_PARSE_FAILED", "ELF_CORRUPTED", "DUMP_ERROR", "EMULATION_DISABLED", "EMULATION_ERROR", "EMULATOR_UNAVAILABLE", "NATIVE_UNAVAILABLE",
+                        "UNSUPPORTED_OPERATION", "ELF_PARSE_FAILED", "ELF_CORRUPTED", "DUMP_ERROR",
+                        "EMULATION_DISABLED", "EMULATION_ERROR", "EMULATOR_UNAVAILABLE", "NATIVE_UNAVAILABLE",
                         "RIZIN_UNAVAILABLE", "RIZIN_CFG_FAILED", "RIZIN_SEARCH_FAILED", "RIZIN_COMMAND_FAILED", "LIEF_UNAVAILABLE", "PATCH_FAILED",
-                        "SYMBOL_NOT_FOUND", "MEMORY_MAP_ERROR", "MEMORY_WRITE_ERROR", "MEMORY_PROTECT_ERROR", "MEMORY_UNMAP_ERROR", "SERVER_BUSY", "RATE_LIMITED", "TOOL_DISABLED"
+                        "SYMBOL_NOT_FOUND", "MEMORY_MAP_ERROR", "MEMORY_WRITE_ERROR", "MEMORY_PROTECT_ERROR",
+                        "MEMORY_UNMAP_ERROR", "SERVER_BUSY", "RATE_LIMITED", "TOOL_DISABLED"
                     )
                 )
             )
@@ -1355,7 +1365,8 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             ).put(JSONObject().put("name", e.meta.name).put("description", desc))
             matched++
         }
-        if (settings.apkMcpMergeTools && (category.isBlank() || category == "apk-bridge") &&
+        if (settings.apkMcpMergeTools &&
+            (category.isBlank() || category == "apk-bridge") &&
             apkBridge.state().online
         ) {
             val qLower = q

@@ -2,12 +2,7 @@ package com.soreverse.mcp
 
 import java.net.ServerSocket
 
-internal fun portStatusText(
-    port: Int,
-    running: Boolean,
-    zh: Boolean,
-    conflict: Boolean = false
-): String {
+internal fun portStatusText(port: Int, running: Boolean, zh: Boolean, conflict: Boolean = false): String {
     if (port !in 1024..65535) return if (zh) "端口无效" else "Invalid port"
     if (conflict) return if (zh) "端口冲突" else "Port conflict"
     return if (running) {

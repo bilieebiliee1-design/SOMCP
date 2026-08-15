@@ -92,11 +92,7 @@ internal fun ScreenHeader(
 }
 
 @Composable
-internal fun GlassGroup(
-    title: String? = null,
-    footer: String? = null,
-    content: @Composable ColumnScope.() -> Unit
-) {
+internal fun GlassGroup(title: String? = null, footer: String? = null, content: @Composable ColumnScope.() -> Unit) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.cardRadius)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -234,13 +230,7 @@ internal fun ToggleRow(text: String, checked: Boolean, onChange: (Boolean) -> Un
 }
 
 @Composable
-internal fun PrimaryActionButton(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    leading: ImageVector? = null,
-    container: Color? = null
-) {
+internal fun PrimaryActionButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, leading: ImageVector? = null, container: Color? = null) {
     val metrics = LocalUiMetrics.current
     val shape = RoundedCornerShape(metrics.controlRadius)
     val resolved = container ?: MaterialTheme.colorScheme.primary

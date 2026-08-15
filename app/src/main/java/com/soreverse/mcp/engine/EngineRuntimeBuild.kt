@@ -192,10 +192,7 @@ private fun EngineRuntime.writeCopyToWorkDirectory(fileName: String, bytes: Byte
     return created.path
 }
 
-internal fun EngineRuntime.snapshotBytes(
-    workspaceId: String,
-    editSessionId: String
-): Pair<ByteArray, String> {
+internal fun EngineRuntime.snapshotBytes(workspaceId: String, editSessionId: String): Pair<ByteArray, String> {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
     return bytes to elf.architecture
@@ -231,10 +228,12 @@ internal fun EngineRuntime.fixSections(workspaceId: String, editSessionId: Strin
     }
     val elfAfter = lief.parse(fixed)
     val alreadyStructured =
-        elfBefore.sections.isNotEmpty() && elfBefore.programHeaders.isNotEmpty() &&
+        elfBefore.sections.isNotEmpty() &&
+            elfBefore.programHeaders.isNotEmpty() &&
             elfBefore.dynamicEntries.isNotEmpty()
     val onlyCanonicalization =
-        alreadyStructured && elfBefore.sections.size == elfAfter.sections.size &&
+        alreadyStructured &&
+            elfBefore.sections.size == elfAfter.sections.size &&
             elfBefore.programHeaders.size == elfAfter.programHeaders.size &&
             elfBefore.dynamicEntries.size == elfAfter.dynamicEntries.size &&
             before.size == fixed.size

@@ -228,13 +228,7 @@ class UnidbgEmulator(private val context: Context) {
      * @param enableTrace whether to enable Unidbg instruction tracing (verbose)
      * @return JSONObject with ok, returnValue, symbol, args, traced, elapsedMs
      */
-    fun emulate(
-        bytes: ByteArray,
-        arch: String,
-        symbolName: String,
-        argsJson: JSONArray,
-        enableTrace: Boolean
-    ): JSONObject = runCatching {
+    fun emulate(bytes: ByteArray, arch: String, symbolName: String, argsJson: JSONArray, enableTrace: Boolean): JSONObject = runCatching {
         if (!available()) {
             return@runCatching JSONObject()
                 .put("ok", false)
@@ -297,43 +291,42 @@ class UnidbgEmulator(private val context: Context) {
      *
      * @return JSONObject with ok, hex, ascii, size
      */
-    fun dumpMemory(bytes: ByteArray, arch: String, addr: Long, size: Int): JSONObject =
-        runCatching {
-            if (!available()) {
-                return@runCatching JSONObject()
-                    .put("ok", false)
-                    .put(
-                        "error",
-                        JSONObject().put("code", "EMULATOR_UNAVAILABLE")
-                            .put("message", UnidbgEmulator.unavailableReason())
-                    )
-            }
-
-            val result = JSONObject()
-            runCatching { doDumpMemory(bytes, arch, addr, size, result) }
-                .onFailure { e ->
-                    val root = rootCause(e)
-                    result.put("ok", false)
-                        .put(
-                            "error",
-                            JSONObject().put("code", "DUMP_ERROR")
-                                .put("message", root.message ?: root.javaClass.simpleName)
-                                .put("exception", e.javaClass.name)
-                                .put("rootException", root.javaClass.name)
-                                .put("stage", result.optString("stage", "unknown"))
-                        )
-                }
-            result
-        }.getOrElse { e ->
-            JSONObject().put("ok", false)
+    fun dumpMemory(bytes: ByteArray, arch: String, addr: Long, size: Int): JSONObject = runCatching {
+        if (!available()) {
+            return@runCatching JSONObject()
+                .put("ok", false)
                 .put(
                     "error",
-                    JSONObject().put("code", "DUMP_ERROR").put(
-                        "message",
-                        e.message ?: "unknown"
-                    )
+                    JSONObject().put("code", "EMULATOR_UNAVAILABLE")
+                        .put("message", UnidbgEmulator.unavailableReason())
                 )
         }
+
+        val result = JSONObject()
+        runCatching { doDumpMemory(bytes, arch, addr, size, result) }
+            .onFailure { e ->
+                val root = rootCause(e)
+                result.put("ok", false)
+                    .put(
+                        "error",
+                        JSONObject().put("code", "DUMP_ERROR")
+                            .put("message", root.message ?: root.javaClass.simpleName)
+                            .put("exception", e.javaClass.name)
+                            .put("rootException", root.javaClass.name)
+                            .put("stage", result.optString("stage", "unknown"))
+                    )
+            }
+        result
+    }.getOrElse { e ->
+        JSONObject().put("ok", false)
+            .put(
+                "error",
+                JSONObject().put("code", "DUMP_ERROR").put(
+                    "message",
+                    e.message ?: "unknown"
+                )
+            )
+    }
 
     fun openSession(bytes: ByteArray, arch: String, callJniOnLoad: Boolean = true): JSONObject {
         val result = JSONObject()
@@ -366,12 +359,7 @@ class UnidbgEmulator(private val context: Context) {
         }
     }
 
-    fun sessionCall(
-        live: LiveSession,
-        symbolName: String,
-        argsJson: JSONArray,
-        enableTrace: Boolean
-    ): JSONObject = runCatching {
+    fun sessionCall(live: LiveSession, symbolName: String, argsJson: JSONArray, enableTrace: Boolean): JSONObject = runCatching {
         val result = JSONObject()
         synchronized(live.lock) {
             if (live.closed.get()) {
@@ -528,140 +516,137 @@ class UnidbgEmulator(private val context: Context) {
         )
     }
 
-    fun sessionMemoryWrite(live: LiveSession, addr: Long, hexBytes: String): JSONObject =
-        runCatching {
-            synchronized(live.lock) {
-                val data = hexToBytes(hexBytes)
-                val memWrite =
-                    live.backend?.javaClass?.methods?.firstOrNull {
-                        it.name == "mem_write" &&
-                            it.parameterCount == 2
-                    }
-                        ?: return@runCatching JSONObject().put(
-                            "ok",
-                            false
-                        ).put(
-                            "error",
-                            JSONObject().put(
-                                "code",
-                                "BACKEND_ERROR"
-                            ).put("message", "mem_write not available")
-                        )
-                memWrite.invoke(live.backend, addr, data)
-                JSONObject().put(
-                    "ok",
-                    true
-                ).put(
-                    "persistent",
-                    true
-                ).put("addr", "0x${addr.toString(16)}").put("size", data.size)
-            }
-        }.getOrElse { e ->
-            JSONObject().put("ok", false).put(
-                "error",
-                JSONObject().put("code", "MEMORY_WRITE_ERROR").put(
-                    "message",
-                    rootCause(e).message ?: e.javaClass.simpleName
-                )
-            )
+    fun sessionMemoryWrite(live: LiveSession, addr: Long, hexBytes: String): JSONObject = runCatching {
+        synchronized(live.lock) {
+            val data = hexToBytes(hexBytes)
+            val memWrite =
+                live.backend?.javaClass?.methods?.firstOrNull {
+                    it.name == "mem_write" &&
+                        it.parameterCount == 2
+                }
+                    ?: return@runCatching JSONObject().put(
+                        "ok",
+                        false
+                    ).put(
+                        "error",
+                        JSONObject().put(
+                            "code",
+                            "BACKEND_ERROR"
+                        ).put("message", "mem_write not available")
+                    )
+            memWrite.invoke(live.backend, addr, data)
+            JSONObject().put(
+                "ok",
+                true
+            ).put(
+                "persistent",
+                true
+            ).put("addr", "0x${addr.toString(16)}").put("size", data.size)
         }
+    }.getOrElse { e ->
+        JSONObject().put("ok", false).put(
+            "error",
+            JSONObject().put("code", "MEMORY_WRITE_ERROR").put(
+                "message",
+                rootCause(e).message ?: e.javaClass.simpleName
+            )
+        )
+    }
 
-    fun sessionMemoryMap(live: LiveSession, addr: Long, size: Long, prot: Int): JSONObject =
-        runCatching {
-            synchronized(live.lock) {
-                val memory = live.emulator.javaClass.getMethod("getMemory").invoke(live.emulator)
-                val mmap2 =
-                    memory.javaClass.methods.firstOrNull {
-                        it.name == "mmap2" && it.parameterCount == 6
-                    }
-                        ?: return@runCatching JSONObject().put(
-                            "ok",
-                            false
-                        ).put(
-                            "error",
-                            JSONObject().put(
-                                "code",
-                                "MEMORY_API_ERROR"
-                            ).put("message", "mmap2 not available")
-                        )
-                val flags = if (addr == 0L) 0x22 else 0x32
-                val mapped = (
-                    mmap2.invoke(
-                        memory,
-                        addr,
-                        size.toInt(),
-                        prot,
-                        flags,
-                        -1,
-                        0
-                    ) as Number
-                    ).toLong()
-                check(mapped >= 0) { "mmap2 failed: $mapped" }
-                JSONObject().put(
-                    "ok",
-                    true
-                ).put(
-                    "persistent",
-                    true
-                ).put(
-                    "requestedAddr",
-                    "0x${addr.toString(16)}"
-                ).put(
-                    "addr",
-                    "0x${mapped.toString(16)}"
-                ).put("size", size).put("prot", prot).put("permissions", memoryProt(prot))
-            }
-        }.getOrElse { e ->
-            JSONObject().put("ok", false).put(
-                "error",
-                JSONObject().put("code", "MEMORY_MAP_ERROR").put(
-                    "message",
-                    rootCause(e).message ?: e.javaClass.simpleName
-                )
-            )
+    fun sessionMemoryMap(live: LiveSession, addr: Long, size: Long, prot: Int): JSONObject = runCatching {
+        synchronized(live.lock) {
+            val memory = live.emulator.javaClass.getMethod("getMemory").invoke(live.emulator)
+            val mmap2 =
+                memory.javaClass.methods.firstOrNull {
+                    it.name == "mmap2" && it.parameterCount == 6
+                }
+                    ?: return@runCatching JSONObject().put(
+                        "ok",
+                        false
+                    ).put(
+                        "error",
+                        JSONObject().put(
+                            "code",
+                            "MEMORY_API_ERROR"
+                        ).put("message", "mmap2 not available")
+                    )
+            val flags = if (addr == 0L) 0x22 else 0x32
+            val mapped = (
+                mmap2.invoke(
+                    memory,
+                    addr,
+                    size.toInt(),
+                    prot,
+                    flags,
+                    -1,
+                    0
+                ) as Number
+                ).toLong()
+            check(mapped >= 0) { "mmap2 failed: $mapped" }
+            JSONObject().put(
+                "ok",
+                true
+            ).put(
+                "persistent",
+                true
+            ).put(
+                "requestedAddr",
+                "0x${addr.toString(16)}"
+            ).put(
+                "addr",
+                "0x${mapped.toString(16)}"
+            ).put("size", size).put("prot", prot).put("permissions", memoryProt(prot))
         }
+    }.getOrElse { e ->
+        JSONObject().put("ok", false).put(
+            "error",
+            JSONObject().put("code", "MEMORY_MAP_ERROR").put(
+                "message",
+                rootCause(e).message ?: e.javaClass.simpleName
+            )
+        )
+    }
 
-    fun sessionMemoryProtect(live: LiveSession, addr: Long, size: Long, prot: Int): JSONObject =
-        runCatching {
-            synchronized(live.lock) {
-                val memory = live.emulator.javaClass.getMethod("getMemory").invoke(live.emulator)
-                val memProtect =
-                    memory.javaClass.methods.firstOrNull {
-                        it.name == "mprotect" &&
-                            it.parameterCount == 3
-                    }
-                        ?: return@runCatching JSONObject().put(
-                            "ok",
-                            false
-                        ).put(
-                            "error",
-                            JSONObject().put(
-                                "code",
-                                "MEMORY_API_ERROR"
-                            ).put("message", "mprotect not available")
-                        )
-                val result = (memProtect.invoke(memory, addr, size.toInt(), prot) as Number).toInt()
-                check(result >= 0) { "mprotect failed: $result" }
-                JSONObject().put(
-                    "ok",
-                    true
-                ).put(
-                    "persistent",
-                    true
-                ).put(
-                    "addr",
-                    "0x${addr.toString(16)}"
-                ).put("size", size).put("prot", prot).put("permissions", memoryProt(prot))
-            }
-        }.getOrElse { e ->
-            JSONObject().put("ok", false).put(
-                "error",
-                JSONObject().put("code", "MEMORY_PROTECT_ERROR").put(
-                    "message",
-                    rootCause(e).message ?: e.javaClass.simpleName
-                )
-            )
+    fun sessionMemoryProtect(live: LiveSession, addr: Long, size: Long, prot: Int): JSONObject = runCatching {
+        synchronized(live.lock) {
+            val memory = live.emulator.javaClass.getMethod("getMemory").invoke(live.emulator)
+            val memProtect =
+                memory.javaClass.methods.firstOrNull {
+                    it.name == "mprotect" &&
+                        it.parameterCount == 3
+                }
+                    ?: return@runCatching JSONObject().put(
+                        "ok",
+                        false
+                    ).put(
+                        "error",
+                        JSONObject().put(
+                            "code",
+                            "MEMORY_API_ERROR"
+                        ).put("message", "mprotect not available")
+                    )
+            val result = (memProtect.invoke(memory, addr, size.toInt(), prot) as Number).toInt()
+            check(result >= 0) { "mprotect failed: $result" }
+            JSONObject().put(
+                "ok",
+                true
+            ).put(
+                "persistent",
+                true
+            ).put(
+                "addr",
+                "0x${addr.toString(16)}"
+            ).put("size", size).put("prot", prot).put("permissions", memoryProt(prot))
         }
+    }.getOrElse { e ->
+        JSONObject().put("ok", false).put(
+            "error",
+            JSONObject().put("code", "MEMORY_PROTECT_ERROR").put(
+                "message",
+                rootCause(e).message ?: e.javaClass.simpleName
+            )
+        )
+    }
 
     fun sessionMemoryUnmap(live: LiveSession, addr: Long, size: Long): JSONObject = runCatching {
         synchronized(live.lock) {
@@ -742,53 +727,52 @@ class UnidbgEmulator(private val context: Context) {
         )
     }
 
-    fun sessionCallAddress(live: LiveSession, address: Long, argsJson: JSONArray): JSONObject =
-        runCatching {
-            synchronized(live.lock) {
-                if (live.closed.get()) {
-                    return@runCatching JSONObject().put(
-                        "ok",
-                        false
-                    ).put(
-                        "error",
-                        JSONObject().put(
-                            "code",
-                            "SESSION_CLOSED"
-                        ).put("message", "Emulator session has been closed")
-                    )
-                }
-                val moduleClass = Class.forName("com.github.unidbg.Module")
-                val emulateFunction = moduleClass.getMethod(
-                    "emulateFunction",
-                    Class.forName("com.github.unidbg.Emulator"),
-                    Long::class.javaPrimitiveType,
-                    Array<Any>::class.java
-                )
-                val ret = emulateFunction.invoke(
-                    null,
-                    live.emulator,
-                    address,
-                    toArgList(argsJson).toTypedArray()
-                )
-                JSONObject().put(
+    fun sessionCallAddress(live: LiveSession, address: Long, argsJson: JSONArray): JSONObject = runCatching {
+        synchronized(live.lock) {
+            if (live.closed.get()) {
+                return@runCatching JSONObject().put(
                     "ok",
-                    true
-                ).put("persistent", true).put("addr", "0x${address.toString(16)}").put(
-                    "returnValue",
-                    ret?.toString() ?: "0"
-                ).put("args", summarizeArgs(argsJson)).also {
-                    addSuspiciousReturnWarning(it, "address:0x${address.toString(16)}", false)
-                }
-            }
-        }.getOrElse { e ->
-            JSONObject().put("ok", false).put(
-                "error",
-                JSONObject().put("code", "CALL_ADDRESS_ERROR").put(
-                    "message",
-                    rootCause(e).message ?: e.javaClass.simpleName
+                    false
+                ).put(
+                    "error",
+                    JSONObject().put(
+                        "code",
+                        "SESSION_CLOSED"
+                    ).put("message", "Emulator session has been closed")
                 )
+            }
+            val moduleClass = Class.forName("com.github.unidbg.Module")
+            val emulateFunction = moduleClass.getMethod(
+                "emulateFunction",
+                Class.forName("com.github.unidbg.Emulator"),
+                Long::class.javaPrimitiveType,
+                Array<Any>::class.java
             )
+            val ret = emulateFunction.invoke(
+                null,
+                live.emulator,
+                address,
+                toArgList(argsJson).toTypedArray()
+            )
+            JSONObject().put(
+                "ok",
+                true
+            ).put("persistent", true).put("addr", "0x${address.toString(16)}").put(
+                "returnValue",
+                ret?.toString() ?: "0"
+            ).put("args", summarizeArgs(argsJson)).also {
+                addSuspiciousReturnWarning(it, "address:0x${address.toString(16)}", false)
+            }
         }
+    }.getOrElse { e ->
+        JSONObject().put("ok", false).put(
+            "error",
+            JSONObject().put("code", "CALL_ADDRESS_ERROR").put(
+                "message",
+                rootCause(e).message ?: e.javaClass.simpleName
+            )
+        )
+    }
 
     fun sessionTraceCode(live: LiveSession, begin: Long, end: Long): JSONObject = runCatching {
         synchronized(live.lock) {
@@ -832,124 +816,122 @@ class UnidbgEmulator(private val context: Context) {
         )
     }
 
-    fun sessionTraceStart(live: LiveSession, type: String, begin: Long, end: Long): JSONObject =
-        runCatching {
-            synchronized(live.lock) {
-                val listenerClass = Class.forName(
-                    when (type) {
-                        "read" -> "com.github.unidbg.listener.TraceReadListener"
-                        "write" -> "com.github.unidbg.listener.TraceWriteListener"
-                        else -> "com.github.unidbg.listener.TraceCodeListener"
-                    }
-                )
-                val listener = java.lang.reflect.Proxy.newProxyInstance(
-                    listenerClass.classLoader,
-                    arrayOf(listenerClass)
-                ) {
-                        _,
-                        method,
-                        callbackArgs
-                    ->
-                    val values = callbackArgs ?: emptyArray()
-                    val event = JSONObject().put(
-                        "index",
-                        live.traceEvents.size
-                    ).put(
-                        "type",
-                        type
-                    ).put("method", method.name).put("timestamp", System.currentTimeMillis())
-                    if (values.size > 1 &&
-                        values[1] is Number
-                    ) {
-                        event.put("address", "0x${(values[1] as Number).toLong().toString(16)}")
-                    }
-                    when (type) {
-                        "code" -> if (values.size >
-                            2
-                        ) {
-                            event.put("instruction", values[2]?.toString() ?: JSONObject.NULL)
-                        }
-
-                        "read" -> if (values.size >
-                            2
-                        ) {
-                            event.put(
-                                "bytes",
-                                (values[2] as? ByteArray)?.joinToString("") { "%02x".format(it) }
-                                    ?: JSONObject.NULL
-                            ).put(
-                                "label",
-                                values.getOrNull(3)?.toString() ?: JSONObject.NULL
-                            )
-                        }
-
-                        "write" -> if (values.size >
-                            3
-                        ) {
-                            event.put(
-                                "size",
-                                values[2]
-                            ).put("value", "0x${(values[3] as Number).toLong().toString(16)}")
-                        }
-                    }
-                    if (live.traceEvents.size >= 100000) live.traceEvents.removeAt(0)
-                    live.traceEvents.add(event)
-                    method.returnType == Boolean::class.javaPrimitiveType
+    fun sessionTraceStart(live: LiveSession, type: String, begin: Long, end: Long): JSONObject = runCatching {
+        synchronized(live.lock) {
+            val listenerClass = Class.forName(
+                when (type) {
+                    "read" -> "com.github.unidbg.listener.TraceReadListener"
+                    "write" -> "com.github.unidbg.listener.TraceWriteListener"
+                    else -> "com.github.unidbg.listener.TraceCodeListener"
                 }
-                val methodName = when (type) {
-                    "read" -> "traceRead"
-                    "write" -> "traceWrite"
-                    else -> "traceCode"
-                }
-                val method = live.emulator.javaClass.methods.first {
-                    it.name == methodName &&
-                        it.parameterCount == 3 &&
-                        it.parameterTypes[2] == listenerClass
-                }
-                val hook =
-                    method.invoke(live.emulator, begin, end, listener)
-                        ?: throw IllegalStateException("Trace hook unavailable")
-                val traceId = "trace-$type-${live.traceHooks.size + 1}"
-                live.traceHooks[traceId] = hook
-                JSONObject().put(
-                    "ok",
-                    true
-                ).put(
-                    "persistent",
-                    true
-                ).put(
-                    "traceId",
-                    traceId
+            )
+            val listener = java.lang.reflect.Proxy.newProxyInstance(
+                listenerClass.classLoader,
+                arrayOf(listenerClass)
+            ) {
+                    _,
+                    method,
+                    callbackArgs
+                ->
+                val values = callbackArgs ?: emptyArray()
+                val event = JSONObject().put(
+                    "index",
+                    live.traceEvents.size
                 ).put(
                     "type",
                     type
-                ).put("begin", "0x${begin.toString(16)}").put("end", "0x${end.toString(16)}")
-            }
-        }.getOrElse { e ->
-            JSONObject().put("ok", false).put(
-                "error",
-                JSONObject().put("code", "TRACE_ERROR").put(
-                    "message",
-                    rootCause(e).message ?: e.javaClass.simpleName
-                )
-            )
-        }
+                ).put("method", method.name).put("timestamp", System.currentTimeMillis())
+                if (values.size > 1 &&
+                    values[1] is Number
+                ) {
+                    event.put("address", "0x${(values[1] as Number).toLong().toString(16)}")
+                }
+                when (type) {
+                    "code" -> if (values.size >
+                        2
+                    ) {
+                        event.put("instruction", values[2]?.toString() ?: JSONObject.NULL)
+                    }
 
-    fun sessionTraceEvents(live: LiveSession, cursor: Int, limit: Int): JSONObject =
-        synchronized(live.lock) {
-            val start = cursor.coerceIn(0, live.traceEvents.size)
-            val end = (start + limit.coerceIn(1, 1000)).coerceAtMost(live.traceEvents.size)
+                    "read" -> if (values.size >
+                        2
+                    ) {
+                        event.put(
+                            "bytes",
+                            (values[2] as? ByteArray)?.joinToString("") { "%02x".format(it) }
+                                ?: JSONObject.NULL
+                        ).put(
+                            "label",
+                            values.getOrNull(3)?.toString() ?: JSONObject.NULL
+                        )
+                    }
+
+                    "write" -> if (values.size >
+                        3
+                    ) {
+                        event.put(
+                            "size",
+                            values[2]
+                        ).put("value", "0x${(values[3] as Number).toLong().toString(16)}")
+                    }
+                }
+                if (live.traceEvents.size >= 100000) live.traceEvents.removeAt(0)
+                live.traceEvents.add(event)
+                method.returnType == Boolean::class.javaPrimitiveType
+            }
+            val methodName = when (type) {
+                "read" -> "traceRead"
+                "write" -> "traceWrite"
+                else -> "traceCode"
+            }
+            val method = live.emulator.javaClass.methods.first {
+                it.name == methodName &&
+                    it.parameterCount == 3 &&
+                    it.parameterTypes[2] == listenerClass
+            }
+            val hook =
+                method.invoke(live.emulator, begin, end, listener)
+                    ?: throw IllegalStateException("Trace hook unavailable")
+            val traceId = "trace-$type-${live.traceHooks.size + 1}"
+            live.traceHooks[traceId] = hook
             JSONObject().put(
                 "ok",
                 true
             ).put(
                 "persistent",
                 true
-            ).put("cursor", start).put("nextCursor", end).put("total", live.traceEvents.size).put(
-                "hasMore",
-                end < live.traceEvents.size
-            ).put("events", JSONArray(live.traceEvents.subList(start, end)))
+            ).put(
+                "traceId",
+                traceId
+            ).put(
+                "type",
+                type
+            ).put("begin", "0x${begin.toString(16)}").put("end", "0x${end.toString(16)}")
         }
+    }.getOrElse { e ->
+        JSONObject().put("ok", false).put(
+            "error",
+            JSONObject().put("code", "TRACE_ERROR").put(
+                "message",
+                rootCause(e).message ?: e.javaClass.simpleName
+            )
+        )
+    }
+
+    fun sessionTraceEvents(live: LiveSession, cursor: Int, limit: Int): JSONObject = synchronized(live.lock) {
+        val start = cursor.coerceIn(0, live.traceEvents.size)
+        val end = (start + limit.coerceIn(1, 1000)).coerceAtMost(live.traceEvents.size)
+        JSONObject().put(
+            "ok",
+            true
+        ).put(
+            "persistent",
+            true
+        ).put("cursor", start).put("nextCursor", end).put("total", live.traceEvents.size).put(
+            "hasMore",
+            end < live.traceEvents.size
+        ).put("events", JSONArray(live.traceEvents.subList(start, end)))
+    }
 
     fun sessionTraceStop(live: LiveSession, traceId: String): JSONObject = runCatching {
         synchronized(live.lock) {
@@ -980,114 +962,113 @@ class UnidbgEmulator(private val context: Context) {
         JSONObject().put("ok", true).put("persistent", true).put("cleared", count)
     }
 
-    fun sessionHookStart(live: LiveSession, type: String, begin: Long, end: Long): JSONObject =
-        runCatching {
-            synchronized(live.lock) {
-                val backend = live.backend ?: throw IllegalStateException("Backend unavailable")
-                val interfaceName = when (type) {
-                    "interrupt", "syscall" -> "com.github.unidbg.arm.backend.InterruptHook"
-                    "read" -> "com.github.unidbg.arm.backend.ReadHook"
-                    "write" -> "com.github.unidbg.arm.backend.WriteHook"
-                    else -> "com.github.unidbg.arm.backend.CodeHook"
-                }
-                val hookClass = Class.forName(interfaceName)
-                val hookId = "hook-$type-${live.traceHooks.size + 1}"
-                val callback = java.lang.reflect.Proxy.newProxyInstance(
-                    hookClass.classLoader,
-                    arrayOf(hookClass)
-                ) {
-                        _,
-                        method,
-                        callbackArgs
-                    ->
-                    val values = callbackArgs ?: emptyArray()
-                    when (method.name) {
-                        "onAttach" -> if (values.isNotEmpty() &&
-                            values[0] != null
-                        ) {
-                            live.traceHooks[hookId] = values[0]
-                        }
-
-                        "detach" -> live.traceHooks.remove(hookId)
-
-                        "hook" -> {
-                            val event = JSONObject().put(
-                                "index",
-                                live.traceEvents.size
-                            ).put("type", type).put("timestamp", System.currentTimeMillis())
-                            if (type == "interrupt" || type == "syscall") {
-                                event.put(
-                                    "intno",
-                                    values.getOrNull(1)
-                                ).put("swi", values.getOrNull(2))
-                            } else {
-                                event.put(
-                                    "address",
-                                    "0x${(values.getOrNull(1) as? Number)?.toLong()?.toString(16)}"
-                                ).put("size", values.getOrNull(2))
-                                if (type ==
-                                    "write"
-                                ) {
-                                    event.put(
-                                        "value",
-                                        "0x${(
-                                            values.getOrNull(
-                                                3
-                                            ) as? Number
-                                            )?.toLong()?.toString(16)}"
-                                    )
-                                }
-                            }
-                            if (live.traceEvents.size >= 100000) live.traceEvents.removeAt(0)
-                            live.traceEvents.add(event)
-                        }
-                    }
-                    method.returnType == Boolean::class.javaPrimitiveType
-                }
-                val method = if (type == "interrupt" || type == "syscall") {
-                    backend.javaClass.methods.first {
-                        it.name == "hook_add_new" &&
-                            it.parameterCount == 2 &&
-                            it.parameterTypes[0] == hookClass
-                    }
-                } else {
-                    backend.javaClass.methods.first {
-                        it.name == "hook_add_new" &&
-                            it.parameterCount == 4 &&
-                            it.parameterTypes[0] == hookClass
-                    }
-                }
-                if (method.parameterCount ==
-                    2
-                ) {
-                    method.invoke(backend, callback, hookId)
-                } else {
-                    method.invoke(backend, callback, begin, end, hookId)
-                }
-                live.traceHooks.putIfAbsent(hookId, callback)
-                JSONObject().put(
-                    "ok",
-                    true
-                ).put(
-                    "persistent",
-                    true
-                ).put(
-                    "hookId",
-                    hookId
-                ).put(
-                    "type",
-                    type
-                ).put("begin", "0x${begin.toString(16)}").put("end", "0x${end.toString(16)}")
+    fun sessionHookStart(live: LiveSession, type: String, begin: Long, end: Long): JSONObject = runCatching {
+        synchronized(live.lock) {
+            val backend = live.backend ?: throw IllegalStateException("Backend unavailable")
+            val interfaceName = when (type) {
+                "interrupt", "syscall" -> "com.github.unidbg.arm.backend.InterruptHook"
+                "read" -> "com.github.unidbg.arm.backend.ReadHook"
+                "write" -> "com.github.unidbg.arm.backend.WriteHook"
+                else -> "com.github.unidbg.arm.backend.CodeHook"
             }
-        }.getOrElse { e ->
-            JSONObject().put("ok", false).put(
-                "error",
-                JSONObject().put("code", "HOOK_ERROR").put(
-                    "message",
-                    rootCause(e).message ?: e.javaClass.simpleName
-                )
-            )
+            val hookClass = Class.forName(interfaceName)
+            val hookId = "hook-$type-${live.traceHooks.size + 1}"
+            val callback = java.lang.reflect.Proxy.newProxyInstance(
+                hookClass.classLoader,
+                arrayOf(hookClass)
+            ) {
+                    _,
+                    method,
+                    callbackArgs
+                ->
+                val values = callbackArgs ?: emptyArray()
+                when (method.name) {
+                    "onAttach" -> if (values.isNotEmpty() &&
+                        values[0] != null
+                    ) {
+                        live.traceHooks[hookId] = values[0]
+                    }
+
+                    "detach" -> live.traceHooks.remove(hookId)
+
+                    "hook" -> {
+                        val event = JSONObject().put(
+                            "index",
+                            live.traceEvents.size
+                        ).put("type", type).put("timestamp", System.currentTimeMillis())
+                        if (type == "interrupt" || type == "syscall") {
+                            event.put(
+                                "intno",
+                                values.getOrNull(1)
+                            ).put("swi", values.getOrNull(2))
+                        } else {
+                            event.put(
+                                "address",
+                                "0x${(values.getOrNull(1) as? Number)?.toLong()?.toString(16)}"
+                            ).put("size", values.getOrNull(2))
+                            if (type ==
+                                "write"
+                            ) {
+                                event.put(
+                                    "value",
+                                    "0x${(
+                                        values.getOrNull(
+                                            3
+                                        ) as? Number
+                                        )?.toLong()?.toString(16)}"
+                                )
+                            }
+                        }
+                        if (live.traceEvents.size >= 100000) live.traceEvents.removeAt(0)
+                        live.traceEvents.add(event)
+                    }
+                }
+                method.returnType == Boolean::class.javaPrimitiveType
+            }
+            val method = if (type == "interrupt" || type == "syscall") {
+                backend.javaClass.methods.first {
+                    it.name == "hook_add_new" &&
+                        it.parameterCount == 2 &&
+                        it.parameterTypes[0] == hookClass
+                }
+            } else {
+                backend.javaClass.methods.first {
+                    it.name == "hook_add_new" &&
+                        it.parameterCount == 4 &&
+                        it.parameterTypes[0] == hookClass
+                }
+            }
+            if (method.parameterCount ==
+                2
+            ) {
+                method.invoke(backend, callback, hookId)
+            } else {
+                method.invoke(backend, callback, begin, end, hookId)
+            }
+            live.traceHooks.putIfAbsent(hookId, callback)
+            JSONObject().put(
+                "ok",
+                true
+            ).put(
+                "persistent",
+                true
+            ).put(
+                "hookId",
+                hookId
+            ).put(
+                "type",
+                type
+            ).put("begin", "0x${begin.toString(16)}").put("end", "0x${end.toString(16)}")
         }
+    }.getOrElse { e ->
+        JSONObject().put("ok", false).put(
+            "error",
+            JSONObject().put("code", "HOOK_ERROR").put(
+                "message",
+                rootCause(e).message ?: e.javaClass.simpleName
+            )
+        )
+    }
 
     fun sessionHookStop(live: LiveSession, hookId: String): JSONObject = runCatching {
         synchronized(live.lock) {
@@ -1335,56 +1316,50 @@ class UnidbgEmulator(private val context: Context) {
         JSONObject().put("ok", true).put("persistent", true).put("roots", roots)
     }
 
-    fun sessionReflectMethods(live: LiveSession, handle: String): JSONObject =
-        synchronized(live.lock) {
-            sessionReflectRoots(live)
-            val target =
-                live.objects[handle]
-                    ?: return@synchronized JSONObject().put(
-                        "ok",
-                        false
-                    ).put(
-                        "error",
-                        JSONObject().put(
-                            "code",
-                            "OBJECT_HANDLE_NOT_FOUND"
-                        ).put("message", "Unknown Unidbg object handle: $handle")
-                    )
-            val methods = JSONArray()
-            target.javaClass.methods.sortedWith(
-                compareBy({
-                    it.name
-                }, { it.parameterCount })
-            ).forEach { method ->
-                methods.put(
+    fun sessionReflectMethods(live: LiveSession, handle: String): JSONObject = synchronized(live.lock) {
+        sessionReflectRoots(live)
+        val target =
+            live.objects[handle]
+                ?: return@synchronized JSONObject().put(
+                    "ok",
+                    false
+                ).put(
+                    "error",
                     JSONObject().put(
-                        "name",
-                        method.name
-                    ).put("returnType", method.returnType.name).put(
-                        "parameterTypes",
-                        JSONArray(
-                            method.parameterTypes.map {
-                                it.name
-                            }
-                        )
-                    ).put("signature", method.toGenericString())
+                        "code",
+                        "OBJECT_HANDLE_NOT_FOUND"
+                    ).put("message", "Unknown Unidbg object handle: $handle")
                 )
-            }
-            JSONObject().put(
-                "ok",
-                true
-            ).put(
-                "persistent",
-                true
-            ).put("handle", handle).put("class", target.javaClass.name).put("methods", methods)
+        val methods = JSONArray()
+        target.javaClass.methods.sortedWith(
+            compareBy({
+                it.name
+            }, { it.parameterCount })
+        ).forEach { method ->
+            methods.put(
+                JSONObject().put(
+                    "name",
+                    method.name
+                ).put("returnType", method.returnType.name).put(
+                    "parameterTypes",
+                    JSONArray(
+                        method.parameterTypes.map {
+                            it.name
+                        }
+                    )
+                ).put("signature", method.toGenericString())
+            )
         }
+        JSONObject().put(
+            "ok",
+            true
+        ).put(
+            "persistent",
+            true
+        ).put("handle", handle).put("class", target.javaClass.name).put("methods", methods)
+    }
 
-    fun sessionReflectInvoke(
-        live: LiveSession,
-        handle: String,
-        methodName: String,
-        args: JSONArray
-    ): JSONObject = synchronized(live.lock) {
+    fun sessionReflectInvoke(live: LiveSession, handle: String, methodName: String, args: JSONArray): JSONObject = synchronized(live.lock) {
         sessionReflectRoots(live)
         val target =
             live.objects[handle]
@@ -1467,42 +1442,41 @@ class UnidbgEmulator(private val context: Context) {
         }
     }
 
-    fun sessionNativeToolCall(live: LiveSession, toolName: String, args: JSONObject): JSONObject =
-        synchronized(live.lock) {
-            runCatching {
-                val tools = nativeMcpTools(live)
-                val fastJsonClass = Class.forName("com.alibaba.fastjson.JSONObject")
-                val fastArgs = fastJsonClass.getConstructor(
-                    Map::class.java
-                ).newInstance(jsonObjectToMap(args))
-                val dispatch = tools.javaClass.getDeclaredMethod(
-                    "dispatchTool",
-                    String::class.java,
-                    fastJsonClass
-                ).apply {
-                    isAccessible =
-                        true
-                }
-                val result = dispatch.invoke(tools, toolName, fastArgs)
-                JSONObject(
-                    result.toString()
-                ).put(
-                    "persistent",
+    fun sessionNativeToolCall(live: LiveSession, toolName: String, args: JSONObject): JSONObject = synchronized(live.lock) {
+        runCatching {
+            val tools = nativeMcpTools(live)
+            val fastJsonClass = Class.forName("com.alibaba.fastjson.JSONObject")
+            val fastArgs = fastJsonClass.getConstructor(
+                Map::class.java
+            ).newInstance(jsonObjectToMap(args))
+            val dispatch = tools.javaClass.getDeclaredMethod(
+                "dispatchTool",
+                String::class.java,
+                fastJsonClass
+            ).apply {
+                isAccessible =
                     true
-                ).put("source", "unidbg-upstream-mcp").put("nativeTool", toolName)
-            }.getOrElse { error ->
-                JSONObject().put(
-                    "ok",
-                    false
-                ).put(
-                    "error",
-                    JSONObject().put(
-                        "code",
-                        "UNIDBG_NATIVE_TOOL_FAILED"
-                    ).put("message", rootCause(error).toString()).put("tool", toolName)
-                )
             }
+            val result = dispatch.invoke(tools, toolName, fastArgs)
+            JSONObject(
+                result.toString()
+            ).put(
+                "persistent",
+                true
+            ).put("source", "unidbg-upstream-mcp").put("nativeTool", toolName)
+        }.getOrElse { error ->
+            JSONObject().put(
+                "ok",
+                false
+            ).put(
+                "error",
+                JSONObject().put(
+                    "code",
+                    "UNIDBG_NATIVE_TOOL_FAILED"
+                ).put("message", rootCause(error).toString()).put("tool", toolName)
+            )
         }
+    }
 
     private fun nativeMcpTools(live: LiveSession): Any {
         live.objects["nativeMcpTools"]?.let { return it }
@@ -1620,14 +1594,7 @@ class UnidbgEmulator(private val context: Context) {
     }
 
     /** Reflectively drive Unidbg so a missing class never breaks the build. */
-    private fun doEmulate(
-        bytes: ByteArray,
-        arch: String,
-        symbolName: String,
-        argsJson: JSONArray,
-        enableTrace: Boolean,
-        out: JSONObject
-    ) {
+    private fun doEmulate(bytes: ByteArray, arch: String, symbolName: String, argsJson: JSONArray, enableTrace: Boolean, out: JSONObject) {
         val live = createLiveSession(bytes, arch, true, out)
         try {
             doLiveCall(live, symbolName, argsJson, enableTrace, out)
@@ -1636,12 +1603,7 @@ class UnidbgEmulator(private val context: Context) {
         }
     }
 
-    private fun createLiveSession(
-        bytes: ByteArray,
-        arch: String,
-        callJniOnLoad: Boolean,
-        out: JSONObject
-    ): LiveSession {
+    private fun createLiveSession(bytes: ByteArray, arch: String, callJniOnLoad: Boolean, out: JSONObject): LiveSession {
         val emulatorBuilderCls = Class.forName(
             "com.github.unidbg.linux.android.AndroidEmulatorBuilder"
         )
@@ -1685,13 +1647,7 @@ class UnidbgEmulator(private val context: Context) {
         }
     }
 
-    private fun doLiveCall(
-        live: LiveSession,
-        symbolName: String,
-        argsJson: JSONArray,
-        enableTrace: Boolean,
-        out: JSONObject
-    ) {
+    private fun doLiveCall(live: LiveSession, symbolName: String, argsJson: JSONArray, enableTrace: Boolean, out: JSONObject) {
         if (enableTrace &&
             live.vm != null
         ) {
@@ -1761,13 +1717,7 @@ class UnidbgEmulator(private val context: Context) {
         }
     }
 
-    private fun doDumpMemory(
-        bytes: ByteArray,
-        arch: String,
-        addr: Long,
-        size: Int,
-        out: JSONObject
-    ) {
+    private fun doDumpMemory(bytes: ByteArray, arch: String, addr: Long, size: Int, out: JSONObject) {
         val live = createLiveSession(bytes, arch, true, out)
         try {
             readLiveMemory(live, addr, size, out)
@@ -2077,11 +2027,7 @@ class UnidbgEmulator(private val context: Context) {
         return summary
     }
 
-    private fun addSuspiciousReturnWarning(
-        result: JSONObject,
-        symbolName: String,
-        traced: Boolean
-    ) {
+    private fun addSuspiciousReturnWarning(result: JSONObject, symbolName: String, traced: Boolean) {
         if (!result.optBoolean("ok", false)) return
         if (result.optString("returnValue") != "-1") return
         result.put("resultConfidence", "suspicious")

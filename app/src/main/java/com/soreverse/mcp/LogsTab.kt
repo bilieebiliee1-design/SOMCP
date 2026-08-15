@@ -88,7 +88,12 @@ internal fun LogsTab(t: UiText, settings: SettingsStore) {
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
             title = t.logs,
-            subtitle = if (logPaused) (if (t.zh) "已暂停自动跟随 · 日志仍在缓存" else "Auto-follow paused · still buffering") else (if (t.zh) "实时跟随 · ${visibleLogs.size} 行" else "Live follow · ${visibleLogs.size} lines")
+            subtitle =
+            if (logPaused) {
+                if (t.zh) "已暂停自动跟随 · 日志仍在缓存" else "Auto-follow paused · still buffering"
+            } else {
+                if (t.zh) "实时跟随 · ${visibleLogs.size} 行" else "Live follow · ${visibleLogs.size} lines"
+            }
         )
         Column(
             Modifier
@@ -158,12 +163,7 @@ internal fun LogsTab(t: UiText, settings: SettingsStore) {
 }
 
 @Composable
-private fun LogActionButton(
-    label: String,
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
+private fun LogActionButton(label: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val shape = RoundedCornerShape(14.dp)
     Row(
         modifier
@@ -203,13 +203,7 @@ private fun parseLogLine(line: String, zh: Boolean): LogLineUi {
 }
 
 @Composable
-private fun ModernLogPanel(
-    lines: List<String>,
-    zh: Boolean,
-    autoFollow: Boolean,
-    contentVersion: Long,
-    modifier: Modifier = Modifier
-) {
+private fun ModernLogPanel(lines: List<String>, zh: Boolean, autoFollow: Boolean, contentVersion: Long, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
     LaunchedEffect(lines.size, autoFollow, contentVersion) {
         if (autoFollow && lines.isNotEmpty()) listState.scrollToItem(lines.lastIndex)
