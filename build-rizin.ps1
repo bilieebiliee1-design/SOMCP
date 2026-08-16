@@ -54,8 +54,8 @@ function Get-HostTools {
 if (-not $RizinSrc) { $RizinSrc = Join-Path $ProjectDir "third_party\rizin-src" }
 if (-not (Test-Path (Join-Path $RizinSrc "librz\include"))) {
     Write-Host "[build-rizin] ERROR: Rizin source not found at '$RizinSrc' (missing librz/include)." -ForegroundColor Red
-    Write-Host "[build-rizin] Clone it first (this project expects Rizin v0.10.0):"
-    Write-Host "    git clone --depth 1 --branch v0.10.0 https://github.com/rizinorg/rizin.git third_party/rizin-src"
+    Write-Host "[build-rizin] Clone it first:"
+    Write-Host "    git clone https://github.com/rizinorg/rizin.git third_party/rizin-src"
     Write-Host "[build-rizin] or pass -RizinSrc <path> to point at an existing checkout."
     exit 1
 }

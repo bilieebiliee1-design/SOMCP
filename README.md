@@ -181,7 +181,7 @@ system_control(action=status)
 获取 Rizin 源码（Rizin 反汇编/分析后端，非 git 子模块，需手动 clone 一次）：
 
 ```powershell
-git clone --depth 1 --branch v0.10.0 https://github.com/rizinorg/rizin.git third_party/rizin-src
+git clone https://github.com/rizinorg/rizin.git third_party/rizin-src
 ```
 
 构建 Rizin / LIEF 原生依赖：

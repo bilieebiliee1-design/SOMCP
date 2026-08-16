@@ -36,7 +36,7 @@ APIS=(arm64-v8a armeabi-v7a x86 x86_64)
 CROSS_TEMPLATES=(rizin-cross-aarch64.ini rizin-cross-armv7a.ini rizin-cross-i686.ini rizin-cross-x86_64.ini)
 
 if [ ! -d "$RIZIN_SRC/librz/include" ]; then
-    echo "[build-native] ERROR: Rizin source not found at '$RIZIN_SRC' (missing librz/include). Clone it first: git clone --depth 1 --branch v0.10.0 https://github.com/rizinorg/rizin.git $RIZIN_SRC" >&2
+    echo "[build-native] ERROR: Rizin source not found at '$RIZIN_SRC' (missing librz/include). Clone it first: git clone https://github.com/rizinorg/rizin.git $RIZIN_SRC" >&2
     exit 1
 fi
 if [ ! -d "$LIEF_SRC" ]; then
