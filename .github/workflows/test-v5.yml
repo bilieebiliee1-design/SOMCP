@@ -100,31 +100,44 @@ jobs:
         run: gradle :app:lintDebug --stacktrace
       - name: Debug build
         run: gradle :app:assembleDebug --stacktrace
-      - name: Generate release keystore (CI-only, non-distribution)
+      - name: Restore release signing keystore (or CI fallback)
         run: |
           set -euo pipefail
-          # CI-only throwaway keystore: fresh key each run, NOT for distribution.
-          # CI APKs are signed with this throwaway key and cannot be installed
-          # over the real release (docs/forum-post.md); build verification only.
-          STORE_PASS="ci-$(openssl rand -hex 16)"
           mkdir -p release
-          keytool -genkeypair -v \
-            -storetype JKS \
-            -keystore release/so-reverse-mcp-release.jks \
-            -alias so-reverse-mcp \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 36500 \
-            -storepass "$STORE_PASS" \
-            -keypass "$STORE_PASS" \
-            -dname "CN=SOMCP CI, O=SoReverse MCP, C=CN"
-          {
-            echo "storeFile=release/so-reverse-mcp-release.jks"
-            echo "storePassword=$STORE_PASS"
-            echo "keyAlias=so-reverse-mcp"
-            echo "keyPassword=$STORE_PASS"
-          } > release/keystore.properties
-          echo "Generated CI-only signing keystore (not for distribution)."
+          if [ -n "${{ secrets.KEYSTORE }}" ]; then
+            # Real release keystore from repository secrets (BASE64-encoded).
+            echo "${{ secrets.KEYSTORE }}" | base64 -d > release/so-reverse-mcp-release.jks
+            {
+              echo "storeFile=release/so-reverse-mcp-release.jks"
+              echo "storePassword=${{ secrets.PASSWORD }}"
+              echo "keyAlias=${{ secrets.ALIAS }}"
+              echo "keyPassword=${{ secrets.ALIAS_PASSWORD }}"
+            } > release/keystore.properties
+            echo "Restored release signing keystore from secrets."
+          else
+            # Fallback (e.g. fork PRs cannot access repository secrets):
+            # CI-only throwaway keystore, fresh key each run, NOT for
+            # distribution. APKs signed with it cannot be installed over the
+            # real release (docs/forum-post.md); build verification only.
+            STORE_PASS="ci-$(openssl rand -hex 16)"
+            keytool -genkeypair -v \
+              -storetype JKS \
+              -keystore release/so-reverse-mcp-release.jks \
+              -alias so-reverse-mcp \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 36500 \
+              -storepass "$STORE_PASS" \
+              -keypass "$STORE_PASS" \
+              -dname "CN=SOMCP CI, O=SoReverse MCP, C=CN"
+            {
+              echo "storeFile=release/so-reverse-mcp-release.jks"
+              echo "storePassword=$STORE_PASS"
+              echo "keyAlias=so-reverse-mcp"
+              echo "keyPassword=$STORE_PASS"
+            } > release/keystore.properties
+            echo "Secrets unavailable; generated CI-only signing keystore (not for distribution)."
+          fi
       - name: Release build
         run: gradle :app:assembleRelease --stacktrace
       - name: Unit tests (strict)
