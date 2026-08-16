@@ -1,0 +1,28 @@
+diff --git a/src/OAT/utils.cpp b/src/OAT/utils.cpp
+index 6bf833c..0914e4d 100644
+--- a/src/OAT/utils.cpp
++++ b/src/OAT/utils.cpp
+@@ -103,9 +103,20 @@ Android::ANDROID_VERSIONS android_version(oat_version_t version) {
+     { 138, Android::ANDROID_VERSIONS::VERSION_900 },
+ 
+   };
+-  auto   it  = oat2android.lower_bound(version);
+-  return it == oat2android.end() ?
+-               Android::ANDROID_VERSIONS::VERSION_UNKNOWN : it->second;
++  // std::unordered_map (used when LIEF_DISABLE_FROZEN=ON) has no lower_bound().
++  // Scan for the smallest key >= version, preserving the ordered lower_bound()
++  // semantics of frozen::map without requiring an ordered container.
++  Android::ANDROID_VERSIONS result = Android::ANDROID_VERSIONS::VERSION_UNKNOWN;
++  bool found = false;
++  oat_version_t best = 0;
++  for (const auto& entry : oat2android) {
++    if (entry.first >= version && (!found || entry.first < best)) {
++      found = true;
++      best = entry.first;
++      result = entry.second;
++    }
++  }
++  return result;
+ }
+ 
+ 

@@ -81,6 +81,19 @@ if (-not (Test-Path $Ninja)) { Write-Host "[build-lief] Ninja not found at $Ninj
 if (-not (Test-Path $Toolchain)) { Write-Host "[build-lief] NDK toolchain not found at $Toolchain" -ForegroundColor Red; exit 1 }
 if (-not (Test-Path $SrcDir)) { Write-Host "[build-lief] LIEF source not found at $SrcDir — run 'git submodule update --init third_party/lief-src'" -ForegroundColor Red; exit 1 }
 
+# LIEF 0.16.1 upstream compile bug: with LIEF_DISABLE_FROZEN=ON, CONST_MAP
+# expands to std::unordered_map, but src/OAT/utils.cpp calls lower_bound(),
+# which std::unordered_map does not provide. Apply our patch before building.
+# Idempotent: skipped once the offending call is gone.
+$PatchFile = "$ProjectDir\third_party\patches\lief-0.16.1-oat-lower_bound.patch"
+if ((Test-Path $PatchFile) -and (Select-String -Path "$SrcDir\src\OAT\utils.cpp" -Pattern "oat2android\.lower_bound" -Quiet)) {
+    Write-Host "[build-lief] Applying LIEF patch: $PatchFile"
+    Push-Location $SrcDir
+    & git apply $PatchFile 2>&1
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Host "[build-lief] LIEF patch FAILED" -ForegroundColor Red; exit 1 }
+    Pop-Location
+}
+
 if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
