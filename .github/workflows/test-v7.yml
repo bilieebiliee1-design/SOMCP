@@ -1,7 +1,7 @@
 name: Test v7
 
 on:
-  pull_request:
+  push:
     branches:
       - main
 permissions:
