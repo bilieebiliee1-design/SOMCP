@@ -10,3 +10,4 @@ index abcdef1..0000000 100644
  
    using enum32_ptr = std::reference_wrapper<uint32_t>;
    using enum64_ptr = std::reference_wrapper<uint64_t>;
+
