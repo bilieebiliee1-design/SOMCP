@@ -1,0 +1,123 @@
+name: Release APK
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
+
+      - name: Restore release signing keystore
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.KEYSTORE }}" ] \
+             || [ -z "${{ secrets.ALIAS }}" ] \
+             || [ -z "${{ secrets.ALIAS_PASSWORD }}" ] \
+             || [ -z "${{ secrets.PASSWORD }}" ]; then
+            echo "::error::Release signing secrets (KEYSTORE/ALIAS/ALIAS_PASSWORD/PASSWORD) must all be configured."
+            exit 1
+          fi
+          # Real release keystore from repository secrets (BASE64-encoded).
+          mkdir -p release
+          echo "${{ secrets.KEYSTORE }}" | base64 -d > release/so-reverse-mcp-release.jks
+          {
+            echo "storeFile=release/so-reverse-mcp-release.jks"
+            echo "storePassword=${{ secrets.PASSWORD }}"
+            echo "keyAlias=${{ secrets.ALIAS }}"
+            echo "keyPassword=${{ secrets.ALIAS_PASSWORD }}"
+          } > release/keystore.properties
+          echo "Restored release signing keystore from secrets."
+
+      - name: Build release APKs
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Generate release notes with LLM
+        env:
+          LLM_MODEL: ${{ secrets.LLM }}
+          LLM_KEY: ${{ secrets.KEY }}
+          LLM_API: ${{ secrets.API }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Collect commits between the previous tag and the current release tag.
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --oneline --no-decorate "$PREV_TAG"..HEAD)
+          else
+            COMMITS=$(git log --oneline --no-decorate -50 HEAD)
+          fi
+          # Build the OpenAI-compatible chat payload with jq so commit messages
+          # are passed as data, never evaluated by the shell. Tag name and
+          # secrets arrive via env vars, never interpolated into the script.
+          payload=$(jq -n \
+            --arg model "$LLM_MODEL" \
+            --arg commits "$COMMITS" \
+            --arg tag "$RELEASE_TAG" \
+            '{model: $model, messages: [
+               {role: "system", content: "你是一个专业的开源项目发布助手。根据提供的 commit 列表，为 Android 应用生成简洁规范的 Release Notes（简体中文，Markdown 格式）。按 新功能 / 修复 / 改进 / 其他 分类组织，不要编造不存在的变更，不要包含任何 GitHub Actions 表达式。"},
+               {role: "user", content: ("版本：" + $tag + "\n\nCommit 列表：\n" + $commits)}
+             ], temperature: 0.7}')
+          # Determine the chat completions endpoint. DeepSeek's base URL
+          # (https://api.deepseek.com) serves /chat/completions directly;
+          # other OpenAI-compatible platforms use <base>/v1/chat/completions,
+          # e.g. https://token.sensenova.cn/v1/chat/completions.
+          if [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
+            ENDPOINT="$LLM_API/chat/completions"
+          else
+            ENDPOINT="$LLM_API/v1/chat/completions"
+          fi
+          if response=$(curl -sS -f -m 120 -X POST \
+              -H "Authorization: Bearer $LLM_KEY" \
+              -H "Content-Type: application/json" \
+              -d "$payload" \
+              "$ENDPOINT"); then
+            content=$(printf '%s' "$response" | jq -r '.choices[0].message.content // empty')
+            if [ -n "$content" ]; then
+              printf '%s\n' "$content" > release_notes.md
+              echo "Generated release notes with model $LLM_MODEL."
+            else
+              echo "::warning::LLM returned empty content; falling back to a plain commit list."
+            fi
+          else
+            echo "::warning::LLM API request failed; falling back to a plain commit list."
+          fi
+          # Fallback: a plain commit-list notes file, so the release always
+          # has content and the upload step's body_path never points at a
+          # missing or empty file.
+          if [ ! -s release_notes.md ]; then
+            {
+              echo "## What's Changed"
+              echo ""
+              if [ -n "$PREV_TAG" ]; then
+                git log --oneline --no-decorate "$PREV_TAG"..HEAD | sed 's/^/- /'
+              else
+                git log --oneline --no-decorate -50 HEAD | sed 's/^/- /'
+              fi
+            } > release_notes.md
+          fi
+          echo "Release notes written to release_notes.md"
+
+      - name: Upload APKs and release notes to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/*.apk
+          body_path: release_notes.md
