@@ -112,6 +112,31 @@ jobs:
         run: gradle :app:lintDebug --stacktrace
       - name: Debug build
         run: gradle :app:assembleDebug --stacktrace
+      - name: Generate release keystore (CI-only, non-distribution)
+        run: |
+          set -euo pipefail
+          # CI-only throwaway keystore: fresh key each run, NOT for distribution.
+          # CI APKs are signed with this throwaway key and cannot be installed
+          # over the real release (docs/forum-post.md); build verification only.
+          STORE_PASS="ci-$(openssl rand -hex 16)"
+          mkdir -p release
+          keytool -genkeypair -v \
+            -storetype JKS \
+            -keystore release/so-reverse-mcp-release.jks \
+            -alias so-reverse-mcp \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 36500 \
+            -storepass "$STORE_PASS" \
+            -keypass "$STORE_PASS" \
+            -dname "CN=SOMCP CI, O=SoReverse MCP, C=CN"
+          {
+            echo "storeFile=release/so-reverse-mcp-release.jks"
+            echo "storePassword=$STORE_PASS"
+            echo "keyAlias=so-reverse-mcp"
+            echo "keyPassword=$STORE_PASS"
+          } > release/keystore.properties
+          echo "Generated CI-only signing keystore (not for distribution)."
       - name: Release build
         run: gradle :app:assembleRelease --stacktrace
       - name: Unit tests
