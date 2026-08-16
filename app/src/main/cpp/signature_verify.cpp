@@ -91,18 +91,31 @@ struct ZipLocalFileHeader {
 // Minimal DER/PKCS7 parser
 // ---------------------------------------------------------------------------
 struct DerNode {
-    uint8_t tag;
-    bool constructed;
+    // Default-initialized: parse_der has several early-return paths (truncated
+    // header, bad length form, depth limit) that return a node without ever
+    // assigning these. Callers compare `tag` to decide whether a child parsed,
+    // so leaving them indeterminate would make that check read uninitialized
+    // memory and the sibling loop terminate unpredictably.
+    uint8_t tag = 0;
+    bool constructed = false;
+    bool parsed = false;          // true once a header was successfully decoded
     std::vector<uint8_t> value;   // raw value bytes (tag+length stripped)
     std::vector<DerNode> children;
 };
 
-static DerNode parse_der(const uint8_t* data, size_t offset, size_t end) {
+// Maximum DER nesting depth. A PKCS7 SignedData certificate chain nests ~8
+// levels; 16 is generous while bounding recursion so a hostile/corrupt
+// signature block cannot drive parse_der into a stack overflow.
+static const int kMaxDerDepth = 16;
+
+static DerNode parse_der(const uint8_t* data, size_t offset, size_t end, int depth = 0) {
     DerNode node;
     if (offset + 2 > end) return node;
+    if (depth > kMaxDerDepth) return node;
 
     node.tag = data[offset];
     node.constructed = (node.tag & 0x20) != 0;
+    node.parsed = true;
     size_t pos = offset + 1;
 
     // Length
@@ -125,80 +138,39 @@ static DerNode parse_der(const uint8_t* data, size_t offset, size_t end) {
 
     node.value.assign(data + pos, data + pos + length);
 
-    // Parse children for constructed tags
-    if (node.constructed) {
+    // Parse children for constructed tags. Decode each child's header locally so
+    // progress is measured against node.value rather than against a separately
+    // allocated child.value vector (subtracting those unrelated pointers was UB).
+    if (node.constructed && depth < kMaxDerDepth) {
         size_t child_pos = 0;
         while (child_pos < node.value.size()) {
-            auto child = parse_der(node.value.data(), child_pos, node.value.size());
-            if (child.value.empty() && child.children.empty()) break;
-            node.children.push_back(child);
-            child_pos += (child.tag == 0) ? 0 : (child.value.data() - node.value.data() + child.value.size() - child_pos);
-            // Better: advance by the full encoded length
-            // Recalculate:
-            size_t consumed = 0;
-            for (const auto& c : node.children) {
-                consumed += 2; // tag + length (at minimum)
-                if (c.value.size() > 127) consumed += (c.value.size() > 255) ? 3 : 2; // long-form length
-                consumed += c.value.size();
-            }
-            child_pos = consumed;
-        }
-        // Re-parse more accurately
-        node.children.clear();
-        child_pos = 0;
-        while (child_pos < node.value.size()) {
-            // Skip tag byte
-            if (child_pos >= node.value.size()) break;
+            if (node.value.size() - child_pos < 2) break;
             uint8_t child_tag = node.value[child_pos];
-            size_t child_len_pos = child_pos + 1;
-            if (child_len_pos >= node.value.size()) break;
-
+            size_t len_pos = child_pos + 1;
             size_t child_length = 0;
-            size_t child_len_bytes = 1;
-            if (node.value[child_len_pos] & 0x80) {
-                child_len_bytes = (node.value[child_len_pos] & 0x7f) + 1;
-                if (child_len_bytes > 5) break;
-                for (size_t i = 1; i < child_len_bytes; i++) {
-                    if (child_len_pos + i >= node.value.size()) { child_len_bytes = 0; break; }
-                    child_length = (child_length << 8) | node.value[child_len_pos + i];
+            size_t length_field_size = 1;
+            if (node.value[len_pos] & 0x80) {
+                const size_t length_octets = node.value[len_pos] & 0x7f;
+                if (length_octets == 0 || length_octets > 4 ||
+                    length_octets > node.value.size() - len_pos - 1) break;
+                length_field_size += length_octets;
+                for (size_t i = 0; i < length_octets; ++i) {
+                    child_length = (child_length << 8) | node.value[len_pos + 1 + i];
                 }
-                if (child_len_bytes == 0) break;
             } else {
-                child_length = node.value[child_len_pos];
+                child_length = node.value[len_pos];
             }
-
-            size_t header_size = 1 + child_len_bytes;
-            size_t child_end = child_pos + header_size + child_length;
-            if (child_end > node.value.size()) break;
-
-            DerNode child;
-            child.tag = child_tag;
-            child.constructed = (child_tag & 0x20) != 0;
-            child.value.assign(node.value.data() + child_pos + header_size,
-                               node.value.data() + child_end);
-            if (child.constructed) {
-                // Recursively parse children
-                // (skip for now, we only need the leaf certificate)
-            }
-            node.children.push_back(child);
+            const size_t header_size = 1 + length_field_size;
+            if (child_length > node.value.size() - child_pos - header_size) break;
+            const size_t child_end = child_pos + header_size + child_length;
+            auto child = parse_der(node.value.data(), child_pos, child_end, depth + 1);
+            if (child.tag != child_tag) break;
+            node.children.push_back(std::move(child));
             child_pos = child_end;
         }
     }
 
     return node;
-}
-
-// Find a child node by tag (recursive, first match)
-static const DerNode* find_der_child(const DerNode* node, uint8_t tag) {
-    if (!node) return nullptr;
-    for (const auto& child : node->children) {
-        if (child.tag == tag) return &child;
-    }
-    for (const auto& child : node->children) {
-        auto* found = find_der_child(&child, tag);
-        if (found) return found;
-    }
-    return nullptr;
 }
 
 // Find a child node by tag at direct children only
@@ -208,24 +180,6 @@ static const DerNode* find_direct_child(const DerNode* node, uint8_t tag) {
         if (child.tag == tag) return &child;
     }
     return nullptr;
-}
-
-// Find a child node by walking a tag path
-static const DerNode* find_der_path(const DerNode* node, std::initializer_list<uint8_t> tags) {
-    const DerNode* current = node;
-    for (uint8_t tag : tags) {
-        if (!current) return nullptr;
-        bool found = false;
-        for (const auto& child : current->children) {
-            if (child.tag == tag) {
-                current = &child;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return nullptr;
-    }
-    return current;
 }
 
 // Extract X.509 certificate from a PKCS7 SignedData (.RSA/.DSA/.EC file)
@@ -246,18 +200,11 @@ static std::vector<uint8_t> extract_certificate_from_pkcs7(const std::vector<uin
     }
     if (content_info->tag != 0x30) return {};
 
-    // Find SignedData content [0] (context-specific, constructed, tag 0xa0)
-    auto* signed_data_wrapper = find_der_path(content_info, {0x30, 0xa0});
-    // Actually, let's just find it more directly
-    // ContentInfo.SEQUENCE -> first child is OID (0x06), second is [0] (0xa0)
+    // ContentInfo.SEQUENCE -> first child is the OID (0x06), second is the
+    // [0] EXPLICIT wrapper (0xa0) whose single child is the SignedData SEQUENCE.
     const DerNode* signed_data = nullptr;
-    for (const auto& child : content_info->children) {
-        if (child.tag == 0xa0) {
-            // [0] EXPLICIT -> SignedData SEQUENCE inside
-            if (!child.children.empty() && child.children[0].tag == 0x30) {
-                signed_data = &child.children[0];
-            }
-        }
+    if (const DerNode* wrapper = find_direct_child(content_info, 0xa0)) {
+        signed_data = find_direct_child(wrapper, 0x30);
     }
     if (!signed_data) return {};
 
@@ -275,11 +222,18 @@ static std::vector<uint8_t> extract_certificate_from_pkcs7(const std::vector<uin
             // Each child is a SEQUENCE (Certificate)
             for (const auto& cert : child.children) {
                 if (cert.tag == 0x30) { // SEQUENCE = Certificate
-                    // Reconstruct the full DER-encoded certificate
-                    // Tag + length + value
+                    // Re-emit tag + definite length + value so the caller receives
+                    // a self-contained DER certificate.
+                    const size_t total_len = cert.value.size();
+                    // 0x82 is the widest length form emitted below; anything larger
+                    // would need 0x83/0x84 and silently truncating the length would
+                    // hand Java a corrupt certificate.
+                    if (total_len > 0xffff) {
+                        LOGE("Certificate too large to re-encode: %zu bytes", total_len);
+                        return {};
+                    }
                     std::vector<uint8_t> result;
-                    // Construct the full DER encoding
-                    size_t total_len = cert.value.size();
+                    result.reserve(total_len + 4);
                     result.push_back(0x30); // SEQUENCE tag
                     if (total_len < 128) {
                         result.push_back(static_cast<uint8_t>(total_len));
@@ -424,57 +378,40 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDiges
 }
 
 /**
- * Reads the APK file directly from the filesystem and extracts the first
- * X.509 signing certificate from the META-INF/*.RSA/.DSA/.EC signature file.
+ * Reads the APK at [path] and returns the first X.509 signing certificate found
+ * in its META-INF v1 signature block, or an empty vector on any failure.
  *
- * This bypasses the Java PackageManager API, which is what kstools and
- * ApkSignatureKiller hook to replace signatures.
- *
- * @param env       JNI environment
- * @param thiz      JNI object
- * @param apkPath   Absolute path to the APK file (e.g., context.packageCodePath)
- * @return          DER-encoded X.509 certificate bytes, or null on failure
+ * Split out of the JNI entry point so the ZIP/PKCS7 parsing can be exercised
+ * directly by a host-side test harness with no JVM present.
  */
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
-    JNIEnv* env, jobject thiz, jstring apkPath) {
-
-    if (!apkPath) {
-        LOGE("apkPath is null");
-        return nullptr;
-    }
-
-    const char* path_cstr = env->GetStringUTFChars(apkPath, nullptr);
-    std::string path(path_cstr);
-    env->ReleaseStringUTFChars(apkPath, path_cstr);
-
+static std::vector<uint8_t> read_apk_certificate(const std::string& path) {
     LOGI("Reading APK: %s", path.c_str());
 
     // Read the entire APK file
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         LOGE("Failed to open APK: %s", path.c_str());
-        return nullptr;
+        return {};
     }
 
     std::streamsize size = file.tellg();
     if (size <= 0) {
         LOGE("APK file is empty");
-        return nullptr;
+        return {};
     }
 
     std::vector<uint8_t> apk_data(static_cast<size_t>(size));
     file.seekg(0, std::ios::beg);
     if (!file.read(reinterpret_cast<char*>(apk_data.data()), size)) {
         LOGE("Failed to read APK file");
-        return nullptr;
+        return {};
     }
     file.close();
 
     // Find End of Central Directory
     if (apk_data.size() < sizeof(ZipEocd)) {
         LOGE("APK too small");
-        return nullptr;
+        return {};
     }
 
     // Search for EOCD signature from the end (with max comment length)
@@ -496,7 +433,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     if (!found_eocd) {
         LOGE("EOCD not found");
-        return nullptr;
+        return {};
     }
 
     ZipEocd eocd;
@@ -504,9 +441,11 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
     LOGI("Central dir: offset=%u, size=%u, entries=%u",
          eocd.central_dir_offset, eocd.central_dir_size, eocd.total_entries);
 
-    if (eocd.central_dir_offset + eocd.central_dir_size > apk_data.size()) {
+    const uint64_t central_dir_end = static_cast<uint64_t>(eocd.central_dir_offset) +
+                                     static_cast<uint64_t>(eocd.central_dir_size);
+    if (central_dir_end > apk_data.size()) {
         LOGE("Central directory exceeds file bounds");
-        return nullptr;
+        return {};
     }
 
     // Scan central directory for META-INF signature files
@@ -570,32 +509,31 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
                     continue;
                 }
 
-                size_t data_offset = local_offset + sizeof(ZipLocalFileHeader) +
-                                     local.filename_length + local.extra_length;
-
-                if (data_offset + entry.compressed_size > apk_data.size()) {
+                const uint64_t data_offset = static_cast<uint64_t>(local_offset) +
+                                             sizeof(ZipLocalFileHeader) +
+                                             static_cast<uint64_t>(local.filename_length) +
+                                             static_cast<uint64_t>(local.extra_length);
+                const uint64_t compressed_end = data_offset + static_cast<uint64_t>(entry.compressed_size);
+                if (data_offset > apk_data.size() || compressed_end > apk_data.size()) {
                     LOGE("File data out of bounds for %s", filename.c_str());
                     continue;
                 }
 
-                // For META-INF signature files, compression is typically 0 (stored)
-                if (entry.compression == 0) {
-                    signature_file_data.assign(
-                        apk_data.data() + data_offset,
-                        apk_data.data() + data_offset + entry.uncompressed_size);
-                    signature_filename = filename;
-                    LOGI("Read signature file: %s (%zu bytes)", filename.c_str(), signature_file_data.size());
-                    break;
-                } else {
-                    LOGI("Signature file %s is compressed (type %u), trying to read raw",
-                         filename.c_str(), entry.compression);
-                    // Read compressed data anyway, the PKCS7 parser might still work
-                    signature_file_data.assign(
-                        apk_data.data() + data_offset,
-                        apk_data.data() + data_offset + entry.compressed_size);
-                    signature_filename = filename;
-                    break;
+                // APK v1 signature blocks must be stored: compressed PKCS7 data
+                // is not DER, and accepting it would either parse garbage or read
+                // a misleading certificate candidate. For stored entries both ZIP
+                // sizes must agree before using either one as a range length.
+                if (entry.compression != 0 || entry.compressed_size != entry.uncompressed_size) {
+                    LOGE("Unsupported signature entry %s (compression=%u, compressed=%u, uncompressed=%u)",
+                         filename.c_str(), entry.compression, entry.compressed_size, entry.uncompressed_size);
+                    continue;
                 }
+                signature_file_data.assign(
+                    apk_data.data() + static_cast<size_t>(data_offset),
+                    apk_data.data() + static_cast<size_t>(compressed_end));
+                signature_filename = filename;
+                LOGI("Read signature file: %s (%zu bytes)", filename.c_str(), signature_file_data.size());
+                break;
             }
         }
 
@@ -605,7 +543,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     if (signature_file_data.empty()) {
         LOGE("No signature file found in META-INF");
-        return nullptr;
+        return {};
     }
 
     LOGI("Signature file size: %zu bytes", signature_file_data.size());
@@ -619,12 +557,49 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     if (cert.empty()) {
         LOGE("Failed to extract certificate from signature file");
-        return nullptr;
+        return {};
     }
 
     LOGI("Extracted certificate: %zu bytes", cert.size());
+    return cert;
+}
 
-    // Return the certificate bytes to Java
+#ifdef SOMCP_TEST_HARNESS
+// Host-side entry point for the parser tests. Never compiled into the APK.
+std::vector<uint8_t> somcp_test_read_apk_certificate(const std::string& path) {
+    return read_apk_certificate(path);
+}
+#endif
+
+/**
+ * Reads the APK file directly from the filesystem and extracts the first
+ * X.509 signing certificate from the META-INF/ *.RSA/.DSA/.EC signature file.
+ *
+ * This bypasses the Java PackageManager API, which is what kstools and
+ * ApkSignatureKiller hook to replace signatures.
+ *
+ * @param env       JNI environment
+ * @param thiz      JNI object
+ * @param apkPath   Absolute path to the APK file (e.g., context.packageCodePath)
+ * @return          DER-encoded X.509 certificate bytes, or null on failure
+ */
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
+    JNIEnv* env, jobject thiz, jstring apkPath) {
+
+    if (!apkPath) {
+        LOGE("apkPath is null");
+        return nullptr;
+    }
+
+    const char* path_cstr = env->GetStringUTFChars(apkPath, nullptr);
+    if (!path_cstr) return nullptr;
+    std::string path(path_cstr);
+    env->ReleaseStringUTFChars(apkPath, path_cstr);
+
+    const std::vector<uint8_t> cert = read_apk_certificate(path);
+    if (cert.empty()) return nullptr;
+
     jbyteArray result = env->NewByteArray(static_cast<jsize>(cert.size()));
     if (!result) {
         LOGE("Failed to allocate Java byte array");
