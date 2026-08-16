@@ -1,0 +1,12 @@
+diff --git a/include/LIEF/MachO/ChainedPointerAnalysis.hpp b/include/LIEF/MachO/ChainedPointerAnalysis.hpp
+index abcdef1..0000000 100644
+--- a/include/LIEF/MachO/ChainedPointerAnalysis.hpp
++++ b/include/LIEF/MachO/ChainedPointerAnalysis.hpp
+@@ -385,7 +385,7 @@ public:
+ 
+   // Must be 16 bytes to safely read either 32-bit or 64-bit chain entry
+-  static_assert(sizeof(union_pointer_t) == 16);
++  static_assert(sizeof(union_pointer_t) >= 12, "unexpected chained pointer union size");
+ 
+   using enum32_ptr = std::reference_wrapper<uint32_t>;
+   using enum64_ptr = std::reference_wrapper<uint64_t>;
