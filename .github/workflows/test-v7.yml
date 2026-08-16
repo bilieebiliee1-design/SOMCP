@@ -120,7 +120,7 @@ jobs:
       - name: Clone Rizin source (v0.10.0)
         run: |
           if [ ! -d third_party/rizin-src/librz/include ]; then
-            git clone --depth 1 --branch v0.10.0 https://github.com/rizinorg/rizin.git third_party/rizin-src
+            git clone https://github.com/rizinorg/rizin.git third_party/rizin-src
           fi
       - name: Cache native backends (Rizin + LIEF)
         uses: actions/cache@v4
