@@ -100,6 +100,16 @@ if [ -f "$LIEF_PATCH" ] && grep -q "oat2android\.lower_bound" "$LIEF_SRC/src/OAT
     (cd "$LIEF_SRC" && git apply "$(pwd -P)/../patches/lief-0.16.1-oat-lower_bound.patch")
     echo "[build-native] Applied LIEF patch: $LIEF_PATCH"
 fi
+# LIEF 0.16.1 (third_party/lief-src) has an upstream compile bug: on 32-bit
+# Mach-O chain pointer analysis, union_pointer_t can be 12 bytes, but the
+# header hard-asserts sizeof(...) == 16. Relax to >=12 so i686/x86 Android
+# builds succeed. Idempotent: skipped once the assertion is updated.
+CHAIN_PATCH="third_party/patches/lief-0.16.1-chained-union-size.patch"
+CHAIN_HEADER="$LIEF_SRC/include/LIEF/MachO/ChainedPointerAnalysis.hpp"
+if [ -f "$CHAIN_PATCH" ] && grep -q 'union_pointer_t) == 16' "$CHAIN_HEADER"; then
+    (cd "$LIEF_SRC" && git apply "$(pwd -P)/../patches/lief-0.16.1-chained-union-size.patch")
+    echo "[build-native] Applied LIEF patch: $CHAIN_PATCH"
+fi
 for abi in "${APIS[@]}"; do
     build_dir="$LIEF_BUILD_ROOT/$abi"
     if [ -f "$build_dir/lib/libLIEF.a" ]; then
