@@ -13,7 +13,7 @@
  *
  * HOW THIS COUNTERS THAT:
  *   This code reads the APK file directly from the filesystem, parses the ZIP
- *   central directory, extracts the META-INF/*.RSA/.DSA/.EC signature file,
+ *   central directory, extracts the META-INF/ *.RSA/.DSA/.EC signature file,
  *   and returns the embedded X.509 certificate. Because it accesses the APK
  *   file at the filesystem level rather than through the Java PackageManager
  *   API, it cannot be intercepted by the Binder-level hook used by kstools
@@ -425,7 +425,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDiges
 
 /**
  * Reads the APK file directly from the filesystem and extracts the first
- * X.509 signing certificate from the META-INF/*.RSA/.DSA/.EC signature file.
+ * X.509 signing certificate from the META-INF/ *.RSA/.DSA/.EC signature file.
  *
  * This bypasses the Java PackageManager API, which is what kstools and
  * ApkSignatureKiller hook to replace signatures.
