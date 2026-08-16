@@ -90,6 +90,16 @@ EOF
 done
 
 # --- LIEF: CMake cross-compile per ABI ---
+# LIEF 0.16.1 (third_party/lief-src) has an upstream compile bug: with
+# LIEF_DISABLE_FROZEN=ON, CONST_MAP expands to std::unordered_map, but
+# src/OAT/utils.cpp calls lower_bound(), which std::unordered_map does not
+# provide. Apply our patch before building. Idempotent: once applied the
+# offending call is gone, so the guard below skips it.
+LIEF_PATCH="third_party/patches/lief-0.16.1-oat-lower_bound.patch"
+if [ -f "$LIEF_PATCH" ] && grep -q "oat2android\.lower_bound" "$LIEF_SRC/src/OAT/utils.cpp"; then
+    (cd "$LIEF_SRC" && git apply "$(pwd -P)/../patches/lief-0.16.1-oat-lower_bound.patch")
+    echo "[build-native] Applied LIEF patch: $LIEF_PATCH"
+fi
 for abi in "${APIS[@]}"; do
     build_dir="$LIEF_BUILD_ROOT/$abi"
     if [ -f "$build_dir/lib/libLIEF.a" ]; then
