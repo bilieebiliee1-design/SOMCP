@@ -94,6 +94,20 @@ if ((Test-Path $PatchFile) -and (Select-String -Path "$SrcDir\src\OAT\utils.cpp"
     Pop-Location
 }
 
+# LIEF 0.16.1 (third_party/lief-src) has an upstream compile bug: on 32-bit
+# Mach-O chain pointer analysis, union_pointer_t can be 12 bytes, but the
+# header hard-asserts sizeof(...) == 16. Relax to >=12 so i686/x86 Android
+# builds succeed. Idempotent: skipped once the assertion is updated.
+$ChainPatchFile = "$ProjectDir\third_party\patches\lief-0.16.1-chained-union-size.patch"
+$ChainHeader = Join-Path $SrcDir "include/LIEF/MachO/ChainedPointerAnalysis.hpp"
+if ((Test-Path $ChainPatchFile) -and (Test-Path $ChainHeader) -and (Select-String -Path $ChainHeader -Pattern 'union_pointer_t\) == 16' -Quiet)) {
+    Write-Host "[build-lief] Applying LIEF patch: $ChainPatchFile"
+    Push-Location $SrcDir
+    & git apply "$ChainPatchFile" 2>&1
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Host "[build-lief] LIEF chain patch FAILED" -ForegroundColor Red; exit 1 }
+    Pop-Location
+}
+
 if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
