@@ -110,6 +110,26 @@ jobs:
           echo "ktlint check passed."
       - name: Lint check
         run: gradle :app:lintDebug --stacktrace
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build gcc g++ pkg-config
+      - name: Clone Rizin source (v0.10.0)
+        run: |
+          if [ ! -d third_party/rizin-src/librz/include ]; then
+            git clone --depth 1 --branch v0.10.0 https://github.com/rizinorg/rizin.git third_party/rizin-src
+          fi
+      - name: Cache native backends (Rizin + LIEF)
+        uses: actions/cache@v4
+        with:
+          path: |
+            rizin-build
+            third_party/lief-build
+          # Key derived from the build script, cross templates and CMakeLists:
+          # any change to how the archives are produced invalidates the cache.
+          key: native-linux-${{ hashFiles('build-native-android.sh', 'rizin-cross-*.ini', 'rizin-native.ini', 'app/src/main/cpp/CMakeLists.txt') }}-ndk29
+      - name: Build native backends (Rizin + LIEF)
+        run: bash build-native-android.sh
       - name: Debug build
         run: gradle :app:assembleDebug --stacktrace
       - name: Restore release signing keystore (or CI fallback)
