@@ -76,16 +76,33 @@ jobs:
           # Real release keystore from repository secrets (BASE64-encoded).
           mkdir -p release
           echo "${{ secrets.KEYSTORE }}" | base64 -d > release/so-reverse-mcp-release.jks
-          {
-            echo "storeFile=release/so-reverse-mcp-release.jks"
-            echo "storePassword=${{ secrets.PASSWORD }}"
-            echo "keyAlias=${{ secrets.ALIAS }}"
-            echo "keyPassword=${{ secrets.ALIAS_PASSWORD }}"
-          } > release/keystore.properties
           echo "Restored release signing keystore from secrets."
 
       - name: Build release APKs
-        run: gradle :app:assembleRelease --stacktrace
+        env:
+          # Pass signing secrets via env vars (read by app/build.gradle.kts),
+          # so no plaintext keystore.properties is ever written to disk.
+          STORE_FILE: release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
+
+      - name: Wipe signing artifacts
+        run: |
+          set -euo pipefail
+          rm -f release/keystore.properties release/*.jks release/*.jks.asc
+          # Whitelist: only APKs + SHA256SUMS may be uploaded. Anything else
+          # (e.g. a stray keystore/config file) fails the job instead of leaking.
+          if find release -type f ! -name '*.apk' ! -name 'SHA256SUMS' -print -quit | grep -q .; then
+            echo "::error::Unexpected artifact found in release/; aborting upload."
+            find release -type f ! -name '*.apk' ! -name 'SHA256SUMS' -print
+            exit 1
+          fi
+          echo "release/ contents (safe to upload):"
+          ls -la release/
 
       - name: Generate release notes with LLM
         env:

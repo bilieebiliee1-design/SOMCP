@@ -68,16 +68,22 @@ android {
 
     signingConfigs {
         create("release") {
+            // Prefer CI-provided secrets via environment variables; fall back to
+            // a local release/keystore.properties for local development only.
             storeFile =
                 rootProject.file(
-                    releaseKeystoreProperties.getProperty(
-                        "storeFile",
-                        "release/so-reverse-mcp-release.jks"
-                    )
+                    System.getenv("STORE_FILE")
+                        ?: releaseKeystoreProperties.getProperty(
+                            "storeFile",
+                            "release/so-reverse-mcp-release.jks"
+                        )
                 )
-            storePassword = releaseKeystoreProperties.getProperty("storePassword", "")
-            keyAlias = releaseKeystoreProperties.getProperty("keyAlias", "")
-            keyPassword = releaseKeystoreProperties.getProperty("keyPassword", "")
+            storePassword = System.getenv("STORE_PASSWORD")
+                ?: releaseKeystoreProperties.getProperty("storePassword", "")
+            keyAlias = System.getenv("KEY_ALIAS")
+                ?: releaseKeystoreProperties.getProperty("keyAlias", "")
+            keyPassword = System.getenv("KEY_PASSWORD")
+                ?: releaseKeystoreProperties.getProperty("keyPassword", "")
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
