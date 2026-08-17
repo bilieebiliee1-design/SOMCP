@@ -230,7 +230,8 @@ namespace {
         const ut64 maxScan = 4ull * 1024ull * 1024ull;
         if (rangeTo - rangeFrom > maxScan) rangeTo = rangeFrom + maxScan;
         std::vector<uint8_t> buf(static_cast<size_t>(rangeTo - rangeFrom));
-        const int n = rz_io_read_at(core->io, rangeFrom, buf.data(), static_cast<int>(buf.size()));
+        const int n = rz_io_read_at_mapped(core->io, rangeFrom, buf.data(), buf.size())
+            ? static_cast<int>(buf.size()) : 0;
         if (n < 8) return;
         const size_t bytes = static_cast<size_t>(n) & ~size_t(3);
         for (size_t off = 0; off + 4 <= bytes; off += 4) {
@@ -264,7 +265,8 @@ namespace {
         const ut64 maxSpan = 0x10000;
         if (hardEnd - start > maxSpan) hardEnd = start + maxSpan;
         std::vector<uint8_t> buf(static_cast<size_t>(hardEnd - start));
-        const int n = rz_io_read_at(core->io, start, buf.data(), static_cast<int>(buf.size()));
+        const int n = rz_io_read_at_mapped(core->io, start, buf.data(), buf.size())
+            ? static_cast<int>(buf.size()) : 0;
         if (n < 8) return 0;
         const size_t bytes = static_cast<size_t>(n) & ~size_t(3);
         bool sawBody = false;
@@ -444,7 +446,7 @@ namespace {
         if (end > addr + 0x80) end = addr + 0x80;
         if (end <= addr || end - addr < 8) return false;
         std::vector<uint8_t> code(static_cast<size_t>(end - addr));
-        if (!rz_io_read_at(core->io, addr, code.data(), code.size())) return false;
+        if (!rz_io_read_at_mapped(core->io, addr, code.data(), code.size())) return false;
         const int read = static_cast<int>(code.size());
         int syscallNumber = -1;
         bool hasSvc = false;
@@ -721,7 +723,8 @@ static void seedAarch64BranchXrefs(RzCore* core, ut64 targetVa) {
                 ut64 scanSize = sec->vsize;
                 if (scanSize > maxScan) scanSize = maxScan;
                 std::vector<uint8_t> buf(static_cast<size_t>(scanSize));
-                const int n = rz_io_read_at(core->io, sec->vaddr, buf.data(), static_cast<int>(buf.size()));
+                const int n = rz_io_read_at_mapped(core->io, sec->vaddr, buf.data(), buf.size())
+                    ? static_cast<int>(buf.size()) : 0;
                 if (n < 4) continue;
                 const size_t bytes = static_cast<size_t>(n) & ~size_t(3);
                 for (size_t off = 0; off + 4 <= bytes; off += 4) {
@@ -1168,7 +1171,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDiff(
     env->GetByteArrayRegion(jbytesB, 0, lenB, reinterpret_cast<jbyte*>(bufB.data()));
 
     RzDiff* diff = rz_diff_bytes_new(bufA.data(), (ut32)bufA.size(),
-                                      bufB.data(), (ut32)bufB.size(), nullptr);
+                                      bufB.data(), (ut32)bufB.size());
     if (!diff) return env->NewStringUTF("{\"error\":\"diff\"}");
 
     double ratio = 0.0;
@@ -1357,7 +1360,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDecompile(
 
     if (nextBoundary > va && nextBoundary - va <= 0x20000) {
         std::vector<uint8_t> targetCode(static_cast<size_t>(nextBoundary - va));
-        const int targetRead = rz_io_read_at(core->io, va, targetCode.data(), targetCode.size())
+        const int targetRead = rz_io_read_at_mapped(core->io, va, targetCode.data(), targetCode.size())
             ? static_cast<int>(targetCode.size()) : 0;
         for (int off = 0; off + 4 <= targetRead; off += 4) {
             const uint8_t* p = targetCode.data() + off;
@@ -1382,7 +1385,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDecompile(
 
     if (scanTo > scanFrom && scanTo - scanFrom <= 0x20000) {
         std::vector<uint8_t> scanCode(static_cast<size_t>(scanTo - scanFrom));
-        const int scanRead = rz_io_read_at(core->io, scanFrom, scanCode.data(), scanCode.size())
+        const int scanRead = rz_io_read_at_mapped(core->io, scanFrom, scanCode.data(), scanCode.size())
             ? static_cast<int>(scanCode.size()) : 0;
         for (int off = 0; off + 8 <= scanRead; off += 4) {
             const uint8_t* p = scanCode.data() + off;
