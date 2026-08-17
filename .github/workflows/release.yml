@@ -182,9 +182,41 @@ jobs:
           fi
           echo "Release notes written to release_notes.md"
 
+      - name: Rename APKs and generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          mkdir -p release
+          shopt -s nullglob
+          for f in app/build/outputs/apk/release/*.apk; do
+            b=$(basename "$f")
+            if [[ "$b" == *"-arm64-v8a-release.apk" ]]; then
+              name="arm64-v8a"
+            elif [[ "$b" == *"-armeabi-v7a-release.apk" ]]; then
+              name="armeabi-v7a"
+            elif [[ "$b" == *"-x86_64-release.apk" ]]; then
+              name="x86_64"
+            elif [[ "$b" == *"-x86-release.apk" ]]; then
+              name="x86"
+            elif [[ "$b" == *"-universal-release.apk" ]]; then
+              name="universal"
+            else
+              echo "::error::Unknown APK name: $b"
+              exit 1
+            fi
+            cp "$f" "release/SOMCP-${VERSION}-${name}.apk"
+          done
+          (
+            cd release
+            sha256sum SOMCP-*.apk > SHA256SUMS
+          )
+          echo "Prepared release APKs and SHA256SUMS in release/:"
+          ls -la release/
+
       - name: Upload APKs and release notes to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: app/build/outputs/apk/release/*.apk
+          files: release/*
           body_path: release_notes.md
