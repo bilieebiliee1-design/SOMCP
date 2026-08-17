@@ -244,7 +244,7 @@ keytool -genkeypair `
   -validity 36500
 ```
 
-写入 `release/keystore.properties`：
+（可选）本地签名配置写入 `release/keystore.properties`：
 
 ```properties
 storeFile=release/so-reverse-mcp-release.jks
@@ -252,6 +252,8 @@ storePassword=你的密码
 keyAlias=so-reverse-mcp
 keyPassword=你的密码
 ```
+
+> 注意：上面的 `release/keystore.properties` 只是**本地开发**的回退配置。CI 发布流程（`.github/workflows/release.yml`）不再生成此文件，而是直接通过 `STORE_FILE` / `STORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD` 环境变量把签名密钥传给 Gradle，避免把明文密码写进磁盘或上传到 Release 资产。不要把真实密码提交进仓库。
 
 构建 release：
 
