@@ -1,4 +1,4 @@
-name: Release APK
+name: Release
 
 on:
   release:
@@ -109,7 +109,7 @@ jobs:
             --arg tag "$RELEASE_TAG" \
             --arg prev "$PREV_TAG" \
             '{model: $model, messages: [
-               {role: "system", content: "你是一个专业的开源项目发布助手。根据提供的 commit 列表为 Android 应用生成 Release Notes，必须严格遵循仓库现有发布说明的模板格式（简体中文 Markdown），模板示例如下：\n\n# SOMCP 1.0.17\n\n本发布说明仅包含 `v1.0.16..v1.0.17` 的增量变化。\n\n## 更新内容\n\n- 条目1\n- 条目2\n\n## 验证\n\n- JVM 单元测试。\n- Debug Kotlin、Java 与四 ABI 原生编译。\n- Release 原生与 Android 构建。\n- Release APK 签名与 SHA-256 校验。\n\n## 发布资产\n\n- `SOMCP-1.0.17-arm64-v8a.apk`\n- `SOMCP-1.0.17-armeabi-v7a.apk`\n- `SOMCP-1.0.17-x86.apk`\n- `SOMCP-1.0.17-x86_64.apk`\n- `SOMCP-1.0.17-universal.apk`\n- `SHA256SUMS`\n\n硬性要求（务必遵守）：\n1. 全文必须且只使用简体中文（标题、章节名、每条内容均为中文），禁止出现任何英文正文（专有名词如 APK、JSON、Argon2 等可保留英文）。\n2. 一级标题为 `# SOMCP <版本号>`，版本号取自本次 tag；`本发布说明仅包含` 那行填 `上一版本..当前版本`（无上一版本时写 `初始发布`）。\n3. 「更新内容」每条使用短横线 `-` 列表（不要用星号），基于 commit 归纳、简洁准确、不编造。\n4. 「验证」「发布资产」按模板原样输出，发布资产文件名中的版本号替换为本次版本号。\n5. 不要包含任何 GitHub Actions 表达式（如 ${{ }}）。"},
+               {role: "system", content: "你是一个专业的开源项目发布助手。根据提供的 commit 列表为 Android 应用生成 Release Notes，必须严格遵循仓库现有发布说明的模板格式（简体中文 Markdown），模板示例如下：\n\n# SOMCP 1.0.17\n\n本发布说明仅包含 `v1.0.16..v1.0.17` 的增量变化。\n\n## 更新内容\n\n- 条目1\n- 条目2\n\n## 验证\n\n- JVM 单元测试。\n- Debug Kotlin、Java 与四 ABI 原生编译。\n- Release 原生与 Android 构建。\n- Release APK 签名与 SHA-256 校验。\n\n## 发布资产\n\n- `SOMCP-1.0.17-arm64-v8a.apk`\n- `SOMCP-1.0.17-armeabi-v7a.apk`\n- `SOMCP-1.0.17-x86.apk`\n- `SOMCP-1.0.17-x86_64.apk`\n- `SOMCP-1.0.17-universal.apk`\n- `SHA256SUMS`\n\n硬性要求（务必遵守）：\n1. 全文必须且只使用简体中文（标题、章节名、每条内容均为中文），禁止出现任何英文正文（专有名词如 APK、JSON、Argon2 等可保留英文）。\n2. 一级标题为 `# SOMCP <版本号>`，版本号取自本次 tag；`本发布说明仅包含` 那行填 `上一版本..当前版本`（无上一版本时写 `初始发布`）。\n3. 「更新内容」每条使用短横线 `-` 列表（不要用星号），基于 commit 归纳、简洁准确、不编造。\n4. 「验证」「发布资产」按模板原样输出，发布资产文件名中的版本号替换为本次版本号。\n5. 不要包含任何 GitHub Actions 表达式（如双花括号表达式）。"},
                {role: "user", content: ("当前版本：" + $tag + "；上一版本：" + (if $prev == "" then "无" else $prev end) + "\n\nCommit 列表：\n" + $commits)}
              ], temperature: 0.7}')
           # Determine the chat completions endpoint. DeepSeek's base URL
