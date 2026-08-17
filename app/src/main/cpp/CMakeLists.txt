@@ -225,7 +225,10 @@ else()
     message(WARNING "Rizin static libs not found under '${RIZIN_BUILD_DIR}'. "
                     "Rizin backend will be unavailable at runtime. "
                     "Run the meson cross-compile first.")
-    target_link_libraries(rz_native PRIVATE log)
+    # Keep the link set in sync with the Rizin branches (m/dl/c kept for
+    # forward compatibility; signature_verify/rizin_stub currently only use
+    # zlib -> z).
+    target_link_libraries(rz_native PRIVATE log m z dl c)
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR NOT CMAKE_BUILD_TYPE)
