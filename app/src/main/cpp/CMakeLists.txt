@@ -155,7 +155,7 @@ if(RIZIN_AVAILABLE)
             ${RIZIN_SHARED_SDK}/include/librz/sdb
         )
         file(GLOB RZ_SHARED_LIBS "${RIZIN_SHARED_SDK}/lib/librz_*.so")
-        target_link_libraries(rz_native PRIVATE ${RZ_SHARED_LIBS})
+        target_link_libraries(rz_native PRIVATE ${RZ_SHARED_LIBS} log m z dl c)
     else()
         file(GLOB_RECURSE RZ_ALL_ARCHIVES_RAW
             "${RIZIN_BUILD_DIR}/librz/*.a"
