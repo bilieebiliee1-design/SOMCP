@@ -32,6 +32,7 @@
 #include <android/log.h>
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
+#include <zlib.h>
 
 #define LOG_TAG "SignatureVerify"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -341,6 +342,60 @@ static std::vector<uint8_t> extract_certificate_fallback(const std::vector<uint8
 }
 
 // ---------------------------------------------------------------------------
+// Inflate a DEFLATE-compressed ZIP payload (compression method 8 / deflate).
+// ZIP deflate streams have no zlib/gzip wrapper, so we pass -15 as the
+// windowBits to inflateRaw.
+//
+// Returns the decompressed bytes, or empty on failure.
+static std::vector<uint8_t> inflate_deflate(
+    const std::vector<uint8_t>& compressed, size_t expected_uncompressed) {
+    if (compressed.empty()) return {};
+
+    z_stream strm = {};
+    strm.next_in  = const_cast<Bytef*>(compressed.data());
+    strm.avail_in = static_cast<uInt>(compressed.size());
+    strm.zalloc   = Z_NULL;
+    strm.zfree    = Z_NULL;
+    strm.opaque   = Z_NULL;
+
+    if (inflateInit2(&strm, -MAX_WBITS) != Z_OK) return {};
+
+    std::vector<uint8_t> out;
+    if (expected_uncompressed > 0 && expected_uncompressed <= 1u << 20)
+        out.reserve(expected_uncompressed);
+
+    std::vector<uint8_t> buf(16384);
+    int status;
+    do {
+        strm.next_out  = buf.data();
+        strm.avail_out = static_cast<uInt>(buf.size());
+        status = inflate(&strm, Z_SYNC_FLUSH);
+        if (status == Z_STREAM_ERROR || status == Z_NEED_DICT) {
+            inflateEnd(&strm);
+            return {};
+        }
+        size_t produced = buf.size() - strm.avail_out;
+        if (produced > 0) {
+            out.insert(out.end(), buf.data(), buf.data() + produced);
+        }
+        if (out.size() > 4u * 1024 * 1024) {
+            LOGE("Inflated size exceeds 4 MB, aborting");
+            inflateEnd(&strm);
+            return {};
+        }
+    } while (status != Z_STREAM_END);
+
+    inflateEnd(&strm);
+
+    if (expected_uncompressed > 0 && out.size() != expected_uncompressed) {
+        LOGE("Inflate size mismatch: got %zu, expected %zu",
+             out.size(), expected_uncompressed);
+        return {};
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Obfuscated expected signer digest
 //
 // The SHA-256 hex string of the official release signing certificate is
@@ -587,14 +642,28 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
                     LOGI("Read signature file: %s (%zu bytes)", filename.c_str(), signature_file_data.size());
                     break;
                 } else {
-                    LOGI("Signature file %s is compressed (type %u), trying to read raw",
+                    LOGI("Signature file %s is compressed (type %u), decompressing",
                          filename.c_str(), entry.compression);
-                    // Read compressed data anyway, the PKCS7 parser might still work
-                    signature_file_data.assign(
-                        apk_data.data() + data_offset,
-                        apk_data.data() + data_offset + entry.compressed_size);
-                    signature_filename = filename;
-                    break;
+                    if (entry.compression == 8) {
+                        // Raw DEFLATE stream (no zlib/gzip wrapper): feed
+                        // compressed bytes to inflate_deflate and obtain the
+                        // uncompressed PKCS7 bytes.
+                        std::vector<uint8_t> raw(
+                            apk_data.data() + data_offset,
+                            apk_data.data() + data_offset + entry.compressed_size);
+                        signature_file_data =
+                            inflate_deflate(raw, entry.uncompressed_size);
+                        if (signature_file_data.empty()) {
+                            LOGE("Failed to decompress %s", filename.c_str());
+                            continue;
+                        }
+                        signature_filename = filename;
+                        LOGI("Decompressed signature file: %s (%zu -> %zu bytes)",
+                             filename.c_str(), raw.size(), signature_file_data.size());
+                        break;
+                    }
+                    LOGE("Unsupported compression method %u for %s",
+                         entry.compression, filename.c_str());
                 }
             }
         }
