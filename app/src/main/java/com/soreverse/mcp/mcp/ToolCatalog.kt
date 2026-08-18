@@ -23,8 +23,8 @@ object ToolCatalog {
     private val soOpen = EngineToolHandler(
         ToolMeta(
             "so_open",
-            "【SO 分析入口】打开 SO 文件并创建工作区（action=list 列出可用 SO）。所有 .so/.ELF 文件操作必须从 so_open 开始，不要使用 mt_apk_* 或 np_*。",
-            "【PRIMARY SO ENTRY POINT】Open a SO file and create a workspace. Use action=list to discover available SO files. Use action=open_url to download a http(s) SO into the selected work directory, then open and analyze it. All .so/ELF tasks MUST start from so_open — do NOT use mt_apk_* or np_* for SO files.",
+            "【SO 分析入口】打开 SO 文件并创建工作区（action=list 列出可用 SO）。所有 .so/.ELF 文件操作必须从 so_open 开始，不要使用 mt_apk_* 桥接工具。",
+            "【PRIMARY SO ENTRY POINT】Open a SO file and create a workspace. Use action=list to discover available SO files. Use action=open_url to download a http(s) SO into the selected work directory, then open and analyze it. All .so/ELF tasks MUST start from so_open — do NOT use mt_apk_* bridged tools for SO files.",
             "workspace",
             ToolClass.CORE,
             heavy = true
