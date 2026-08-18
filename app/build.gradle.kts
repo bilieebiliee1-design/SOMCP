@@ -132,12 +132,6 @@ android {
     // be cross-compiled from the in-repo submodules and dropped into
     // src/main/jniLibs/<abi>/. Make that the default, "normal" packaging path
     // so the APK always bundles them (build-unidbg-native.ps1 does the work).
-    sourceSets {
-        getByName("main") {
-            jniLibs.srcDirs("src/main/jniLibs")
-        }
-    }
-
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -206,7 +200,7 @@ val buildUnidbgNative = tasks.register("buildUnidbgNative") {
         try {
             unidbgAbis.forEach { abi ->
                 logger.lifecycle("[unidbg-native] building native libs for $abi ...")
-                exec {
+                project.providers.exec {
                     if (isWindowsHost) {
                         commandLine(
                             "powershell", "-ExecutionPolicy", "Bypass",
@@ -215,7 +209,7 @@ val buildUnidbgNative = tasks.register("buildUnidbgNative") {
                     } else {
                         commandLine("bash", unidbgNativeScript.path, "--abi", abi)
                     }
-                }
+                }.result.get()
             }
             logger.lifecycle("[unidbg-native] DONE - capstone/keystone/unicorn copied into jniLibs; they will be packaged into the APK")
         } catch (e: Exception) {
