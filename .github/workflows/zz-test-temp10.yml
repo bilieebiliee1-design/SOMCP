@@ -1,0 +1,13 @@
+name: Test
+on:
+  push:
+    branches:
+      - main
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check
+        run: |
+          BASE="${{ steps.base-rev.outputs.base }}"
+          git diff --name-only "$BASE"...HEAD
