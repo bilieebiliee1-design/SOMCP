@@ -36,7 +36,12 @@ $ErrorActionPreference = "Stop"
 # cmake arguments from untrusted input (path-traversal guard).
 $ValidAbis = @("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 if ($ValidAbis -notcontains $Abi) { throw "Unsupported ABI '$Abi' - must be one of: $($ValidAbis -join ', ')" }
-$Project = (Resolve-Path "$PSScriptRoot/..").Path
+# Script lives at the repo root, so $PSScriptRoot IS the project root.
+# (Sibling scripts build-rizin.ps1 / build-lief.ps1 use the same convention:
+#  project dir = script dir, then Join-Path $ProjectDir "third_party/..." etc.
+#  Using "$PSScriptRoot/.." would resolve to the parent of the repo and make
+#  every third_party/app path wrong, so the build would never populate jniLibs.)
+$Project = (Resolve-Path $PSScriptRoot).Path
 $JniLibs = Join-Path $Project "app/src/main/jniLibs/$Abi"
 New-Item -ItemType Directory -Force -Path $JniLibs | Out-Null
 $Toolchain = Join-Path $Ndk "build/cmake/android.toolchain.cmake"

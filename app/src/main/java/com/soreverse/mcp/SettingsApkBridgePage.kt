@@ -268,7 +268,7 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
                     }
                 }
                 Text(
-                    if (t.zh) "支持同时连接多个 APK MCP 桥接（如 MT 管理器 + NP 管理器）" else "Supports multiple concurrent APK MCP bridges (e.g. MT Manager + NP Manager)",
+                    if (t.zh) "支持同时连接多个 APK MCP 桥接（如 MT 管理器）" else "Supports multiple concurrent APK MCP bridges (e.g. MT Manager)",
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -337,9 +337,9 @@ internal fun SettingsApkBridgePage(t: UiText, settings: SettingsStore) {
             }
             Text(
                 if (t.zh) {
-                    "MT 管理器或 NP 管理器负责 APK 主流程；本应用补充 SO 分析与远程 MCP。离线时桥接工具会自动隐藏。"
+                    "MT 管理器负责 APK 主流程；本应用补充 SO 分析与远程 MCP。离线时桥接工具会自动隐藏。"
                 } else {
-                    "MT Manager or NP Manager owns the APK workflow; this app assists with SO analysis. Bridged tools hide when offline."
+                    "MT Manager owns the APK workflow; this app assists with SO analysis. Bridged tools hide when offline."
                 },
                 modifier = Modifier.padding(14.dp),
                 style = MaterialTheme.typography.bodySmall,

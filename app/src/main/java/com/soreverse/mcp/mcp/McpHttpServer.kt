@@ -379,7 +379,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         )
         .put(
             "apk_tasks",
-            "Bridged APK tools (mt_apk_* or np_*) are only for APK-level operations such as APK opening, signing, smali, and AXML editing."
+            "Bridged APK tools (mt_apk_*) are only for APK-level operations such as APK opening, signing, smali, and AXML editing."
         )
         .put(
             "workflow",
@@ -808,7 +808,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val integrationOnline = onlinePrefixes.isNotEmpty()
         val integrationHint = when {
             onlineBridgeCount == 0 ->
-                "APK MCP is offline. Install MT Manager or NP Manager, enable the APK MCP feature, " +
+                "APK MCP is offline. Install MT Manager, enable the APK MCP feature, " +
                     "keep it running in background, then set its /mcp URL in settings and call system_control (action=apk_probe)."
 
             onlineBridgeCount == 1 -> {
@@ -1440,7 +1440,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     /** Returns a human-readable label for all online APK MCP bridges. */
     private fun bridgeLabel(): String {
         val prefixes = apkBridge.allPrefixes()
-        if (prefixes.isEmpty()) return "MT/NP Manager"
+        if (prefixes.isEmpty()) return "MT Manager"
         return prefixes.joinToString(" + ") {
             ApkMcpBridge.prefixLabel(it)
         }

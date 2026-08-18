@@ -14,9 +14,9 @@ class SettingsStore(context: Context) {
                 .putBoolean("apkAutoProbeDefaultMigrated", true)
                 .apply()
         }
-        // Pre-populate default bridge URLs (MT Manager :8787, NP Manager :8788)
-        // when no bridge configs exist at all. This lets users see the built-in
-        // bridges immediately without having to manually add common URLs.
+        // Pre-populate the default MT Manager bridge URL (:8787) when no bridge
+        // configs exist at all. This lets users see the built-in bridge
+        // immediately without having to manually add the common URL.
         if (!prefs.getBoolean("apkDefaultBridgesAdded", false)) {
             val raw = prefs.getString("apkMcpConfigs", "") ?: ""
             val legacyUrl = prefs.getString("apkMcpUrl", "") ?: ""
@@ -25,12 +25,30 @@ class SettingsStore(context: Context) {
                 arr.put(
                     org.json.JSONObject().put("url", "http://127.0.0.1:8787/mcp").put("token", "")
                 )
-                arr.put(
-                    org.json.JSONObject().put("url", "http://127.0.0.1:8788/mcp").put("token", "")
-                )
                 prefs.edit().putString("apkMcpConfigs", arr.toString()).apply()
             }
             prefs.edit().putBoolean("apkDefaultBridgesAdded", true).apply()
+        }
+        // One-time removal of the legacy built-in NP Manager default bridge
+        // (http://127.0.0.1:8788/mcp) for installs that already had it auto-added.
+        if (!prefs.getBoolean("apkNpBridgeRemoved", false)) {
+            try {
+                val raw = prefs.getString("apkMcpConfigs", "") ?: ""
+                if (raw.isNotBlank()) {
+                    val arr = org.json.JSONArray(raw)
+                    val npDefault = "http://127.0.0.1:8788/mcp"
+                    val kept = org.json.JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        if (obj.optString("url", "").equals(npDefault, ignoreCase = true)) continue
+                        kept.put(obj)
+                    }
+                    prefs.edit().putString("apkMcpConfigs", kept.toString()).apply()
+                }
+            } catch (_: Exception) {
+                // keep existing config untouched if it cannot be parsed
+            }
+            prefs.edit().putBoolean("apkNpBridgeRemoved", true).apply()
         }
         // One-time correction of misconfiguration introduced by the 1.0.10/1.0.11
         // updates, which silently forced bindHost=127.0.0.1 and authEnabled=true
