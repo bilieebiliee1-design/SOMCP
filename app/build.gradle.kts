@@ -173,43 +173,57 @@ android {
 // provisioned build machine the libs are produced automatically for every ABI
 // split, on Windows via the .ps1 and on Linux/macOS via the .sh.
 // ---------------------------------------------------------------------------
-val unidbgAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-val unidbgNativeLibs = listOf("capstone", "keystone", "unicorn")
-val isWindowsHost = System.getProperty("os.name").lowercase().contains("windows")
-val unidbgNativeScript = rootProject.file(
-    if (isWindowsHost) "build-unidbg-native.ps1" else "build-unidbg-native.sh"
-)
+// Configuration-cache compatible task: injects ExecOperations instead of
+// touching `project` at execution time, and declares every input as a
+// serializable Property so the CC can store the task graph.
+abstract class UnidbgNativeBuildTask : DefaultTask() {
+    @get:Inject
+    abstract val execOperations: ExecOperations
 
-val buildUnidbgNative = tasks.register("buildUnidbgNative") {
-    group = "native"
-    description = "Cross-compile capstone/keystone/unicorn into app/src/main/jniLibs (Unidbg backend)."
-    doLast {
-        if (!unidbgNativeScript.exists()) {
-            logger.warn("${unidbgNativeScript.name} not found at ${unidbgNativeScript.path}; skipping Unidbg native build")
-            return@doLast
+    @get:InputFiles
+    abstract val nativeScript: Property<File>
+
+    @get:Input
+    abstract val abis: ListProperty<String>
+
+    @get:Input
+    abstract val nativeLibs: ListProperty<String>
+
+    @get:Input
+    abstract val hostIsWindows: Property<Boolean>
+
+    @get:Internal
+    abstract val jniLibsRoot: Property<File>
+
+    @TaskAction
+    fun build() {
+        val script = nativeScript.get()
+        if (!script.exists()) {
+            logger.warn("${script.name} not found at ${script.path}; skipping Unidbg native build")
+            return
         }
-        val jniLibsRoot = file("src/main/jniLibs")
-        val haveAll = unidbgAbis.all { abi ->
-            file("$jniLibsRoot/$abi").isDirectory &&
-                unidbgNativeLibs.all { lib -> file("$jniLibsRoot/$abi/lib$lib.so").exists() }
+        val libs = nativeLibs.get()
+        val haveAll = abis.get().all { abi ->
+            val dir = jniLibsRoot.get().resolve(abi)
+            dir.isDirectory && libs.all { lib -> dir.resolve("lib$lib.so").exists() }
         }
         if (haveAll) {
             logger.lifecycle("[unidbg-native] libs already present in jniLibs; skipping build")
-            return@doLast
+            return
         }
         try {
-            unidbgAbis.forEach { abi ->
+            abis.get().forEach { abi ->
                 logger.lifecycle("[unidbg-native] building native libs for $abi ...")
-                project.providers.exec {
-                    if (isWindowsHost) {
+                execOperations.exec {
+                    if (hostIsWindows.get()) {
                         commandLine(
                             "powershell", "-ExecutionPolicy", "Bypass",
-                            "-File", unidbgNativeScript.path, "-Abi", abi
+                            "-File", script.path, "-Abi", abi
                         )
                     } else {
-                        commandLine("bash", unidbgNativeScript.path, "--abi", abi)
+                        commandLine("bash", script.path, "--abi", abi)
                     }
-                }.result.get()
+                }
             }
             logger.lifecycle("[unidbg-native] DONE - capstone/keystone/unicorn copied into jniLibs; they will be packaged into the APK")
         } catch (e: Exception) {
@@ -222,6 +236,23 @@ val buildUnidbgNative = tasks.register("buildUnidbgNative") {
             )
         }
     }
+}
+
+val unidbgAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+val unidbgNativeLibs = listOf("capstone", "keystone", "unicorn")
+val hostIsWindows = System.getProperty("os.name").lowercase().contains("windows")
+val unidbgNativeScript = rootProject.file(
+    if (hostIsWindows) "build-unidbg-native.ps1" else "build-unidbg-native.sh"
+)
+
+val buildUnidbgNative = tasks.register<UnidbgNativeBuildTask>("buildUnidbgNative") {
+    group = "native"
+    description = "Cross-compile capstone/keystone/unicorn into app/src/main/jniLibs (Unidbg backend)."
+    nativeScript.set(unidbgNativeScript)
+    abis.set(unidbgAbis)
+    nativeLibs.set(unidbgNativeLibs)
+    hostIsWindows.set(hostIsWindows)
+    jniLibsRoot.set(file("src/main/jniLibs"))
 }
 
 // Populate jniLibs before compiling/packaging so the libs land in every APK.
