@@ -30,6 +30,24 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             "https://mirror.ghproxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
         const val CLOUDFLARED_DIR = "cloudflared"
         const val CLOUDFLARED_FILE = "cloudflared"
+
+        /**
+         * Probe the on-disk state of the cloudflared binary without needing a
+         * live [CloudflareTunnelManager] instance. The tunnel settings page
+         * uses this when the MCP server (and thus the manager) is not running,
+         * so the binary status no longer shows "unknown" just because the MCP
+         * master switch is off.
+         */
+        fun probeBinaryState(context: Context): BinaryState {
+            val dataFile = File(File(context.filesDir, CLOUDFLARED_DIR), CLOUDFLARED_FILE)
+            if (dataFile.exists() && dataFile.canExecute()) return BinaryState.READY
+            val ndkDir = context.applicationInfo?.nativeLibraryDir
+            if (ndkDir != null) {
+                val ndkFile = File(ndkDir, "lib${CLOUDFLARED_FILE}.so")
+                if (ndkFile.exists()) return BinaryState.READY
+            }
+            return BinaryState.NOT_FOUND
+        }
     }
 
     data class TunnelStatus(
@@ -132,24 +150,15 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     }
 
     fun binary(): File? {
-        // 1. Check app-private data directory (downloaded binary)
-        val dataDir = File(context.filesDir, CLOUDFLARED_DIR)
-        val dataFile = File(dataDir, CLOUDFLARED_FILE)
-        if (dataFile.exists() && dataFile.canExecute()) {
-            _binaryState.set(BinaryState.READY)
-            return dataFile
+        if (probeBinaryState(context) != BinaryState.READY) {
+            _binaryState.set(BinaryState.NOT_FOUND)
+            return null
         }
-        // 2. Fall back to nativeLibraryDir (legacy / bundled path)
-        val ndkDir = context.applicationInfo?.nativeLibraryDir
-        if (ndkDir != null) {
-            val ndkFile = File(ndkDir, "lib${CLOUDFLARED_FILE}.so")
-            if (ndkFile.exists()) {
-                _binaryState.set(BinaryState.READY)
-                return ndkFile
-            }
-        }
-        _binaryState.set(BinaryState.NOT_FOUND)
-        return null
+        _binaryState.set(BinaryState.READY)
+        // Re-locate the file (same two locations as probeBinaryState) to return it.
+        val dataFile = File(File(context.filesDir, CLOUDFLARED_DIR), CLOUDFLARED_FILE)
+        if (dataFile.exists() && dataFile.canExecute()) return dataFile
+        return File(context.applicationInfo?.nativeLibraryDir ?: "", "lib${CLOUDFLARED_FILE}.so")
     }
 
     /**
