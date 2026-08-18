@@ -1,0 +1,14 @@
+name: Test
+on:
+  push:
+    branches:
+      - main
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check
+        run: |
+          while IFS= read -r file; do
+            echo "$file"
+          done <<< "$NEW_SOURCE_FILES"
