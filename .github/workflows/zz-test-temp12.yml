@@ -1,0 +1,12 @@
+name: Test
+on:
+  push:
+    branches:
+      - main
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check
+        run: |
+          changed_files=$(git diff --name-only "$BASE"...HEAD 2>/dev/null)
