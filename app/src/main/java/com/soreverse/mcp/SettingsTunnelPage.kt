@@ -80,15 +80,17 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
     LaunchedEffect(Unit) {
         val tunnel = activeTunnel(context)
         if (tunnel != null) {
-            binaryState = tunnel.binaryState
-            // Trigger a re-check so binary() updates the state
+            // Refresh the manager's cached state; the page itself always reads
+            // the on-disk truth via probeBinaryState so the UI stays correct
+            // even when the MCP server (and thus the manager) is not running.
             tunnel.binary()
-            binaryState = tunnel.binaryState
         }
+        binaryState = CloudflareTunnelManager.probeBinaryState(context)
         tunnelStatus = tunnelStatusOf(context)
         while (true) {
             delay(3_000)
             tunnelStatus = tunnelStatusOf(context)
+            binaryState = CloudflareTunnelManager.probeBinaryState(context)
         }
     }
     val stateColor = when (tunnelStatus?.state) {
@@ -129,19 +131,27 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             if (binaryState == CloudflareTunnelManager.BinaryState.NOT_FOUND && !isDownloading) {
                 Button(
                     onClick = {
-                        val tunnel = activeTunnel(context) ?: return@Button
                         isDownloading = true
                         downloadError = null
                         scope.launch {
                             runCatching {
                                 withContext(Dispatchers.IO) {
-                                    tunnel.downloadBinary(settings.tunnelUseMirror)
+                                    val tunnel = activeTunnel(context)
+                                    if (tunnel != null) {
+                                        tunnel.downloadBinary(settings.tunnelUseMirror)
+                                    } else {
+                                        // MCP server not running: use a throw-away
+                                        // manager so the binary can still be
+                                        // downloaded from this page.
+                                        CloudflareTunnelManager(context, settings)
+                                            .downloadBinary(settings.tunnelUseMirror)
+                                    }
                                 }
                             }.onSuccess {
-                                binaryState = tunnel.binaryState
+                                binaryState = CloudflareTunnelManager.probeBinaryState(context)
                             }.onFailure { e ->
                                 downloadError = e.message ?: "download failed"
-                                binaryState = tunnel.binaryState
+                                binaryState = CloudflareTunnelManager.probeBinaryState(context)
                             }
                             isDownloading = false
                         }
