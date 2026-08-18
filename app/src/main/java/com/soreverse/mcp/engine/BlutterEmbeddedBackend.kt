@@ -214,7 +214,7 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
                         "native-1"
                     ).put("cacheHit", false).put("durationMillis", 0)
                 )
-            val key = digest(libapp, libflutter, descriptor.sha256, options.toString())
+            val key = cacheKey(libraries.libapp, libraries.libflutter, descriptor.sha256, options.toString())
             store.update(jobId, "running", "committing")
             store.commit(jobId, result, key)
             finish()
@@ -244,18 +244,10 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
         )
     }
 
-    private fun digest(libapp: File, libflutter: File, runnerSha256: String, options: String): String {
+    fun cacheKey(libapp: ByteArray, libflutter: ByteArray, runnerSha256: String, options: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        listOf(libapp, libflutter).forEach { file ->
-            file.inputStream().use { input ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    digest.update(buffer, 0, count)
-                }
-            }
-        }
+        digest.update(libapp)
+        digest.update(libflutter)
         digest.update(runnerSha256.toByteArray())
         digest.update(options.toByteArray())
         return digest.digest().joinToString("") { "%02x".format(it) }

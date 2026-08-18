@@ -12,10 +12,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Bridge to multiple external "APK MCP" servers (MT Manager, NP Manager, etc.).
+ * Bridge to external "APK MCP" servers (MT Manager).
  *
  * Acts as an MCP gateway: discovers each remote server's tools via tools/list,
- * merges them under their native prefix (mt_apk_* or np_*) into our own
+ * merges them under their native prefix (mt_apk_*) into our own
  * tools/list responses, and transparently forwards tools/call invocations
  * back to the correct remote server based on the tool name prefix.
  *
@@ -308,13 +308,11 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
         private fun detectPrefix(tools: List<ToolDef>): String? {
             tools.firstOrNull { it.name.startsWith(MT_PREFIX) }?.let { return MT_PREFIX }
-            tools.firstOrNull { it.name.startsWith(NP_PREFIX) }?.let { return NP_PREFIX }
             return null
         }
 
         private fun prefixLabel(prefix: String?): String = when (prefix) {
             MT_PREFIX -> "MT Manager"
-            NP_PREFIX -> "NP Manager"
             else -> "Unknown"
         }
     }
@@ -374,7 +372,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
     @Synchronized
     fun autoDiscover(port: Int = DEFAULT_PORT): State {
         syncConnectionsFromSettings()
-        val allPorts = listOf(port, NP_PORT).distinct()
+        val allPorts = listOf(port).distinct()
         var firstState: State? = null
         for (p in allPorts) {
             if (connections.any { it.url.contains(":$p/") }) continue
@@ -625,15 +623,12 @@ class ApkMcpBridge(private val settings: SettingsStore) {
 
     companion object {
         const val DEFAULT_PORT = 8787
-        const val NP_PORT = 8788
         const val MT_PREFIX = "mt_apk_"
-        const val NP_PREFIX = "np_"
-        val KNOWN_PREFIXES = listOf(MT_PREFIX, NP_PREFIX)
+        val KNOWN_PREFIXES = listOf(MT_PREFIX)
         private val connIdCounter = AtomicInteger(1000)
 
         fun prefixLabel(prefix: String?): String = when (prefix) {
             MT_PREFIX -> "MT Manager"
-            NP_PREFIX -> "NP Manager"
             else -> "Unknown"
         }
     }
