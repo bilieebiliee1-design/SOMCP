@@ -66,6 +66,14 @@ internal class BlutterResultStore(context: Context) {
     }
 
     @Synchronized
+    fun lookup(key: String): JSONObject? {
+        require(key.matches(Regex("^[a-f0-9]{32,128}$"))) { "Invalid result key" }
+        val file = File(File(results, key), "result.json")
+        if (!file.isFile) return null
+        return runCatching { JSONObject(file.readText()) }.getOrNull()
+    }
+
+    @Synchronized
     fun result(jobId: String, kind: String?, cursor: String?, limit: Int): JSONObject? {
         requireValidJobId(jobId)
         require(limit in 1..1000) { "limit must be between 1 and 1000" }
