@@ -139,10 +139,20 @@ internal class BlutterCoordinator(
     }
 
     private fun analyze(args: JSONObject, workDirectory: WorkDirectory?): JSONObject {
-        val inspection = inspect(args, workDirectory)
-        if (!inspection.optBoolean("ok", false)) return inspection
         val jobId = store.create(args)
-        val analysis = inspection.optJSONObject("selectedAnalysis") ?: inspection
+        val resolved = runCatching {
+            val libs = resolveLibraries(args, workDirectory)
+            libs to FlutterArtifactInspector.inspectLibraries(libs)
+        }
+        if (resolved.isFailure) {
+            val problem = JSONObject().put("code", "INPUT_RESOLUTION_FAILED").put(
+                "message",
+                resolved.exceptionOrNull()?.message ?: "Cannot resolve Flutter libraries"
+            ).put("recoverable", false).put("stage", "resolving_input")
+            store.update(jobId, "failed", "resolving_input", problem)
+            return ok(JSONObject().put("jobId", jobId).put("status", "failed").put("error", problem))
+        }
+        val (libraries, analysis) = resolved.getOrThrow()
         val flutter = analysis.optJSONObject("flutter") ?: JSONObject()
         val requirement = BlutterRunnerRequirement(
             engineRevision = flutter.optJSONArray("engineIds")?.optString(0)?.takeIf {
@@ -154,77 +164,85 @@ internal class BlutterCoordinator(
             analysis = !args.optBoolean("noAnalysis", false)
         )
         val runner = registry.select(requirement)
-        if (runner != null) {
-            return runCatching {
-                val libraries = resolveLibraries(args, workDirectory)
-                embedded.start(jobId, runner, libraries, args)
-                ok(
-                    JSONObject().put(
-                        "jobId",
-                        jobId
-                    ).put(
-                        "status",
-                        "running"
-                    ).put("backend", "embedded").put("runner", runner.toJson())
+        if (runner == null) {
+            val required = JSONObject().put(
+                "engineRevision",
+                requirement.engineRevision ?: JSONObject.NULL
+            ).put(
+                "dartVersion",
+                requirement.dartVersion ?: JSONObject.NULL
+            ).put(
+                "abi",
+                requirement.abi
+            ).put(
+                "compressedPointers",
+                requirement.compressedPointers
+            ).put("analysis", requirement.analysis)
+            val error = JSONObject().put(
+                "code",
+                "FLUTTER_VERSION_NOT_SUPPORTED"
+            ).put(
+                "message",
+                "This release embeds only the Flutter 3.44.x / Dart 3.12.2 arm64-v8a Blutter runner. The target APK does not match that exact snapshot compatibility key."
+            ).put(
+                "recoverable",
+                false
+            ).put(
+                "stage",
+                "runner_selection"
+            ).put("supportedFlutter", "3.44.x").put("supportedDart", "3.12.2").put("required", required)
+            store.update(jobId, "failed", "runner_selection", error)
+            return ok(
+                JSONObject().put(
+                    "jobId",
+                    jobId
+                ).put(
+                    "status",
+                    "failed"
+                ).put(
+                    "inspection",
+                    analysis
+                ).put(
+                    "requiredRunner",
+                    required
+                ).put(
+                    "error",
+                    error
+                ).put(
+                    "nextActions",
+                    JSONArray().put(
+                        "use a Flutter 3.44.x APK built with Dart 3.12.2"
+                    ).put("inspect the APK fingerprint without running analysis")
                 )
-            }.getOrElse { error ->
-                val problem = JSONObject().put("code", "INPUT_RESOLUTION_FAILED").put(
-                    "message",
-                    error.message ?: "Cannot resolve Flutter libraries"
-                ).put("recoverable", false).put("stage", "resolving_input")
-                store.update(jobId, "failed", "resolving_input", problem)
-                ok(JSONObject().put("jobId", jobId).put("status", "failed").put("error", problem))
-            }
+            )
         }
-        val required = JSONObject().put(
-            "engineRevision",
-            requirement.engineRevision ?: JSONObject.NULL
-        ).put(
-            "dartVersion",
-            requirement.dartVersion ?: JSONObject.NULL
-        ).put(
-            "abi",
-            requirement.abi
-        ).put(
-            "compressedPointers",
-            requirement.compressedPointers
-        ).put("analysis", requirement.analysis)
-        val error = JSONObject().put(
-            "code",
-            "FLUTTER_VERSION_NOT_SUPPORTED"
-        ).put(
-            "message",
-            "This release embeds only the Flutter 3.44.x / Dart 3.12.2 arm64-v8a Blutter runner. The target APK does not match that exact snapshot compatibility key."
-        ).put(
-            "recoverable",
-            false
-        ).put(
-            "stage",
-            "runner_selection"
-        ).put("supportedFlutter", "3.44.x").put("supportedDart", "3.12.2").put("required", required)
-        store.update(jobId, "failed", "runner_selection", error)
+        val key = embedded.cacheKey(libraries.libapp, libraries.libflutter, runner.sha256, args.toString())
+        store.lookup(key)?.let { cached ->
+            store.update(jobId, "running", "cache_lookup")
+            store.commit(jobId, cached, key)
+            return ok(
+                JSONObject().put("jobId", jobId).put("status", "succeeded").put("backend", "cache")
+                    .put("cacheHit", true).put("runner", runner.toJson())
+                    .put("message", "Reused identical previous analysis result (cache hit)")
+            )
+        }
+        val startResult = runCatching { embedded.start(jobId, runner, libraries, args) }
+        if (startResult.isFailure) {
+            val problem = JSONObject().put("code", "RUNNER_START_FAILED").put(
+                "message",
+                startResult.exceptionOrNull()?.message ?: "Cannot start Blutter runner"
+            ).put("recoverable", false).put("stage", "runner_execution")
+            store.update(jobId, "failed", "runner_execution", problem)
+            return ok(JSONObject().put("jobId", jobId).put("status", "failed").put("error", problem))
+        }
         return ok(
             JSONObject().put(
                 "jobId",
                 jobId
             ).put(
                 "status",
-                "failed"
-            ).put(
-                "inspection",
-                inspection
-            ).put(
-                "requiredRunner",
-                required
-            ).put(
-                "error",
-                error
-            ).put(
-                "nextActions",
-                JSONArray().put(
-                    "use a Flutter 3.44.x APK built with Dart 3.12.2"
-                ).put("inspect the APK fingerprint without running analysis")
-            )
+                "running"
+            ).put("backend", "embedded").put("runner", runner.toJson())
         )
     }
 

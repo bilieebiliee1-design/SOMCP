@@ -126,6 +126,18 @@ android {
         }
     }
 
+    // Unidbg's Android backend depends on three native libs that are NOT
+    // shipped by the unidbg Maven artifacts for Android (capstone/keystone/
+    // unicorn inside the jars are linux_64 / linux_aarch64 only). They must
+    // be cross-compiled from the in-repo submodules and dropped into
+    // src/main/jniLibs/<abi>/. Make that the default, "normal" packaging path
+    // so the APK always bundles them (build-unidbg-native.ps1 does the work).
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -148,6 +160,78 @@ android {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Unidbg native libraries: capstone / keystone / unicorn
+// ---------------------------------------------------------------------------
+// Unidbg's Android backend (com.github.zhkl0228:unidbg-android) loads
+// System.loadLibrary("capstone"|"keystone"|"unicorn"|"jnidispatch"). The first
+// three are NOT present in the unidbg Maven artifacts for Android and must be
+// cross-compiled from third_party/* submodules into src/main/jniLibs/<abi>/.
+// libjnidispatch.so is supplied automatically by the JNA AAR
+// (net.java.dev.jna:jna) and needs no action.
+//
+// Wire the cross-compile into the build so the libs are bundled "normally"
+// instead of relying on a manual, easily-forgotten build-unidbg-native.ps1 /
+// build-unidbg-native.sh invocation. The task is non-fatal: if NDK / submodules
+// / ninja are missing it logs a warning and the APK still builds (Unidbg then
+// falls back to EMULATOR_UNAVAILABLE, i.e. today's behaviour). On a properly
+// provisioned build machine the libs are produced automatically for every ABI
+// split, on Windows via the .ps1 and on Linux/macOS via the .sh.
+// ---------------------------------------------------------------------------
+val unidbgAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+val unidbgNativeLibs = listOf("capstone", "keystone", "unicorn")
+val isWindowsHost = System.getProperty("os.name").lowercase().contains("windows")
+val unidbgNativeScript = rootProject.file(
+    if (isWindowsHost) "build-unidbg-native.ps1" else "build-unidbg-native.sh"
+)
+
+val buildUnidbgNative = tasks.register("buildUnidbgNative") {
+    group = "native"
+    description = "Cross-compile capstone/keystone/unicorn into app/src/main/jniLibs (Unidbg backend)."
+    doLast {
+        if (!unidbgNativeScript.exists()) {
+            logger.warn("${unidbgNativeScript.name} not found at ${unidbgNativeScript.path}; skipping Unidbg native build")
+            return@doLast
+        }
+        val jniLibsRoot = file("src/main/jniLibs")
+        val haveAll = unidbgAbis.all { abi ->
+            file("$jniLibsRoot/$abi").isDirectory &&
+                unidbgNativeLibs.all { lib -> file("$jniLibsRoot/$abi/lib$lib.so").exists() }
+        }
+        if (haveAll) {
+            logger.lifecycle("[unidbg-native] libs already present in jniLibs; skipping build")
+            return@doLast
+        }
+        try {
+            unidbgAbis.forEach { abi ->
+                logger.lifecycle("[unidbg-native] building native libs for $abi ...")
+                exec {
+                    if (isWindowsHost) {
+                        commandLine(
+                            "powershell", "-ExecutionPolicy", "Bypass",
+                            "-File", unidbgNativeScript.path, "-Abi", abi
+                        )
+                    } else {
+                        commandLine("bash", unidbgNativeScript.path, "--abi", abi)
+                    }
+                }
+            }
+            logger.lifecycle("[unidbg-native] DONE - capstone/keystone/unicorn copied into jniLibs; they will be packaged into the APK")
+        } catch (e: Exception) {
+            logger.warn(
+                "Unidbg native build failed (${e.message}); this usually means the Android NDK, " +
+                    "ninja, or the third_party/* submodules are missing. The APK will be built " +
+                    "WITHOUT these libs and Unidbg will report EMULATOR_UNAVAILABLE. " +
+                    "Run 'git submodule update --init --recursive', install NDK 29 + ninja " +
+                        "(and chmod +x build-unidbg-native.sh on Linux/macOS), then rebuild."
+            )
+        }
+    }
+}
+
+// Populate jniLibs before compiling/packaging so the libs land in every APK.
+tasks.named("preBuild") { dependsOn(buildUnidbgNative) }
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.06.01"))
