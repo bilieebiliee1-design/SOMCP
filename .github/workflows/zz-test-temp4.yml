@@ -1,0 +1,10 @@
+name: T
+on:
+  push:
+    branches:
+      - main
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event_name }}"
