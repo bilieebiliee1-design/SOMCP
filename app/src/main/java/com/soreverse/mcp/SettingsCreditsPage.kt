@@ -234,6 +234,36 @@ internal fun SettingsCreditsPage(t: UiText) {
                     "demumble",
                     if (t.zh) "依赖链中的符号反混淆" else "Demangling used by dependencies",
                     "https://github.com/zhkl0228/demumble"
+                ),
+                CreditProject(
+                    "ApkSignatureKillerEx",
+                    if (t.zh) "APK 签名校验绕过与重打包参考工具" else "APK signature-bypass and repack reference tool",
+                    "https://github.com/L-JINBIN/ApkSignatureKillerEx"
+                ),
+                CreditProject(
+                    "ApkSignatureKiller",
+                    if (t.zh) "APK 签名校验绕过参考工具" else "APK signature-bypass reference tool",
+                    "https://github.com/L-JINBIN/ApkSignatureKiller"
+                ),
+                CreditProject(
+                    "kstools",
+                    if (t.zh) "工程与逆向参考工具集" else "Reverse-engineering reference toolkit",
+                    "https://github.com/fourbrother/kstools"
+                ),
+                CreditProject(
+                    "TweakMe",
+                    if (t.zh) "APK 修改与返调试参考工具" else "APK patching reference tool",
+                    "https://github.com/liaoguobao/TweakMe"
+                ),
+                CreditProject(
+                    "SignatureKiller",
+                    if (t.zh) "APK 签名校验绕过参考工具" else "APK signature-bypass reference tool",
+                    "https://github.com/Familyye/SignatureKiller"
+                ),
+                CreditProject(
+                    "SigKill",
+                    if (t.zh) "APK 签名校验绕过相关参考工具" else "APK signature-bypass related reference tool",
+                    "https://github.com/xxxyanchenxxx/SigKill"
                 )
             )
         )
