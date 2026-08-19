@@ -240,9 +240,9 @@ abstract class UnidbgNativeBuildTask : DefaultTask() {
 
 val unidbgAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 val unidbgNativeLibs = listOf("capstone", "keystone", "unicorn")
-val hostIsWindows = System.getProperty("os.name").lowercase().contains("windows")
+val nativeBuildOnWindows = System.getProperty("os.name").lowercase().contains("windows")
 val unidbgNativeScript = rootProject.file(
-    if (hostIsWindows) "build-unidbg-native.ps1" else "build-unidbg-native.sh"
+    if (nativeBuildOnWindows) "build-unidbg-native.ps1" else "build-unidbg-native.sh"
 )
 
 val buildUnidbgNative = tasks.register<UnidbgNativeBuildTask>("buildUnidbgNative") {
@@ -251,7 +251,7 @@ val buildUnidbgNative = tasks.register<UnidbgNativeBuildTask>("buildUnidbgNative
     nativeScript.set(unidbgNativeScript)
     abis.set(unidbgAbis)
     nativeLibs.set(unidbgNativeLibs)
-    hostIsWindows.set(hostIsWindows)
+    hostIsWindows.set(nativeBuildOnWindows)
     jniLibsRoot.set(file("src/main/jniLibs"))
 }
 
