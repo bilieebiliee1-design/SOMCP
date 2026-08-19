@@ -21,6 +21,7 @@ object IntegrityGuard {
     @Volatile private var cached: Pair<Long, Result>? = null
 
     private val scheduleLock = Any()
+
     @Volatile private var recheckStarted = false
 
     /**
@@ -258,7 +259,7 @@ object IntegrityGuard {
                 "signaturekill",
                 "sigkill",
                 "yc/pm",
-                "signaturefaker",
+                "signaturefaker"
             )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
