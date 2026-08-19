@@ -318,13 +318,14 @@ internal fun EngineRuntime.openUrl(url: String, outputName: String = "", tempora
             url
         )
     }
-    val maxBytes = 256L * 1024L * 1024L
+    val maxBytes = soDownloadMaxBytes()
+    val maxMiB = maxBytes / (1024L * 1024L)
     if (conn.contentLengthLong >
         maxBytes
     ) {
         return@guarded err(
             "DOWNLOAD_TOO_LARGE",
-            "SO download exceeds 256 MiB limit",
+            "SO download exceeds $maxMiB MiB limit",
             "contentLength",
             conn.contentLengthLong
         )
@@ -346,7 +347,7 @@ internal fun EngineRuntime.openUrl(url: String, outputName: String = "", tempora
                 ) {
                     return@guarded err(
                         "DOWNLOAD_TOO_LARGE",
-                        "SO download exceeds 256 MiB limit",
+                        "SO download exceeds $maxMiB MiB limit",
                         "url",
                         url
                     )
@@ -386,6 +387,29 @@ internal fun EngineRuntime.openUrl(url: String, outputName: String = "", tempora
             source.path
         ).put("size", bytes.size).put("sha256_16", sha256(bytes).take(16))
     )
+}
+
+/**
+ * Dynamic limit for a single SO download, derived from the process max heap and
+ * the work-directory free space. A downloaded ELF is later read fully into
+ * memory (plus LIEF/xanso parsing copies), so on capable devices the cap scales
+ * up with available heap, while low-memory devices degrade gracefully with a
+ * smaller cap instead of crashing with an OutOfMemoryError.
+ */
+internal fun EngineRuntime.soDownloadMaxBytes(): Long {
+    val heapMaxMiB = Runtime.getRuntime().maxMemory() / (1024L * 1024L)
+    // Parsing roughly halves the free heap headroom; use ~50% of max heap as a
+    // safety ceiling so a big library won't blow the process heap out.
+    val heapCapMiB = (heapMaxMiB * 5) / 10
+    val storageFreeMiB = workDir?.let { wd ->
+        runCatching {
+            val free = android.os.StatFs(wd.rootAbsolutePath()).availableBytes /
+                (1024L * 1024L)
+            (free - 16L).coerceAtLeast(0L) // keep headroom on disk for the file
+        }.getOrDefault(heapCapMiB)
+    } ?: heapCapMiB
+    val capMiB = minOf(heapCapMiB, storageFreeMiB).coerceIn(64L, 2048L)
+    return capMiB * 1024L * 1024L
 }
 
 internal fun EngineRuntime.listWorkspaces(): JSONObject = guarded {
