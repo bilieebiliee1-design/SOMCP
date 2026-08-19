@@ -12,12 +12,16 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
+import kotlin.random.Random
 import kotlin.system.exitProcess
 
 object IntegrityGuard {
     data class Result(val trusted: Boolean, val reason: String, val expected: String, val actual: List<String>, val threats: List<String> = emptyList())
 
     @Volatile private var cached: Pair<Long, Result>? = null
+
+    private val scheduleLock = Any()
+    @Volatile private var recheckStarted = false
 
     /**
      * Runs all integrity checks (Java PackageManager + native APK file
@@ -36,6 +40,17 @@ object IntegrityGuard {
      * - Together, they provide defense in depth: a cracker would need to
      *   hook BOTH the Java PackageManager AND the native JNI bridge,
      *   significantly raising the effort required.
+     *
+     * Signature-bypass frameworks (SigKill, TweakMe, SignatureKiller) rely on
+     * the same Java PackageManager hook. To resist them we additionally
+     * [verify][enforceEarly] at attachBaseContext(), where those tools install
+     * their hook, and re-verify periodically at runtime so a one-shot or
+     * timing-based bypass does not survive past startup.
+     *
+     * Reference:
+     *   - https://github.com/xxxyanchenxxx/SigKill
+     *   - https://github.com/liaoguobao/TweakMe
+     *   - https://github.com/Familyye/SignatureKiller
      */
     fun enforce(context: Context) {
         // 1. Java-level check (can be hooked by kstools-style tools)
@@ -55,6 +70,59 @@ object IntegrityGuard {
             }
             AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
             terminateWithContext(context)
+            return
+        }
+
+        // 3. Keep re-verifying at runtime so tampering after startup is caught.
+        schedulePeriodicRecheck(context.applicationContext ?: context)
+    }
+
+    /**
+     * Lightweight early gate executed from Application.attachBaseContext().
+     * Only the native filesystem-level signer check runs here: reading the APK
+     * directly bypasses the Java PackageManager hook that SigKill / TweakMe /
+     * SignatureKiller install at exactly this lifecycle point.
+     */
+    fun enforceEarly(context: Context) {
+        if (!SignatureVerifier.verify(context)) {
+            AppLog.e("INTEGRITY ENFORCEMENT (early) FAILED: native APK signer mismatch")
+            terminateWithContext(context)
+        }
+    }
+
+    /**
+     * Schedules a randomized-interval background re-verification. Using random
+     * delays makes a deterministic "bypass the startup check, then hook later"
+     * plan much harder to time accurately.
+     */
+    private fun schedulePeriodicRecheck(context: Context) {
+        synchronized(scheduleLock) {
+            if (recheckStarted) return
+            recheckStarted = true
+        }
+        Thread({
+            var delay = 8_000L + Random.nextLong(12_000L)
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(delay)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+                // Native check is the trustworthy one; the Java check cannot be
+                // faked but can be hooked, so it is cross-checked too.
+                val nativeOk = SignatureVerifier.verify(context)
+                val javaOk = verify(context).trusted
+                if (!nativeOk || !javaOk) {
+                    AppLog.e("INTEGRITY PERIODIC CHECK FAILED: tampering detected at runtime")
+                    terminateWithContext(context)
+                    return@Thread
+                }
+                delay = 45_000L + Random.nextLong(90_000L)
+            }
+        }).apply {
+            isDaemon = true
+            name = "soreverse-integrity"
+            start()
         }
     }
 
@@ -182,7 +250,15 @@ object IntegrityGuard {
                 "lsposed",
                 "edxp",
                 "zygisk",
-                "substrate"
+                "substrate",
+                // Non-root signature-bypass / injection frameworks we defend against:
+                "apptweak",
+                "guobao",
+                "tweakme",
+                "signaturekill",
+                "sigkill",
+                "yc/pm",
+                "signaturefaker",
             )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
