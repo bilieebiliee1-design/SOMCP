@@ -86,23 +86,45 @@ object SignatureVerifier {
         }
 
         val certBytes = readApkCertificate(apkPath) ?: return null
+        return certBytesToDigest(certBytes)
+    }
 
-        return try {
-            val cf = CertificateFactory.getInstance("X.509")
-            val cert = cf.generateCertificate(certBytes.inputStream())
-            val digest = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+    /**
+     * Computes the SHA-256 signer digest of an arbitrary APK file on disk.
+     * @return uppercase hex digest, or null on failure.
+     */
+    fun signerDigest(apkPath: String): String? {
+        if (!loaded) return null
+        return readApkCertificate(apkPath)?.let { certBytesToDigest(it) }
+    }
+
+    /** Maps a DER X.509 certificate (as extracted by native code) to its SHA-256 hex digest. */
+    private fun certBytesToDigest(certBytes: ByteArray): String? = try {
+        val cf = CertificateFactory.getInstance("X.509")
+        val cert = cf.generateCertificate(certBytes.inputStream())
+        val digest = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+        digest.joinToString("") { "%02X".format(it) }
+    } catch (e: Exception) {
+        AppLog.e("SignatureVerifier: certificate parsing failed", e)
+        // Fallback: compute SHA-256 of the raw DER bytes
+        try {
+            val digest = MessageDigest.getInstance("SHA-256").digest(certBytes)
             digest.joinToString("") { "%02X".format(it) }
-        } catch (e: Exception) {
-            AppLog.e("SignatureVerifier: certificate parsing failed", e)
-            // Fallback: compute SHA-256 of the raw DER bytes
-            try {
-                val digest = MessageDigest.getInstance("SHA-256").digest(certBytes)
-                digest.joinToString("") { "%02X".format(it) }
-            } catch (e2: Exception) {
-                AppLog.e("SignatureVerifier: fallback digest failed", e2)
-                null
-            }
+        } catch (e2: Exception) {
+            AppLog.e("SignatureVerifier: fallback digest failed", e2)
+            null
         }
+    }
+
+    /**
+     * True when the APK file at [apkPath] was signed with SOMCP's own official
+     * signing key (its signer digest equals the pinned release signer digest).
+     */
+    fun isSelfSignedApk(apkPath: String): Boolean {
+        if (!loaded) return false
+        val expected = getExpectedSignerDigest().let { normalizeSignerDigest(it) }
+        if (expected.isBlank()) return false // no release signer pin configured
+        return signerDigest(apkPath) == expected
     }
 
     /**
