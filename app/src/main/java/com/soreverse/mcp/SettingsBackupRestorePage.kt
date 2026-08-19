@@ -116,7 +116,10 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         scope.launch {
             runCatching {
                 val json = settings.toJsonString(maskSecrets = !includeSecrets)
-                val bytes = if (encryptEnabled && encryptPassword.isNotBlank()) {
+                val bytes = if (includeSecrets && encryptPassword.isBlank()) {
+                    // Never write a plaintext backup that includes secrets.
+                    throw IllegalStateException(t.backupPasswordRequired)
+                } else if ((encryptEnabled || includeSecrets) && encryptPassword.isNotBlank()) {
                     withContext(Dispatchers.IO) {
                         BackupCrypto.encrypt(json, encryptPassword)
                     }
@@ -469,7 +472,12 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         verticalArrangement = Arrangement.spacedBy(LocalUiMetrics.current.sectionGap)
     ) {
         GlassGroup(title = t.backupLocal) {
-            ToggleRow(t.backupIncludeSecrets, includeSecrets) { includeSecrets = it }
+            ToggleRow(t.backupIncludeSecrets, includeSecrets) { enabled ->
+                includeSecrets = enabled
+                // Including secrets exports them in clear text, so password
+                // encryption becomes mandatory and is forced on.
+                if (enabled) encryptEnabled = true
+            }
             GroupDivider()
             Text(
                 t.backupSecretsMasked,
@@ -479,7 +487,11 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
             )
             GroupDivider()
             ToggleRow(t.backupEncryptToggle, encryptEnabled) { enabled ->
-                if (enabled) {
+                if (includeSecrets) {
+                    // Password encryption is mandatory when secrets are included
+                    // in the backup; the toggle cannot be turned off.
+                    encryptEnabled = true
+                } else if (enabled) {
                     showEncryptWarning = true
                     pendingEncryptEnable = true
                 } else {
