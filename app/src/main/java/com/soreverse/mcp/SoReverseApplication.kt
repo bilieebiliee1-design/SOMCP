@@ -1,6 +1,7 @@
 package com.soreverse.mcp
 
 import android.app.Application
+import android.content.Context
 import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.CrashReporter
 import com.soreverse.mcp.core.IntegrityGuard
