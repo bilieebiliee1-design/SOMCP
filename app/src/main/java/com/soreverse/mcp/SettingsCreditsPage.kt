@@ -267,6 +267,36 @@ internal fun SettingsCreditsPage(t: UiText) {
                 )
             )
         )
+        CreditGroup(
+            if (t.zh) "开发致谢" else "Development acknowledgements",
+            listOf(
+                CreditProject(
+                    "Hello666cpu",
+                    if (t.zh) "核心开发者" else "Core developer",
+                    "https://github.com/Hello666cpu"
+                ),
+                CreditProject(
+                    "yallex",
+                    if (t.zh) "贡献者" else "Contributor",
+                    "https://github.com/yallex"
+                ),
+                CreditProject(
+                    "rhoggs-bot-test-account",
+                    if (t.zh) "贡献者" else "Contributor",
+                    "https://github.com/rhoggs-bot-test-account"
+                ),
+                CreditProject(
+                    "bilieebiliee1-design",
+                    if (t.zh) "项目维护者" else "Maintainer",
+                    "https://github.com/bilieebiliee1-design"
+                ),
+                CreditProject(
+                    "superman32432432",
+                    if (t.zh) "贡献者" else "Contributor",
+                    "https://github.com/superman32432432"
+                )
+            )
+        )
     }
 }
 
