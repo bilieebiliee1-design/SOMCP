@@ -79,6 +79,11 @@ internal fun SettingsCreditsPage(t: UiText) {
                     "Unicorn",
                     if (t.zh) "依赖链中使用的 CPU 模拟引擎" else "CPU emulation used by dependencies",
                     "https://github.com/unicorn-engine/unicorn"
+                ),
+                CreditProject(
+                    "Blutter",
+                    if (t.zh) "离线 Flutter Android AOT 分析引擎（内嵌 Runner）" else "Embedded offline Flutter Android AOT analysis engine",
+                    "https://github.com/worawit/blutter"
                 )
             )
         )
@@ -209,6 +214,26 @@ internal fun SettingsCreditsPage(t: UiText) {
                     "MT 管理器 / MT Manager",
                     if (t.zh) "APK 工作流参考与 APK MCP 能力来源" else "APK workflow reference and APK MCP provider",
                     "https://mt2.cn/"
+                ),
+                CreditProject(
+                    "argon2kt",
+                    if (t.zh) "备份加密的 Argon2 密钥派生库" else "Argon2 key derivation for encrypted backup",
+                    "https://github.com/lambdapioneer/argon2kt"
+                ),
+                CreditProject(
+                    "jsoup",
+                    if (t.zh) "HTML 解析与清理" else "HTML parsing and sanitization",
+                    "https://github.com/jhy/jsoup"
+                ),
+                CreditProject(
+                    "Markdown (rikkahub)",
+                    if (t.zh) "Markdown 渲染基础库" else "Markdown rendering library",
+                    "https://github.com/rikkahub/Markdown"
+                ),
+                CreditProject(
+                    "demumble",
+                    if (t.zh) "依赖链中的符号反混淆" else "Demangling used by dependencies",
+                    "https://github.com/zhkl0228/demumble"
                 )
             )
         )
