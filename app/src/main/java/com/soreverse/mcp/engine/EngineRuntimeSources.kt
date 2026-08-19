@@ -1,11 +1,13 @@
 package com.soreverse.mcp.engine
 
 import android.net.Uri
+import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.nativecore.NativeEngine
+import com.soreverse.mcp.nativecore.SignatureVerifier
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -254,6 +256,11 @@ internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSON
     ) {
         return@guarded err("APK_INVALID", "Input is not a ZIP/APK file", "path", path)
     }
+    if (isSelfApkBytes(bytes) ||
+        (local.isFile && SignatureVerifier.isSelfSignedApk(local.absolutePath))
+    ) {
+        return@guarded selfForbidden("apk:$path")
+    }
     try {
         ok(ApkAnalyzer.analyze(bytes, path, entryLimit))
     } catch (error: ApkAnalysisLimitException) {
@@ -356,6 +363,9 @@ internal fun EngineRuntime.openUrl(url: String, outputName: String = "", tempora
             }
         }.toByteArray()
     }
+    if (isSelfApkBytes(bytes)) {
+        return@guarded selfForbidden("url:$url")
+    }
     if (bytes.size < 4 ||
         bytes[0] != 0x7f.toByte() ||
         bytes[1] != 'E'.code.toByte() ||
@@ -411,6 +421,36 @@ internal fun EngineRuntime.soDownloadMaxBytes(): Long {
     val capMiB = minOf(heapCapMiB, storageFreeMiB).coerceIn(64L, 2048L)
     return capMiB * 1024L * 1024L
 }
+
+/** True when [bytes] carries SOMCP's own package identifier (`BuildConfig.APPLICATION_ID`). */
+internal fun containsPackageIdentifier(bytes: ByteArray): Boolean {
+    val marker = BuildConfig.APPLICATION_ID
+    if (marker.isBlank()) return false
+    val ascii = marker.toByteArray(Charsets.US_ASCII)
+    val utf16le = marker.toByteArray(Charsets.UTF_16LE)
+    return containsSubsequence(bytes, ascii) || containsSubsequence(bytes, utf16le)
+}
+
+private fun containsSubsequence(haystack: ByteArray, needle: ByteArray): Boolean {
+    if (needle.isEmpty() || haystack.size < needle.size) return false
+    for (i in 0..(haystack.size - needle.size)) {
+        var j = 0
+        while (j < needle.size && haystack[i + j] == needle[j]) j++
+        if (j == needle.size) return true
+    }
+    return false
+}
+
+/** Returns a forbidden error when the target is recognised as SOMCP's own artifact. */
+internal fun EngineRuntime.selfForbidden(desc: String): JSONObject = err(
+    "SELF_ANALYSIS_FORBIDDEN",
+    "SOMCP cannot analyze its own artifact (official signature or package ${BuildConfig.APPLICATION_ID})",
+    "reason",
+    desc
+)
+
+/** Byte-level check: true when [bytes] is SOMCP's own artifact via the package marker. */
+internal fun EngineRuntime.isSelfApkBytes(bytes: ByteArray): Boolean = containsPackageIdentifier(bytes)
 
 internal fun EngineRuntime.listWorkspaces(): JSONObject = guarded {
     val items = JSONArray()
@@ -513,6 +553,11 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
             )
         }
         error("SO path not found: $path")
+    }
+    if (src.source == "apk" && src.apkPath != null && SignatureVerifier.isSelfSignedApk(src.apkPath)) {
+        throw IllegalArgumentException(
+            "SELF_ANALYSIS_FORBIDDEN: SOMCP cannot analyze SO embedded in its own artifact ${src.apkPath}"
+        )
     }
     val key = sourceKey(src).ifBlank { keyFallback }
     workspaceBySourceKey[key]?.let { existingId -> workspaces[existingId]?.let { return it } }
