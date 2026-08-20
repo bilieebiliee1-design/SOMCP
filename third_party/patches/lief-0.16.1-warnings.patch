@@ -1,0 +1,26 @@
+diff --git a/include/LIEF/ELF/NoteDetails/core/CorePrPsInfo.hpp b/include/LIEF/ELF/NoteDetails/core/CorePrPsInfo.hpp
+index 1e34759..1d4b81d 100644
+--- a/include/LIEF/ELF/NoteDetails/core/CorePrPsInfo.hpp
++++ b/include/LIEF/ELF/NoteDetails/core/CorePrPsInfo.hpp
+@@ -85,7 +85,7 @@ class LIEF_API CorePrPsInfo : public Note {
+     return os;
+   }
+   private:
+-  ARCH arch_ = ARCH::NONE;
++  [[maybe_unused]] ARCH arch_ = ARCH::NONE;
+   Header::CLASS class_ = Header::CLASS::NONE;
+ };
+ 
+diff --git a/src/ELF/ExeLayout.hpp b/src/ELF/ExeLayout.hpp
+index cd0751a..7ee9c94 100644
+--- a/src/ELF/ExeLayout.hpp
++++ b/src/ELF/ExeLayout.hpp
+@@ -552,7 +552,7 @@ class LIEF_LOCAL ExeLayout : public Layout {
+ 
+ 
+     std::sort(non_relative_rels.begin(), non_relative_rels.end(),
+-      [elf_class] (const Relocation* lhs, const Relocation* rhs) {
++      [] (const Relocation* lhs, const Relocation* rhs) {
+         if (lhs->r_info(elf_class) != rhs->r_info(elf_class)) {
+           return lhs->r_info(elf_class) < rhs->r_info(elf_class);
+         }

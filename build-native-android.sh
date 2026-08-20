@@ -110,6 +110,16 @@ if [ -f "$CHAIN_PATCH" ] && grep -q 'union_pointer_t) == 16' "$CHAIN_HEADER"; th
     (cd "$LIEF_SRC" && git apply "$(pwd -P)/../patches/lief-0.16.1-chained-union-size.patch")
     echo "[build-native] Applied LIEF patch: $CHAIN_PATCH"
 fi
+# LIEF 0.16.1 (third_party/lief-src) emits -Wunused-private-field (arch_) and
+# -Wunused-lambda-capture (elf_class) warnings under -Wall. These are avoided
+# by marking the field [[maybe_unused]] and dropping the unused capture.
+# Idempotent: skipped once the unused-arch_ declaration is annotated.
+WARN_PATCH="third_party/patches/lief-0.16.1-warnings.patch"
+WARN_HEADER="$LIEF_SRC/include/LIEF/ELF/NoteDetails/core/CorePrPsInfo.hpp"
+if [ -f "$WARN_PATCH" ] && grep -q '^  ARCH arch_ = ARCH::NONE;' "$WARN_HEADER"; then
+    (cd "$LIEF_SRC" && git apply "$(pwd -P)/../patches/lief-0.16.1-warnings.patch")
+    echo "[build-native] Applied LIEF patch: $WARN_PATCH"
+fi
 for abi in "${APIS[@]}"; do
     build_dir="$LIEF_BUILD_ROOT/$abi"
     if [ -f "$build_dir/lib/libLIEF.a" ]; then
