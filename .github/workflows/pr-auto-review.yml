@@ -59,6 +59,7 @@ jobs:
         id: review
         if: steps.diff.outputs.fetch_ok == 'true'
         env:
+          User_Agent: ${{ secrets.USER_AGENT }}
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
@@ -243,6 +244,7 @@ jobs:
       - name: Generate LLM reply to PR comment
         id: llm
         env:
+          User_Agent: ${{ secrets.USER_AGENT }}
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
