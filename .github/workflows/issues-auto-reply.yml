@@ -31,6 +31,7 @@ jobs:
       - name: Generate LLM reply
         id: llm
         env:
+          User_Agent: ${{ secrets.USER_AGENT }}
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
