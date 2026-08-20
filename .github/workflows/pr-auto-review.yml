@@ -95,7 +95,21 @@ jobs:
             printf '\n代码变更（diff）:\n'
             cat /tmp/pr.diff.trunc
           } > /tmp/llm-input.txt
-          if ! LLM_SYSTEM_PROMPT="$SYSTEM_PROMPT" bash .github/scripts/llm-chat.sh < /tmp/llm-input.txt > /tmp/llm-review-raw.txt; then
+          # Endpoint policy: Tencent Copilot uses /v2/chat/completions and
+          # needs a User-Agent header; DeepSeek serves /chat/completions
+          # directly; other platforms use /v1/chat/completions.
+          LLM_ENDPOINT=""
+          LLM_USER_AGENT=""
+          if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
+            LLM_ENDPOINT="$LLM_API/v2/chat/completions"
+            LLM_USER_AGENT="${User_Agent:-}"
+          elif [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
+            LLM_ENDPOINT="$LLM_API/chat/completions"
+          else
+            LLM_ENDPOINT="$LLM_API/v1/chat/completions"
+          fi
+          if ! LLM_ENDPOINT="$LLM_ENDPOINT" LLM_USER_AGENT="$LLM_USER_AGENT" \
+              LLM_SYSTEM_PROMPT="$SYSTEM_PROMPT" bash .github/scripts/llm-chat.sh < /tmp/llm-input.txt > /tmp/llm-review-raw.txt; then
             echo "::warning::LLM review call failed."
             printf 'LLM 自动审查暂时不可用，请人工审查该 PR。' > /tmp/review-body.md
             printf 'error' > /tmp/verdict.txt
@@ -273,7 +287,21 @@ jobs:
             printf '\nPR 描述:\n%s\n' "$PR_DESC"
             printf '\n新评论:\n%s\n' "$CONTENT"
           } > /tmp/llm-input.txt
-          if ! LLM_SYSTEM_PROMPT="$SYSTEM_PROMPT" bash .github/scripts/llm-chat.sh < /tmp/llm-input.txt > /tmp/llm-reply.txt; then
+          # Endpoint policy: Tencent Copilot uses /v2/chat/completions and
+          # needs a User-Agent header; DeepSeek serves /chat/completions
+          # directly; other platforms use /v1/chat/completions.
+          LLM_ENDPOINT=""
+          LLM_USER_AGENT=""
+          if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
+            LLM_ENDPOINT="$LLM_API/v2/chat/completions"
+            LLM_USER_AGENT="${User_Agent:-}"
+          elif [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
+            LLM_ENDPOINT="$LLM_API/chat/completions"
+          else
+            LLM_ENDPOINT="$LLM_API/v1/chat/completions"
+          fi
+          if ! LLM_ENDPOINT="$LLM_ENDPOINT" LLM_USER_AGENT="$LLM_USER_AGENT" \
+              LLM_SYSTEM_PROMPT="$SYSTEM_PROMPT" bash .github/scripts/llm-chat.sh < /tmp/llm-input.txt > /tmp/llm-reply.txt; then
             echo "::warning::LLM call failed; skipping reply."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           elif [ ! -s /tmp/llm-reply.txt ]; then

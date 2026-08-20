@@ -34,16 +34,26 @@ LLM_MODEL="${LLM_MODEL:?LLM_MODEL env var is required}"
 LLM_KEY="${LLM_KEY:?LLM_KEY env var is required}"
 LLM_API="${LLM_API:?LLM_API env var is required}"
 
-# Tencent Copilot (https://copilot.tencent.com) serves /v2/chat/completions
-# and requires a User-Agent header taken from the $User_Agent env var.
+# Endpoint policy. Callers (the workflows) pre-compute the chat
+# completions URL via LLM_ENDPOINT and a User-Agent value via
+# LLM_USER_AGENT; those win when provided. When LLM_ENDPOINT is empty the
+# built-in detection is used: Tencent Copilot
+# (https://copilot.tencent.com) serves /v2/chat/completions and needs a
+# User-Agent header; DeepSeek serves /chat/completions at its base URL
+# directly; other OpenAI-compatible platforms use <base>/v1/chat/completions.
 CURL_EXTRA_ARGS=()
-if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
-  ENDPOINT="$LLM_API/v2/chat/completions"
-  CURL_EXTRA_ARGS+=(-H "User-Agent: ${User_Agent:-}")
+if [ -n "${LLM_ENDPOINT:-}" ]; then
+  ENDPOINT="$LLM_ENDPOINT"
+  if [ -n "${LLM_USER_AGENT:-}" ]; then
+    CURL_EXTRA_ARGS+=(-H "User-Agent: ${LLM_USER_AGENT}")
+  fi
 else
-  # DeepSeek serves /chat/completions at its base URL directly; other
-  # OpenAI-compatible platforms use <base>/v1/chat/completions.
-  if [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
+  if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
+    ENDPOINT="$LLM_API/v2/chat/completions"
+    if [ -n "${User_Agent:-}" ]; then
+      CURL_EXTRA_ARGS+=(-H "User-Agent: ${User_Agent}")
+    fi
+  elif [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
     ENDPOINT="$LLM_API/chat/completions"
   else
     ENDPOINT="$LLM_API/v1/chat/completions"
