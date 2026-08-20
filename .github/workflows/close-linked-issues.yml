@@ -99,7 +99,21 @@ jobs:
               printf '\n关联 issue #%s: %s\n' "$N" "$ITITLE"
               printf '\nissue 正文:\n%s\n' "$IBODY"
             } > "/tmp/close-input-${N}.txt"
-            if LLM_SYSTEM_PROMPT="$SYSTEM_PROMPT" bash .github/scripts/llm-chat.sh \
+            # Endpoint policy: Tencent Copilot uses /v2/chat/completions and
+            # needs a User-Agent header; DeepSeek serves /chat/completions
+            # directly; other platforms use /v1/chat/completions.
+            LLM_ENDPOINT=""
+            LLM_USER_AGENT=""
+            if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
+              LLM_ENDPOINT="$LLM_API/v2/chat/completions"
+              LLM_USER_AGENT="${User_Agent:-}"
+            elif [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
+              LLM_ENDPOINT="$LLM_API/chat/completions"
+            else
+              LLM_ENDPOINT="$LLM_API/v1/chat/completions"
+            fi
+            if LLM_ENDPOINT="$LLM_ENDPOINT" LLM_USER_AGENT="$LLM_USER_AGENT" \
+                LLM_SYSTEM_PROMPT="$SYSTEM_PROMPT" bash .github/scripts/llm-chat.sh \
                 < "/tmp/close-input-${N}.txt" > "/tmp/close-${N}.md"; then
               if [ ! -s "/tmp/close-${N}.md" ]; then
                 printf '该 issue 所关联的 PR 已合并，感谢反馈！\n' > "/tmp/close-${N}.md"
