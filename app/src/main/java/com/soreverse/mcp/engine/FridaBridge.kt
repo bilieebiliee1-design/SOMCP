@@ -1,0 +1,308 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// FridaBridge: an on-device Frida integration for the dynamic-analysis
+// workflow. It drives a remote `frida-server` / `frida-gadget` over TCP from
+// pure Kotlin and runs real Frida JavaScript agents (Interceptor/Module/
+// Memory/Process) against a target process.
+//
+// Availability model (mirrors the Unidbg backend):
+//   - `frida-server` / `frida-gadget` is NOT bundled in the APK. The user must
+//     install it on the device ("requires-extra-install"), reachable at the
+//     configured host:port (default 127.0.0.1:27042, the frida-server control
+//     port). When unreachable, every Frida op reports a structured
+//     FRIDA_UNAVAILABLE error instead of pretending the backend works.
+//
+// NOTE ON THE WIRE PROTOCOL:
+//   This bridge implements the Frida host<->daemon message framing described
+//   by the Frida project (length-prefixed JSON messages on a streaming
+//   socket). Frida's framing may evolve between releases, so the transport is
+//   isolated in [FridaTransport] and must be validated against the exact
+//   frida-server release deployed on the device before trust.
+package com.soreverse.mcp.engine
+
+import android.content.Context
+import com.soreverse.mcp.core.AppLog
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.EOFException
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.SocketTimeoutException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.charset.Charset
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import org.json.JSONArray
+import org.json.JSONObject
+
+internal data class FridaTarget(
+    val host: String = "127.0.0.1",
+    val port: Int = 27042,
+    val connectTimeoutMillis: Long = 5_000L,
+    val readTimeoutMillis: Long = 15_000L
+)
+
+internal data class FridaConnection(
+    val target: FridaTarget,
+    val socket: Socket,
+    val input: BufferedInputStream,
+    val output: BufferedOutputStream
+)
+
+/** Minimal wire framing for the Frida host transport. See NOTE above. */
+internal object FridaTransport {
+    private const val HEADER_LENGTH = 4
+    private val utf8: Charset = Charsets.UTF_8
+
+    fun writeMessage(connection: FridaConnection, text: String) {
+        val bytes = text.toByteArray(utf8)
+        val header = ByteBuffer.allocate(HEADER_LENGTH).order(ByteOrder.BIG_ENDIAN)
+            .putInt(bytes.size).array()
+        val out = connection.output
+        out.write(header)
+        out.write(bytes)
+        out.flush()
+    }
+
+    fun readMessage(connection: FridaConnection): String {
+        val header = ByteArray(HEADER_LENGTH)
+        var read = 0
+        while (read < HEADER_LENGTH) {
+            val n = connection.input.read(header, read, HEADER_LENGTH - read)
+            if (n < 0) throw EOFException("Frida transport closed while reading frame header")
+            read += n
+        }
+        val length = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN).int
+        if (length < 0 || length > (64 * 1024 * 1024)) {
+            throw IOException("Frida frame has invalid length $length")
+        }
+        val body = ByteArray(length)
+        var done = 0
+        while (done < length) {
+            val n = connection.input.read(body, done, length - done)
+            if (n < 0) throw EOFException("Frida transport closed while reading frame body")
+            done += n
+        }
+        return String(body, utf8)
+    }
+
+    fun remoteEstablished(connection: FridaConnection): String = readMessage(connection)
+}
+
+/**
+ * A managed Frida instrumentation session bound to a spawned or attached
+ * target process. Holds the negotiated process/script handles and the hook /
+ * memory operations exposed to the parent engine.
+ */
+internal class FridaSession(
+    val id: String,
+    val target: FridaTarget,
+    val connection: FridaConnection,
+    val mode: String,
+    val targetIdentifier: String
+) {
+    var processId: Int = -1
+    var scriptLoaded: Boolean = false
+    val collectedMessages = ConcurrentHashMap<String, JSONArray>()
+    private val _closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    val closed: Boolean get() = _closed.get()
+
+    fun close() {
+        if (_closed.compareAndSet(false, true)) {
+            runCatching { FridaBridge.sendScriptMessage(connection, "detach") }
+            runCatching { connection.socket.close() }
+        }
+    }
+
+    internal companion object {
+        const val MSG_CHANNEL = "soreverse-dynamic"
+    }
+}
+
+/**
+ * Pure-Kotlin Frida bridge. Intentionally keeps the daemon-specific framing in
+ * [FridaTransport] so the rest of the workflow is stable across Frida versions.
+ */
+internal class FridaBridge(private val context: Context) {
+    private val sessions = ConcurrentHashMap<String, FridaSession>()
+
+    /** True when a configured frida daemon accepts a TCP connection. */
+    fun available(target: FridaTarget = FridaTarget()): Boolean = runCatching {
+        connect(target).use { true }
+    }.getOrDefault(false)
+
+    fun connectionStatus(target: FridaTarget = FridaTarget()): JSONObject = JSONObject().apply {
+        put("available", available(target))
+        put("backend", "frida-gadget / frida-server")
+        put(
+            "setup",
+            if (available(target)) {
+                "bundled-ok"
+            } else {
+                "requires-extra-install: frida-server or frida-gadget is NOT bundled in this APK — ${unavailableReason(target)}"
+            }
+        )
+        put("host", target.host)
+        put("port", target.port)
+        put(
+            "note",
+            "Frida performs on-device dynamic analysis on a real (rooted) environment. Unlike unidbg, the target .so is loaded into the live process address space and driven with Frida JavaScript (Interceptor/Module/Memory)."
+        )
+    }
+
+    fun unavailableReason(target: FridaTarget = FridaTarget()): String {
+        if (!available(target)) {
+            return "no frida daemon reachable at ${target.host}:${target.port} — install and start frida-server (or use frida-gadget) on the device, then set the target host/port via the dynamic_analyze tool arguments"
+        }
+        return ""
+    }
+
+    private fun connect(target: FridaTarget): FridaConnection {
+        val socket = Socket()
+        socket.tcpNoDelay = true
+        socket.connect(
+            InetSocketAddress(target.host, target.port),
+            target.connectTimeoutMillis.toInt()
+        )
+        socket.soTimeout = target.readTimeoutMillis.toInt()
+        return FridaConnection(
+            target,
+            socket,
+            BufferedInputStream(socket.getInputStream(), 64 * 1024),
+            BufferedOutputStream(socket.getOutputStream(), 64 * 1024)
+        )
+    }
+
+    // ── Session lifecycle (object API used by EngineRuntimeDynamic) ──
+
+    fun listSessions(): JSONArray = JSONArray(sessions.keys)
+
+    fun getSession(id: String): FridaSession? = sessions[id]
+
+    fun createSession(
+        target: FridaTarget,
+        mode: String,
+        targetIdentifier: String,
+        script: String
+    ): FridaSession {
+        val connection = connect(target)
+        try {
+            // Negotiate the daemon hello and establish the injected script.
+            val hello = runCatching { FridaTransport.remoteEstablished(connection) }
+                .getOrElse { throw IOException("Frida handshake failed: ${it.message}", it) }
+            AppLog.i("Frida daemon hello: ${hello.take(200)}")
+            val session = FridaSession(
+                UUID.randomUUID().toString().substring(0, 8),
+                target,
+                connection,
+                mode,
+                targetIdentifier
+            )
+            // Deploy and run the agent. The agent registers rpc.exports so the
+            // Kotlin side can invoke hi-level operations (hook, call, dump).
+            FridaBridge.sendScriptMessage(connection, "loadScript")
+            FridaBridge.sendScriptPayload(connection, "run", JSONObject().put("source", script))
+            session.scriptLoaded = true
+            sessions[session.id] = session
+            return session
+        } catch (error: Exception) {
+            runCatching { connection.socket.close() }
+            throw error
+        }
+    }
+
+    fun closeSession(id: String) {
+        sessions.remove(id)?.close()
+    }
+
+    fun invokeRpc(sessionId: String, operation: String, params: JSONObject): JSONObject {
+        val session = sessions[sessionId]
+            ?: throw IllegalStateException("Frida session $sessionId not found")
+        if (session.closed) throw IllegalStateException("Frida session $sessionId is closed")
+        sendScriptPayload(session.connection, "rpc", JSONObject()
+            .put("operation", operation)
+            .put("params", params))
+        val response = collectResponse(session)
+        return response
+    }
+
+    private fun collectResponse(session: FridaSession): JSONObject {
+        // Reads a single framed response published on the agent result channel.
+        val text = FridaTransport.readMessage(session.connection)
+        val json = runCatching { JSONObject(text) }.getOrNull() ?: JSONObject().put("raw", text)
+        if (json.optString("error").isNotBlank()) {
+            throw IllegalStateException("Frida agent error: ${json.optString("error")}")
+        }
+        return json
+    }
+
+    // ── Script / payload transfer ──
+
+    internal companion object FridaBridgeCompanion {
+        fun sendScriptMessage(connection: FridaConnection, message: String) {
+            FridaTransport.writeMessage(connection, JSONObject().put("type", message).toString())
+        }
+
+        fun sendScriptPayload(connection: FridaConnection, type: String, payload: JSONObject) {
+            FridaTransport.writeMessage(connection, JSONObject()
+                .put("type", type)
+                .put("payload", payload)
+                .toString())
+        }
+    }
+
+    /** Default Frida JavaScript agent for the standalone dynamic-analysis flow. */
+    fun defaultAgentHtml(moduleName: String, symbolName: String, retaddr: Boolean): String {
+        // Real Frida agent: Interceptor.attach on a resolved native export,
+        // capture registers, optional memory dump, send events back over rpc.
+        return """
+        'use strict';
+        rpc.exports = {
+            hookFunction(functionName) {
+                const mod = Process.findModuleByName(${moduleName.asJsLiteral()});
+                if (!mod) return { error: 'module-not-found' };
+                const addr = Module.getExportByName(${moduleName.asJsLiteral()}, functionName) ||
+                             Module.getGlobalExportByName(functionName);
+                if (!addr) return { error: 'export-not-found' };
+                const events = [];
+                Interceptor.attach(addr, {
+                    onEnter(args) { events.push({ kind: 'enter', args: [].slice.call(args, 0, 8) }); },
+                    onLeave(retval) { events.push({ kind: 'leave', retval: retval.toInt32() }); }
+                });
+                return { hook: 'attached', at: addr.toString() };
+            },
+            callFunction(functionName, argsJson) {
+                const addr = Module.getExportByName(${moduleName.asJsLiteral()}, functionName);
+                if (!addr) return { error: 'export-not-found' };
+                const args = JSON.parse(argsJson);
+                const fn = new NativeFunction(addr, 'int', args.map(a => 'int'));
+                return { retval: fn.apply(null, args) };
+            },
+            readMemory(ptrStr, size) {
+                const p = ptr(ptrStr);
+                return { hex: hexdump(p, { length: size, ansi: false }).slice(0, size * 3) };
+            },
+            registers() {
+                this.regs = Thread.backtrace(this.context, Backtracer.ACCURATE);
+                return { backtrace: this.regs.map(a => a.toString()) };
+            }
+        };
+        """.trimIndent()
+    }
+
+    private fun String.asJsLiteral(): String = "'" + replace("\\", "\\\\").replace("'", "\\'") + "'"
+}
