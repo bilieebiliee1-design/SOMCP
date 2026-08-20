@@ -275,3 +275,8 @@ Release 构建启用：
 - 汇编补丁更适合等长覆盖或明确边界内 patch，不会自动搬移后续代码。
 - 手机无法单独证明自己从公网可访问；公网可达性需要远端客户端、Cloudflare Tunnel 或其他外部探测配合。
 - APK MCP 桥接依赖 MT 管理器侧边栏 APK MCP 功能在线，并需要 MT 管理器保持后台运行。
+
+<!-- TEST PR WORKFLOW DEMO #2 -->
+## Test PR Workflow 2
+
+This is a second test PR for PR workflow validation.
