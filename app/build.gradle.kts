@@ -17,7 +17,7 @@ android {
 
     defaultConfig {
         applicationId = "com.soreverse.mcp"
-        minSdk = 26
+        minSdk = 21
         targetSdk = 36
         versionCode = 19
         versionName = "1.0.18"
