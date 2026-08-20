@@ -36,13 +36,15 @@ jobs:
 
       - name: Fetch PR diff from the API
         id: diff
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           # The diff is computed server-side; the token is only used for
           # authentication and is never printed.
           if ! curl -sS -f -L \
               -H "Accept: application/vnd.github.v3.diff" \
-              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Authorization: Bearer ${TOKEN}" \
               "${{ github.event.pull_request.diff_url }}" -o /tmp/pr.diff; then
             echo "::warning::Failed to fetch PR diff from the API."
             echo "fetch_ok=false" >> "$GITHUB_OUTPUT"
