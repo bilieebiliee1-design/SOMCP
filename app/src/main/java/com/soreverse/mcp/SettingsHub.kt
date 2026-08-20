@@ -1,3 +1,15 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
 package com.soreverse.mcp
 
 import androidx.compose.foundation.BorderStroke
@@ -23,6 +35,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
@@ -66,6 +79,7 @@ private fun settingsTitle(t: UiText, dest: SettingsDest): String = when (dest) {
     SettingsDest.TunnelStats -> if (t.zh) "隧道稳定性" else "Tunnel Stability"
     SettingsDest.Instructions -> t.instructions
     SettingsDest.Credits -> if (t.zh) "开源致谢" else "Credits"
+    SettingsDest.DevelopmentCredits -> if (t.zh) "开发致谢" else "Development credits"
     SettingsDest.Disclaimer -> t.disclaimer
     SettingsDest.About -> t.about
     SettingsDest.BackupRestore -> t.backupRestore
@@ -279,6 +293,10 @@ internal fun SettingsHub(
                         onDest(SettingsDest.Credits)
                     })
                     GroupDivider()
+                    NavRow(if (t.zh) "开发致谢" else "Development credits", if (t.zh) "贡献者与维护者" else "Contributors", Icons.Default.Person, onClick = {
+                        onDest(SettingsDest.DevelopmentCredits)
+                    })
+                    GroupDivider()
                     NavRow(t.disclaimer, icon = Icons.Default.Info, onClick = {
                         onDest(SettingsDest.Disclaimer)
                     })
@@ -412,6 +430,8 @@ internal fun SettingsHub(
                             }
 
                             SettingsDest.Credits -> SettingsCreditsPage(t)
+
+                            SettingsDest.DevelopmentCredits -> SettingsDevelopmentCreditsPage(t)
 
                             SettingsDest.Disclaimer -> PageScroll {
                                 GlassGroup {

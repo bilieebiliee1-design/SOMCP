@@ -1,3 +1,15 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
 package com.soreverse.mcp
 
 import android.content.Context
@@ -267,6 +279,22 @@ internal fun SettingsCreditsPage(t: UiText) {
                 )
             )
         )
+    }
+}
+
+@Composable
+internal fun SettingsDevelopmentCreditsPage(t: UiText) {
+    PageScroll {
+        GlassGroup(
+            footer = if (t.zh) "排名不分先后。点击条目可打开个人主页。" else "Listed in no particular order. Tap an item to open a profile."
+        ) {
+            Text(
+                if (t.zh) "感谢以下开发者与维护者对 SOMCP 的代码、测试与维护做出的贡献。" else "Thanks to the following developers and maintainers for their contributions to SOMCP.",
+                modifier = Modifier.padding(14.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         CreditGroup(
             if (t.zh) "开发致谢" else "Development acknowledgements",
             listOf(
