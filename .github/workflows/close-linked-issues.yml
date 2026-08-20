@@ -58,7 +58,7 @@ jobs:
         id: llm
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          User_Agent: ${{ secrets.USER_AGENT }}
+          USER_AGENT: ${{ secrets.USER_AGENT }}
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
@@ -106,7 +106,7 @@ jobs:
             LLM_USER_AGENT=""
             if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
               LLM_ENDPOINT="$LLM_API/v2/chat/completions"
-              LLM_USER_AGENT="${User_Agent:-}"
+              LLM_USER_AGENT="${USER_AGENT:-}"
             elif [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
               LLM_ENDPOINT="$LLM_API/chat/completions"
             else

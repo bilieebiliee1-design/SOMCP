@@ -50,8 +50,8 @@ if [ -n "${LLM_ENDPOINT:-}" ]; then
 else
   if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
     ENDPOINT="$LLM_API/v2/chat/completions"
-    if [ -n "${User_Agent:-}" ]; then
-      CURL_EXTRA_ARGS+=(-H "User-Agent: ${User_Agent}")
+    if [ -n "${USER_AGENT:-}" ]; then
+      CURL_EXTRA_ARGS+=(-H "User-Agent: ${USER_AGENT}")
     fi
   elif [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
     ENDPOINT="$LLM_API/chat/completions"
