@@ -34,12 +34,20 @@ LLM_MODEL="${LLM_MODEL:?LLM_MODEL env var is required}"
 LLM_KEY="${LLM_KEY:?LLM_KEY env var is required}"
 LLM_API="${LLM_API:?LLM_API env var is required}"
 
-# DeepSeek serves /chat/completions at its base URL directly; other
-# OpenAI-compatible platforms use <base>/v1/chat/completions.
-if [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
-  ENDPOINT="$LLM_API/chat/completions"
+# Tencent Copilot (https://copilot.tencent.com) serves /v2/chat/completions
+# and requires a User-Agent header taken from the $User_Agent env var.
+CURL_EXTRA_ARGS=()
+if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
+  ENDPOINT="$LLM_API/v2/chat/completions"
+  CURL_EXTRA_ARGS+=(-H "User-Agent: ${User_Agent:-}")
 else
-  ENDPOINT="$LLM_API/v1/chat/completions"
+  # DeepSeek serves /chat/completions at its base URL directly; other
+  # OpenAI-compatible platforms use <base>/v1/chat/completions.
+  if [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
+    ENDPOINT="$LLM_API/chat/completions"
+  else
+    ENDPOINT="$LLM_API/v1/chat/completions"
+  fi
 fi
 
 USER_INPUT="$(cat)"
@@ -58,5 +66,6 @@ payload=$(jq -n \
 curl -sS -f -m 240 -X POST \
   -H "Authorization: Bearer $LLM_KEY" \
   -H "Content-Type: application/json" \
+  "${CURL_EXTRA_ARGS[@]}" \
   -d "$payload" "$ENDPOINT" \
   | jq -r '.choices[0].message.content // empty'
