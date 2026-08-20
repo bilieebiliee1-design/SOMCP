@@ -57,6 +57,7 @@ jobs:
       - name: Generate LLM closing summaries
         id: llm
         env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
@@ -83,7 +84,7 @@ jobs:
             exit 0
           fi
           for N in $ISSUES; do
-            if ! curl -sS -f -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            if ! curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
                 "https://api.github.com/repos/${REPO}/issues/${N}" \
                 -o "/tmp/issue-${N}.json"; then
               echo "Cannot fetch issue #$N; skipping."
