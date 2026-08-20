@@ -106,7 +106,7 @@ jobs:
 
       - name: Generate release notes with LLM
         env:
-          User_Agent: ${{ secrets.USER_AGENT }}
+          USER_AGENT: ${{ secrets.USER_AGENT }}
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
@@ -136,7 +136,7 @@ jobs:
              ], temperature: 0.7}')
           # Determine the chat completions endpoint. Tencent Copilot
           # (https://copilot.tencent.com) serves /v2/chat/completions and
-          # requires a User-Agent header from the $User_Agent env var.
+          # requires a User-Agent header from the $USER_AGENT env var.
           # DeepSeek's base URL (https://api.deepseek.com) serves
           # /chat/completions directly; other OpenAI-compatible platforms
           # use <base>/v1/chat/completions, e.g.
@@ -144,7 +144,7 @@ jobs:
           CURL_EXTRA_ARGS=()
           if [[ "$LLM_API" == "https://copilot.tencent.com" ]]; then
             ENDPOINT="$LLM_API/v2/chat/completions"
-            CURL_EXTRA_ARGS+=(-H "User-Agent: ${User_Agent:-}")
+            CURL_EXTRA_ARGS+=(-H "User-Agent: ${USER_AGENT:-}")
           elif [[ "$LLM_API" == *"api.deepseek.com"* ]]; then
             ENDPOINT="$LLM_API/chat/completions"
           else
