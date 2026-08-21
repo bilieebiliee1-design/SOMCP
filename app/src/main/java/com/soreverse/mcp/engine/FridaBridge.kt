@@ -147,7 +147,9 @@ internal object FridaTransport {
     }
 
     private fun readLine(input: BufferedInputStream): String? {
-        val buffer = ByteArray(256)
+        // 64 KiB cap comfortably fits any handshake line (long OK tokens,
+        // REJECTED diagnostics) emitted by frida daemon releases.
+        val buffer = ByteArray(64 * 1024)
         var length = 0
         while (true) {
             val value = input.read()
@@ -347,7 +349,7 @@ internal class FridaBridge(private val context: Context) {
     }
 
     /** Default Frida JavaScript agent for the standalone dynamic-analysis flow. */
-    fun defaultAgentHtml(moduleName: String, symbolName: String, retaddr: Boolean): String {
+    fun defaultAgentHtml(moduleName: String, retaddr: Boolean): String {
         // Real Frida agent: Interceptor.attach on a resolved native export,
         // capture registers, optional memory dump, send events back over rpc.
         return """
@@ -389,7 +391,7 @@ internal class FridaBridge(private val context: Context) {
                 if (!addr) return { error: 'export-not-found' };
                 const args = JSON.parse(argsJson);
                 const fn = new NativeFunction(addr, 'int', args.map(function (a) { return 'int'; }));
-                return { retval: fn.apply(null, args) };
+                return { retval: fn(...args) };
             },
             readMemory(ptrStr, size) {
                 const p = ptr(ptrStr);

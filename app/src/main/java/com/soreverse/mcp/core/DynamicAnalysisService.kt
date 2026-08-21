@@ -193,8 +193,10 @@ Requirements:
         if (settings.aiEndpoint.isBlank()) error("AI endpoint is empty")
     }
 
-    private fun emit(kind: DynamicAnalysisEvent.Kind, text: String, toolName: String = "") {
-        _events.tryEmit(DynamicAnalysisEvent(kind, text, toolName))
+    private suspend fun emit(kind: DynamicAnalysisEvent.Kind, text: String, toolName: String = "") {
+        // suspend emit() rather than tryEmit() so a temporarily-full consumer
+        // suspends instead of silently dropping analysis state events.
+        _events.emit(DynamicAnalysisEvent(kind, text, toolName))
     }
 
     private companion object {
