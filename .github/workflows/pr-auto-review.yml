@@ -277,12 +277,8 @@ jobs:
           verdict_cn = {'approve': '通过（可以合并）',
                         'request_changes': '需要修改',
                         'reject': '存在严重问题，需要修改'}[verdict]
-          # 记录回答时间（固定使用北京时间，UTC+8）
-          beijing_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           lines = ['## LLM 自动审查结果', '',
                    f'**判定：{verdict_cn}**',
-                   '',
-                   f'**回答时间：{beijing_time}（北京时间）**',
                    '']
           if summary:
               lines.append(summary)
@@ -301,6 +297,10 @@ jobs:
                   cm = re.sub(r'\s+', ' ', cm)
                   cm = cm.replace('|', '\\|').replace('`', '')
                   lines.append(f'| {sev_cn} | `{f}` | {ln} | {cm} |')
+          # 回答时间（北京时间，精确到秒）放在正文最底部
+          beijing_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+          lines.append('')
+          lines.append(f'**回答时间：{beijing_time}（北京时间）**')
           open('/tmp/review-body.md', 'w', encoding='utf-8').write('\n'.join(lines))
           open('/tmp/verdict.txt', 'w', encoding='utf-8').write(verdict)
           PYEOF
@@ -387,19 +387,37 @@ jobs:
             // PR directly mergeable (CI-red approval is already downgraded to
             // request_changes above), so no further hand-off is needed.
             if (event === 'APPROVE') {
+              let pr;
               try {
-                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
-                if (pr.state === 'open' && pr.mergeable === true) {
-                  try {
-                    await github.rest.pulls.merge({
-                      owner, repo, pull_number,
-                      merge_method: 'squash',
-                      commit_title: `Merge pull request #${pull_number}: ${pr.title}`
-                    });
-                    console.log(`Auto-merged approved PR #${pull_number}.`);
-                  } catch (e) {
-                    console.log('Auto-merge not possible (ignored): ' + e.message);
-                  }
+                pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              } catch (e) {
+                console.log('Cannot fetch PR for auto-merge (ignored): ' + e.message);
+              }
+              // Only gate on the PR still being open. mergeable can be null /
+              // pending right after a review, so don't require mergeable===true
+              // (that silently skipped merges); instead update the branch and
+              // rely on the merge API to refuse on real conflicts.
+              if (pr && pr.state === 'open') {
+                try {
+                  const u = await github.rest.pulls.updateBranch({ owner, repo, pull_number });
+                  console.log('updateBranch: ' + (u.status || u.statusText || 'ok'));
+                } catch (e) {
+                  console.log('updateBranch not possible (ignored): ' + e.message);
+                }
+                let merged = false;
+                try {
+                  const m = await github.rest.pulls.merge({
+                    owner, repo, pull_number,
+                    merge_method: 'squash',
+                    commit_title: `Merge pull request #${pull_number}: ${pr.title}`
+                  });
+                  merged = true;
+                  const sha = m.data && m.data.sha ? m.data.sha.slice(0, 7) : 'ok';
+                  console.log(`Auto-merged approved PR #${pull_number}: ${sha}.`);
+                } catch (e) {
+                  console.log('Auto-merge failed (ignored): ' + e.message);
+                }
+                if (merged) {
                   try {
                     const branch = pr.head.ref;
                     if (branch) {
@@ -409,11 +427,9 @@ jobs:
                   } catch (e) {
                     console.log('Branch deletion skipped (protected / not found): ' + e.message);
                   }
-                } else {
-                  console.log(`PR #${pull_number} not open/mergeable (state=${pr.state}, mergeable=${pr.mergeable}); skipping auto-merge.`);
                 }
-              } catch (e) {
-                console.log('Auto-merge step failed (ignored): ' + e.message);
+              } else {
+                console.log(`PR #${pull_number} not open for auto-merge (state=${pr && pr.state}); skipping.`);
               }
             }
 
