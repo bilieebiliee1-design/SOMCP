@@ -23,11 +23,12 @@
 //     FRIDA_UNAVAILABLE error instead of pretending the backend works.
 //
 // NOTE ON THE WIRE PROTOCOL:
-//   This bridge implements the Frida host<->daemon message framing described
-//   by the Frida project (length-prefixed JSON messages on a streaming
-//   socket). Frida's framing may evolve between releases, so the transport is
-//   isolated in [FridaTransport] and must be validated against the exact
-//   frida-server release deployed on the device before trust.
+//   This bridge implements the Frida host<->daemon connection over the raw
+//   control socket: a line-oriented D-Bus-style handshake (AUTH ANONYMOUS /
+//   BEGIN) followed by NUL-terminated-length-prefixed JSON messages. Frida's
+//   framing can evolve between releases, so the transport is isolated in
+//   [FridaTransport] and must be validated against the exact frida-server
+//   release deployed on the device before trust.
 package com.soreverse.mcp.engine
 
 import android.content.Context
@@ -38,13 +39,9 @@ import java.io.EOFException
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.SocketTimeoutException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.nio.charset.Charset
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -55,34 +52,83 @@ internal data class FridaTarget(
     val readTimeoutMillis: Long = 15_000L
 )
 
-internal data class FridaConnection(val target: FridaTarget, val socket: Socket, val input: BufferedInputStream, val output: BufferedOutputStream)
+/**
+ * An open TCP link to a frida daemon. Implements [AutoCloseable] so callers
+ * can use `use {}` and so that closing the session releases every underlying
+ * I/O resource (streams and socket) in one place.
+ */
+internal class FridaConnection(val target: FridaTarget, val socket: Socket, val input: BufferedInputStream, val output: BufferedOutputStream) : AutoCloseable {
+    override fun close() {
+        runCatching { output.close() }
+        runCatching { input.close() }
+        runCatching { socket.close() }
+    }
+}
 
-/** Minimal wire framing for the Frida host transport. See NOTE above. */
+/**
+ * Wire framing for the Frida host transport.
+ *
+ * The daemon on the control port (default 27042) speaks the D-Bus-style
+ * connection protocol on top of the raw socket:
+ *
+ *  1. A line-oriented handshake: we offer authentication (`AUTH ANONYMOUS`)
+ *     and, on acceptance, start the byte stream (`BEGIN`).
+ *  2. Read-write message frames use a NUL-terminated ASCII length prefix
+ *     followed by the UTF-8 payload.
+ *
+ * Frida's framing can shift between daemon releases, so the transport is kept
+ * in this object and [negotiate] surfaces a precise error when the deployed
+ * daemon does not follow the expected handshake, instead of failing silently.
+ */
 internal object FridaTransport {
-    private const val HEADER_LENGTH = 4
     private val utf8: Charset = Charsets.UTF_8
+    private const val MAX_FRAME = 64 * 1024 * 1024
+
+    /**
+     * Perform the connection-level handshake with the daemon. Returns the
+     * daemon's initial greeting line (for diagnostics) once the stream is
+     * usable for framed messages.
+     */
+    fun negotiate(connection: FridaConnection): String {
+        val input = connection.input
+        val output = connection.output
+        // Offer anonymous authentication, as the frida host transport does.
+        writeLine(output, "AUTH ANONYMOUS")
+        val authReply = readLine(input)
+        when {
+            authReply == null -> throw EOFException("Frida daemon closed during AUTH handshake")
+
+            authReply.startsWith("REJECTED") ->
+                throw IOException("Frida daemon rejected anonymous auth: $authReply")
+
+            !authReply.startsWith("OK ") ->
+                throw IOException("Unexpected AUTH reply from Frida daemon: ${authReply.take(120)}")
+        }
+        // Gracefully begin the stream; the response is the session token.
+        val token = authReply.removePrefix("OK ").trim()
+        writeLine(output, "BEGIN")
+        val beginReply = readLine(input)
+        if (beginReply != null && beginReply.startsWith("REJECTED")) {
+            throw IOException("Frida daemon rejected BEGIN: $beginReply")
+        }
+        return beginReply ?: token
+    }
 
     fun writeMessage(connection: FridaConnection, text: String) {
         val bytes = text.toByteArray(utf8)
-        val header = ByteBuffer.allocate(HEADER_LENGTH).order(ByteOrder.BIG_ENDIAN)
-            .putInt(bytes.size).array()
         val out = connection.output
-        out.write(header)
+        // D-Bus stream framing: NUL-terminated decimal length + payload.
+        out.write("${bytes.size}\u0000".toByteArray(Charsets.US_ASCII))
         out.write(bytes)
         out.flush()
     }
 
     fun readMessage(connection: FridaConnection): String {
-        val header = ByteArray(HEADER_LENGTH)
-        var read = 0
-        while (read < HEADER_LENGTH) {
-            val n = connection.input.read(header, read, HEADER_LENGTH - read)
-            if (n < 0) throw EOFException("Frida transport closed while reading frame header")
-            read += n
-        }
-        val length = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN).int
-        if (length < 0 || length > (64 * 1024 * 1024)) {
-            throw IOException("Frida frame has invalid length $length")
+        val lengthText = readLine(connection.input)
+            ?: throw EOFException("Frida transport closed while reading frame header")
+        val length = runCatching { lengthText.trim().toInt() }.getOrNull()
+        if (length == null || length < 0 || length > MAX_FRAME) {
+            throw IOException("Frida frame has invalid length '$lengthText'")
         }
         val body = ByteArray(length)
         var done = 0
@@ -94,7 +140,29 @@ internal object FridaTransport {
         return String(body, utf8)
     }
 
-    fun remoteEstablished(connection: FridaConnection): String = readMessage(connection)
+    private fun writeLine(output: BufferedOutputStream, line: String) {
+        output.write(line.toByteArray(utf8))
+        output.write("\r\n".toByteArray(Charsets.US_ASCII))
+        output.flush()
+    }
+
+    private fun readLine(input: BufferedInputStream): String? {
+        val buffer = ByteArray(256)
+        var length = 0
+        while (true) {
+            val value = input.read()
+            if (value < 0) {
+                return if (length == 0) null else String(buffer, 0, length, utf8)
+            }
+            if (value == '\n'.code) {
+                return String(buffer, 0, length, utf8).trimEnd('\r')
+            }
+            if (length == buffer.size) {
+                throw IOException("Frida handshake line too long")
+            }
+            buffer[length++] = value.toByte()
+        }
+    }
 }
 
 /**
@@ -108,12 +176,17 @@ internal class FridaSession(val id: String, val target: FridaTarget, val connect
     val collectedMessages = ConcurrentHashMap<String, JSONArray>()
     private val _closed = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** Serializes the write + read pair of each RPC call; see [FridaBridge.invokeRpc]. */
+    internal val ioLock = Any()
+
     val closed: Boolean get() = _closed.get()
 
     fun close() {
         if (_closed.compareAndSet(false, true)) {
             runCatching { FridaBridge.sendScriptMessage(connection, "detach") }
-            runCatching { connection.socket.close() }
+            // Releasing the streams and the socket in one place guarantees no
+            // I/O resource is left open when the session is abandoned.
+            runCatching { connection.close() }
         }
     }
 
@@ -187,8 +260,8 @@ internal class FridaBridge(private val context: Context) {
     fun createSession(target: FridaTarget, mode: String, targetIdentifier: String, script: String): FridaSession {
         val connection = connect(target)
         try {
-            // Negotiate the daemon hello and establish the injected script.
-            val hello = runCatching { FridaTransport.remoteEstablished(connection) }
+            // Negotiate the daemon-level handshake and establish the session.
+            val hello = runCatching { FridaTransport.negotiate(connection) }
                 .getOrElse { throw IOException("Frida handshake failed: ${it.message}", it) }
             AppLog.i("Frida daemon hello: ${hello.take(200)}")
             val session = FridaSession(
@@ -206,7 +279,7 @@ internal class FridaBridge(private val context: Context) {
             sessions[session.id] = session
             return session
         } catch (error: Exception) {
-            runCatching { connection.socket.close() }
+            runCatching { connection.close() }
             throw error
         }
     }
@@ -219,15 +292,19 @@ internal class FridaBridge(private val context: Context) {
         val session = sessions[sessionId]
             ?: throw IllegalStateException("Frida session $sessionId not found")
         if (session.closed) throw IllegalStateException("Frida session $sessionId is closed")
-        sendScriptPayload(
-            session.connection,
-            "rpc",
-            JSONObject()
-                .put("operation", operation)
-                .put("params", params)
-        )
-        val response = collectResponse(session)
-        return response
+        // The request/response pair must be atomic on the shared socket: a
+        // concurrent writer could interleave frames and corrupt the framing.
+        // Holding the session's ioLock serializes every RPC on the link.
+        return synchronized(session.ioLock) {
+            sendScriptPayload(
+                session.connection,
+                "rpc",
+                JSONObject()
+                    .put("operation", operation)
+                    .put("params", params)
+            )
+            collectResponse(session)
+        }
     }
 
     private fun collectResponse(session: FridaSession): JSONObject {
