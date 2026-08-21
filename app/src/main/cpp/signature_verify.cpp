@@ -42,15 +42,75 @@
 #include <vector>
 #include <cstring>
 #include <cstdint>
-#include <fstream>
 #include <android/log.h>
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
 #include <zlib.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define LOG_TAG "SignatureVerify"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// ---------------------------------------------------------------------------
+// Memory-mapped APK reader
+//
+// Loading a large APK into a heap std::vector can exhaust the device memory
+// and trigger an OOM crash. Instead we mmap() the file read-only: the kernel
+// pages the file in on demand from the shared page cache, so only the EOCD,
+// the central directory and the specific payloads we touch are ever resident,
+// with no full-file copy in the process heap.
+// ---------------------------------------------------------------------------
+class MappedApk {
+public:
+    MappedApk() = default;
+    ~MappedApk() { reset(); }
+    MappedApk(const MappedApk&) = delete;
+    MappedApk& operator=(const MappedApk&) = delete;
+
+    bool map(const char* path) {
+        reset();
+        fd_ = ::open(path, O_RDONLY);
+        if (fd_ < 0) return false;
+        struct stat st;
+        if (::fstat(fd_, &st) != 0 || st.st_size <= 0) {
+            reset();
+            return false;
+        }
+        size_ = static_cast<size_t>(st.st_size);
+        data_ = static_cast<uint8_t*>(
+            ::mmap(nullptr, size_, PROT_READ, MAP_SHARED, fd_, 0));
+        if (data_ == MAP_FAILED) {
+            data_ = nullptr;
+            size_ = 0;
+            ::close(fd_);
+            fd_ = -1;
+            return false;
+        }
+        return true;
+    }
+
+    const uint8_t* data() const { return data_; }
+    size_t size() const { return size_; }
+
+    void reset() {
+        if (data_ && size_) ::munmap(data_, size_);
+        data_ = nullptr;
+        size_ = 0;
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
+private:
+    uint8_t* data_ = nullptr;
+    size_t size_ = 0;
+    int fd_ = -1;
+};
 
 // ---------------------------------------------------------------------------
 // ZIP structures (little-endian)
@@ -358,14 +418,17 @@ static std::vector<uint8_t> extract_certificate_fallback(const std::vector<uint8
 // ZIP deflate streams have no zlib/gzip wrapper, so we pass -15 as the
 // windowBits to inflateRaw.
 //
+// Used only for the small META-INF signature files; classes.dex is validated
+// with the streaming helper below so a large dex is never materialized.
+//
 // Returns the decompressed bytes, or empty on failure.
 static std::vector<uint8_t> inflate_deflate(
-    const std::vector<uint8_t>& compressed, size_t expected_uncompressed) {
-    if (compressed.empty()) return {};
+    const uint8_t* compressed, size_t compressed_len, size_t expected_uncompressed) {
+    if (!compressed || compressed_len == 0) return {};
 
     z_stream strm = {};
-    strm.next_in  = const_cast<Bytef*>(compressed.data());
-    strm.avail_in = static_cast<uInt>(compressed.size());
+    strm.next_in  = const_cast<Bytef*>(compressed);
+    strm.avail_in = static_cast<uInt>(compressed_len);
     strm.zalloc   = Z_NULL;
     strm.zfree    = Z_NULL;
     strm.opaque   = Z_NULL;
@@ -382,7 +445,8 @@ static std::vector<uint8_t> inflate_deflate(
         strm.next_out  = buf.data();
         strm.avail_out = static_cast<uInt>(buf.size());
         status = inflate(&strm, Z_SYNC_FLUSH);
-        if (status == Z_STREAM_ERROR || status == Z_NEED_DICT) {
+        if (status == Z_STREAM_ERROR || status == Z_DATA_ERROR ||
+            status == Z_NEED_DICT || status == Z_MEM_ERROR) {
             inflateEnd(&strm);
             return {};
         }
@@ -392,6 +456,12 @@ static std::vector<uint8_t> inflate_deflate(
         }
         if (out.size() > 4u * 1024 * 1024) {
             LOGE("Inflated size exceeds 4 MB, aborting");
+            inflateEnd(&strm);
+            return {};
+        }
+        // Truncated / corrupted stream: input exhausted without reaching
+        // Z_STREAM_END and no progress was made -> cannot continue.
+        if (produced == 0 && strm.avail_in == 0 && status != Z_STREAM_END) {
             inflateEnd(&strm);
             return {};
         }
@@ -405,6 +475,61 @@ static std::vector<uint8_t> inflate_deflate(
         return {};
     }
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming CRC32 over a DEFLATE payload.
+//
+// Inflates in small fixed-size chunks and feeds each chunk through crc32,
+// discarding the data as it goes. A large classes.dex is therefore validated
+// without ever being fully resident in memory, and without a hard output-size
+// cap that would falsely fail legitimate multi-MB dex files.
+//
+// Returns true when the produced byte count matches [expected_uncompressed]
+// and the resulting CRC32 equals [expected_crc].
+// ---------------------------------------------------------------------------
+static bool crc32_matches_inflated(const uint8_t* compressed, size_t compressed_len,
+                                   size_t expected_uncompressed, uint32_t expected_crc) {
+    if (!compressed || compressed_len == 0) return false;
+
+    z_stream strm = {};
+    strm.next_in  = const_cast<Bytef*>(compressed);
+    strm.avail_in = static_cast<uInt>(compressed_len);
+    strm.zalloc   = Z_NULL;
+    strm.zfree    = Z_NULL;
+    strm.opaque   = Z_NULL;
+
+    if (inflateInit2(&strm, -MAX_WBITS) != Z_OK) return false;
+
+    uint8_t buf[64 * 1024];
+    uLong crc = crc32(0L, Z_NULL, 0);
+    size_t produced_total = 0;
+    int status;
+    do {
+        strm.next_out  = buf;
+        strm.avail_out = sizeof(buf);
+        status = inflate(&strm, Z_SYNC_FLUSH);
+        if (status == Z_STREAM_ERROR || status == Z_DATA_ERROR ||
+            status == Z_NEED_DICT || status == Z_MEM_ERROR) {
+            inflateEnd(&strm);
+            return false;
+        }
+        size_t produced = sizeof(buf) - strm.avail_out;
+        if (produced > 0) {
+            crc = crc32(crc, buf, static_cast<uInt>(produced));
+            produced_total += produced;
+        }
+        // Truncated / corrupted stream: input exhausted without reaching
+        // Z_STREAM_END and no progress was made -> cannot continue.
+        if (produced == 0 && strm.avail_in == 0 && status != Z_STREAM_END) {
+            inflateEnd(&strm);
+            return false;
+        }
+    } while (status != Z_STREAM_END);
+    inflateEnd(&strm);
+
+    if (produced_total != expected_uncompressed) return false;
+    return static_cast<uint32_t>(crc) == expected_crc;
 }
 
 // ---------------------------------------------------------------------------
@@ -566,7 +691,11 @@ static void sha256_final(Sha256* s, uint8_t out[32]) {
 }
 
 /**
- * Computes the SHA-256 of [data] and returns it as a lowercase hex string.
+ * Computes the SHA-256 of [data] and returns it as an UPPERCASE hex string.
+ *
+ * Uppercase matches the Kotlin-side fallback (java.util.Formatter "%02X"), so
+ * native and Java computed digests compare equal regardless of which path
+ * produced them.
  */
 static std::string sha256_hex(const uint8_t* data, size_t len) {
     Sha256 s;
@@ -574,7 +703,7 @@ static std::string sha256_hex(const uint8_t* data, size_t len) {
     sha256_update(&s, data, len);
     uint8_t digest[32];
     sha256_final(&s, digest);
-    static const char* kHex = "0123456789abcdef";
+    static const char* kHex = "0123456789ABCDEF";
     std::string out;
     out.reserve(64);
     for (int i = 0; i < 32; i++) {
@@ -624,39 +753,27 @@ enum : int {
     kIntegrityCrcMismatch       = 1 << 8, // classes.dex content CRC mismatch
 };
 
-static bool read_apk_file(const std::string& path, std::vector<uint8_t>& out) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) return false;
-    std::streamsize size = file.tellg();
-    if (size <= 0) return false;
-    out.resize(static_cast<size_t>(size));
-    file.seekg(0, std::ios::beg);
-    if (!file.read(reinterpret_cast<char*>(out.data()), size)) return false;
-    file.close();
-    return true;
-}
-
-static int verify_apk_integrity(const std::vector<uint8_t>& apk) {
-    if (apk.size() < sizeof(ZipEocd)) return kIntegrityReadFailed;
+static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
+    if (!apk || apk_size < sizeof(ZipEocd)) return kIntegrityReadFailed;
 
     // Locate the End of Central Directory scanning backwards (the trailing
     // comment may be up to 64 KiB).
-    size_t eocd_pos = apk.size() - sizeof(ZipEocd);
-    size_t search_start = (apk.size() > 65557) ? apk.size() - 65557 : 0;
+    size_t eocd_pos = apk_size - sizeof(ZipEocd);
+    size_t search_start = (apk_size > 65557) ? apk_size - 65557 : 0;
     bool found = false;
-    for (size_t i = eocd_pos; i >= search_start && i < apk.size(); i--) {
+    for (size_t i = eocd_pos; i >= search_start && i < apk_size; i--) {
         ZipEocd e;
-        if (i + sizeof(ZipEocd) > apk.size()) continue;
-        std::memcpy(&e, apk.data() + i, sizeof(ZipEocd));
+        if (i + sizeof(ZipEocd) > apk_size) continue;
+        std::memcpy(&e, apk + i, sizeof(ZipEocd));
         if (e.signature == 0x06054b50) { eocd_pos = i; found = true; break; }
         if (i == 0) break;
     }
     if (!found) return kIntegrityEocdNotFound;
 
     ZipEocd eocd;
-    std::memcpy(&eocd, apk.data() + eocd_pos, sizeof(ZipEocd));
+    std::memcpy(&eocd, apk + eocd_pos, sizeof(ZipEocd));
     if (static_cast<uint64_t>(eocd.central_dir_offset) +
-            static_cast<uint64_t>(eocd.central_dir_size) > apk.size()) {
+            static_cast<uint64_t>(eocd.central_dir_size) > apk_size) {
         return kIntegrityCentralDirInvalid;
     }
 
@@ -666,53 +783,49 @@ static int verify_apk_integrity(const std::vector<uint8_t>& apk) {
 
     size_t cd_pos = eocd.central_dir_offset;
     for (uint16_t i = 0;
-         i < eocd.total_entries && cd_pos + sizeof(ZipCentralDirEntry) <= apk.size();
+         i < eocd.total_entries && cd_pos + sizeof(ZipCentralDirEntry) <= apk_size;
          i++) {
         ZipCentralDirEntry entry;
-        std::memcpy(&entry, apk.data() + cd_pos, sizeof(ZipCentralDirEntry));
+        std::memcpy(&entry, apk + cd_pos, sizeof(ZipCentralDirEntry));
         if (entry.signature != 0x02014b50) break;
-        if (cd_pos + sizeof(ZipCentralDirEntry) + entry.filename_length > apk.size()) break;
+        if (cd_pos + sizeof(ZipCentralDirEntry) + entry.filename_length > apk_size) break;
 
         std::string name(
-            reinterpret_cast<const char*>(apk.data() + cd_pos + sizeof(ZipCentralDirEntry)),
+            reinterpret_cast<const char*>(apk + cd_pos + sizeof(ZipCentralDirEntry)),
             entry.filename_length);
 
         if (name == "classes.dex") {
             has_classes = true;
             // Verify the on-disk payload CRC32 against the central directory
             // value, so in-place patching of the dex is detected even when the
-            // ZIP structure itself is still intact.
+            // ZIP structure itself is still intact. Uses bounded memory: stored
+            // payloads are crc'd in place, deflate payloads are streamed.
             size_t local_offset = entry.local_header_offset;
-            if (local_offset + sizeof(ZipLocalFileHeader) > apk.size()) {
+            if (local_offset + sizeof(ZipLocalFileHeader) > apk_size) {
                 crc_fail = true;
             } else {
                 ZipLocalFileHeader local;
-                std::memcpy(&local, apk.data() + local_offset, sizeof(ZipLocalFileHeader));
+                std::memcpy(&local, apk + local_offset, sizeof(ZipLocalFileHeader));
                 if (local.signature != 0x04034b50) {
                     crc_fail = true;
                 } else {
                     size_t data_offset = local_offset + sizeof(ZipLocalFileHeader) +
                                          local.filename_length + local.extra_length;
-                    if (data_offset + entry.compressed_size > apk.size()) {
+                    if (data_offset + entry.compressed_size > apk_size) {
                         crc_fail = true;
-                    } else {
-                        std::vector<uint8_t> payload(
-                            apk.data() + data_offset,
-                            apk.data() + data_offset + entry.compressed_size);
-                        std::vector<uint8_t> data;
-                        if (entry.compression == 0) {
-                            data = payload;
-                        } else if (entry.compression == 8) {
-                            data = inflate_deflate(payload, entry.uncompressed_size);
-                        }
-                        if (data.empty() && entry.uncompressed_size != 0) {
+                    } else if (entry.compression == 0) {
+                        uLong actual = crc32(0L, Z_NULL, 0);
+                        actual = crc32(actual, apk + data_offset,
+                                       static_cast<uInt>(entry.compressed_size));
+                        if (static_cast<uint32_t>(actual) != entry.crc32) crc_fail = true;
+                    } else if (entry.compression == 8) {
+                        if (!crc32_matches_inflated(
+                                apk + data_offset, entry.compressed_size,
+                                entry.uncompressed_size, entry.crc32)) {
                             crc_fail = true;
-                        } else {
-                            uLong actual = crc32(0L, Z_NULL, 0);
-                            actual = crc32(actual, data.data(),
-                                           static_cast<uInt>(data.size()));
-                            if (static_cast<uint32_t>(actual) != entry.crc32) crc_fail = true;
                         }
+                    } else {
+                        crc_fail = true; // unsupported compression for classes.dex
                     }
                 }
             }
@@ -789,42 +902,31 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     LOGI("Reading APK: %s", path.c_str());
 
-    // Read the entire APK file
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        LOGE("Failed to open APK: %s", path.c_str());
+    // Map the APK read-only instead of loading the whole file into the heap
+    // (avoids OOM on large APKs).
+    MappedApk apk;
+    if (!apk.map(path.c_str())) {
+        LOGE("Failed to map APK: %s", path.c_str());
         return nullptr;
     }
-
-    std::streamsize size = file.tellg();
-    if (size <= 0) {
-        LOGE("APK file is empty");
-        return nullptr;
-    }
-
-    std::vector<uint8_t> apk_data(static_cast<size_t>(size));
-    file.seekg(0, std::ios::beg);
-    if (!file.read(reinterpret_cast<char*>(apk_data.data()), size)) {
-        LOGE("Failed to read APK file");
-        return nullptr;
-    }
-    file.close();
+    const uint8_t* apk_data = apk.data();
+    size_t apk_size = apk.size();
 
     // Find End of Central Directory
-    if (apk_data.size() < sizeof(ZipEocd)) {
+    if (apk_size < sizeof(ZipEocd)) {
         LOGE("APK too small");
         return nullptr;
     }
 
     // Search for EOCD signature from the end (with max comment length)
-    size_t eocd_pos = apk_data.size() - sizeof(ZipEocd);
-    size_t search_start = (apk_data.size() > 65557) ? apk_data.size() - 65557 : 0;
+    size_t eocd_pos = apk_size - sizeof(ZipEocd);
+    size_t search_start = (apk_size > 65557) ? apk_size - 65557 : 0;
     bool found_eocd = false;
 
-    for (size_t i = eocd_pos; i >= search_start && i < apk_data.size(); i--) {
+    for (size_t i = eocd_pos; i >= search_start && i < apk_size; i--) {
         ZipEocd eocd;
-        if (i + sizeof(ZipEocd) > apk_data.size()) continue;
-        std::memcpy(&eocd, apk_data.data() + i, sizeof(ZipEocd));
+        if (i + sizeof(ZipEocd) > apk_size) continue;
+        std::memcpy(&eocd, apk_data + i, sizeof(ZipEocd));
         if (eocd.signature == 0x06054b50) {
             eocd_pos = i;
             found_eocd = true;
@@ -839,11 +941,11 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
     }
 
     ZipEocd eocd;
-    std::memcpy(&eocd, apk_data.data() + eocd_pos, sizeof(ZipEocd));
+    std::memcpy(&eocd, apk_data + eocd_pos, sizeof(ZipEocd));
     LOGI("Central dir: offset=%u, size=%u, entries=%u",
          eocd.central_dir_offset, eocd.central_dir_size, eocd.total_entries);
 
-    if (eocd.central_dir_offset + eocd.central_dir_size > apk_data.size()) {
+    if (eocd.central_dir_offset + eocd.central_dir_size > apk_size) {
         LOGE("Central directory exceeds file bounds");
         return nullptr;
     }
@@ -856,25 +958,25 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     size_t cd_pos = eocd.central_dir_offset;
     for (uint16_t i = 0; i < eocd.total_entries; i++) {
-        if (cd_pos + sizeof(ZipCentralDirEntry) > apk_data.size()) {
+        if (cd_pos + sizeof(ZipCentralDirEntry) > apk_size) {
             LOGE("Central directory entry %d out of bounds", i);
             break;
         }
 
         ZipCentralDirEntry entry;
-        std::memcpy(&entry, apk_data.data() + cd_pos, sizeof(ZipCentralDirEntry));
+        std::memcpy(&entry, apk_data + cd_pos, sizeof(ZipCentralDirEntry));
 
         if (entry.signature != 0x02014b50) {
             LOGE("Invalid central directory signature at entry %d", i);
             break;
         }
 
-        if (cd_pos + sizeof(ZipCentralDirEntry) + entry.filename_length > apk_data.size()) {
+        if (cd_pos + sizeof(ZipCentralDirEntry) + entry.filename_length > apk_size) {
             break;
         }
 
         std::string filename(
-            reinterpret_cast<const char*>(apk_data.data() + cd_pos + sizeof(ZipCentralDirEntry)),
+            reinterpret_cast<const char*>(apk_data + cd_pos + sizeof(ZipCentralDirEntry)),
             entry.filename_length);
 
         // Check if this is a META-INF signature file
@@ -896,13 +998,13 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
                 // Read the file data from the local file header
                 size_t local_offset = entry.local_header_offset;
-                if (local_offset + sizeof(ZipLocalFileHeader) > apk_data.size()) {
+                if (local_offset + sizeof(ZipLocalFileHeader) > apk_size) {
                     LOGE("Local header offset out of bounds for %s", filename.c_str());
                     continue;
                 }
 
                 ZipLocalFileHeader local;
-                std::memcpy(&local, apk_data.data() + local_offset, sizeof(ZipLocalFileHeader));
+                std::memcpy(&local, apk_data + local_offset, sizeof(ZipLocalFileHeader));
 
                 if (local.signature != 0x04034b50) {
                     LOGE("Invalid local file header signature for %s", filename.c_str());
@@ -912,7 +1014,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
                 size_t data_offset = local_offset + sizeof(ZipLocalFileHeader) +
                                      local.filename_length + local.extra_length;
 
-                if (data_offset + entry.compressed_size > apk_data.size()) {
+                if (data_offset + entry.compressed_size > apk_size) {
                     LOGE("File data out of bounds for %s", filename.c_str());
                     continue;
                 }
@@ -920,8 +1022,8 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
                 // For META-INF signature files, compression is typically 0 (stored)
                 if (entry.compression == 0) {
                     signature_file_data.assign(
-                        apk_data.data() + data_offset,
-                        apk_data.data() + data_offset + entry.uncompressed_size);
+                        apk_data + data_offset,
+                        apk_data + data_offset + entry.uncompressed_size);
                     signature_filename = filename;
                     LOGI("Read signature file: %s (%zu bytes)", filename.c_str(), signature_file_data.size());
                     break;
@@ -929,21 +1031,21 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
                     LOGI("Signature file %s is compressed (type %u), decompressing",
                          filename.c_str(), entry.compression);
                     if (entry.compression == 8) {
-                        // Raw DEFLATE stream (no zlib/gzip wrapper): feed
-                        // compressed bytes to inflate_deflate and obtain the
-                        // uncompressed PKCS7 bytes.
-                        std::vector<uint8_t> raw(
-                            apk_data.data() + data_offset,
-                            apk_data.data() + data_offset + entry.compressed_size);
+                        // Raw DEFLATE stream (no zlib/gzip wrapper): feed the
+                        // mapped compressed bytes to inflate_deflate and obtain
+                        // the uncompressed PKCS7 bytes.
                         signature_file_data =
-                            inflate_deflate(raw, entry.uncompressed_size);
+                            inflate_deflate(apk_data + data_offset,
+                                            entry.compressed_size,
+                                            entry.uncompressed_size);
                         if (signature_file_data.empty()) {
                             LOGE("Failed to decompress %s", filename.c_str());
                             continue;
                         }
                         signature_filename = filename;
-                        LOGI("Decompressed signature file: %s (%zu -> %zu bytes)",
-                             filename.c_str(), raw.size(), signature_file_data.size());
+                        LOGI("Decompressed signature file: %s (%u -> %zu bytes)",
+                             filename.c_str(), entry.compressed_size,
+                             signature_file_data.size());
                         break;
                     }
                     LOGE("Unsupported compression method %u for %s",
@@ -1051,13 +1153,13 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyApkIntegrity(
     std::string path(path_cstr);
     env->ReleaseStringUTFChars(apkPath, path_cstr);
 
-    std::vector<uint8_t> apk;
-    if (!read_apk_file(path, apk)) {
-        LOGE("Failed to read APK for integrity check: %s", path.c_str());
+    MappedApk apk;
+    if (!apk.map(path.c_str())) {
+        LOGE("Failed to map APK for integrity check: %s", path.c_str());
         return kIntegrityReadFailed;
     }
 
-    int result = verify_apk_integrity(apk);
+    int result = verify_apk_integrity(apk.data(), apk.size());
     if (result != kIntegrityOk) {
         LOGE("APK integrity check FAILED (code=0x%X): %s", result, path.c_str());
     }
@@ -1065,13 +1167,13 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyApkIntegrity(
 }
 
 /**
- * Computes the SHA-256 of [data] and returns it as a lowercase hex string.
+ * Computes the SHA-256 of [data] and returns it as an UPPERCASE hex string.
  *
  * Kotlin uses this instead of java.security.MessageDigest so a Java-layer
  * hook of MessageDigest (used by signature-bypass frameworks) cannot alter
- * the digest result.
+ * the digest result. Uppercase matches the Java fallback formatter ("%02X").
  *
- * @return lowercase hex SHA-256 string, or null on failure.
+ * @return uppercase hex SHA-256 string, or null on failure.
  */
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeComputeSha256Hex(
