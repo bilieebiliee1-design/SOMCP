@@ -146,7 +146,7 @@ jobs:
                         'request_changes': '需要修改',
                         'reject': '存在严重问题，需要修改'}[verdict]
           # 记录回答时间（固定使用北京时间，UTC+8）
-          beijing_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')
+          beijing_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
           lines = ['## LLM 自动审查结果', '',
                    f'**判定：{verdict_cn}**',
                    '',
@@ -316,7 +316,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             # 记录回答时间（固定使用北京时间，UTC+8）并追加到回复末尾
-            printf '\n\n---\n**回答时间：%s（北京时间）**\n' "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> /tmp/llm-reply.txt
+            printf '\n\n---\n**回答时间：%s（北京时间）**\n' "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')" >> /tmp/llm-reply.txt
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
