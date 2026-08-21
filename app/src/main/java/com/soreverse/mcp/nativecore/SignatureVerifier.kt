@@ -1,3 +1,17 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ */
+
 package com.soreverse.mcp.nativecore
 
 import android.content.Context
@@ -50,6 +64,26 @@ object SignatureVerifier {
     // JNI: implemented in cpp/signature_verify.cpp
     private external fun nativeReadApkCertificate(apkPath: String): ByteArray?
     private external fun nativeGetExpectedSignerDigest(): String
+    private external fun nativeVerifyPackageName(packageName: String): Boolean
+    private external fun nativeVerifyApkIntegrity(apkPath: String): Int
+    private external fun nativeComputeSha256Hex(data: ByteArray): String?
+
+    /**
+     * Integrity error-code bitmask returned by [verifyApkIntegrity].
+     * Mirrors the kIntegrity* constants in cpp/signature_verify.cpp.
+     */
+    object IntegrityCode {
+        const val OK = 0
+        const val READ_FAILED = 1 shl 0
+        const val EOCD_NOT_FOUND = 1 shl 1
+        const val CENTRAL_DIR_INVALID = 1 shl 2
+        const val MISSING_CLASSES = 1 shl 3
+        const val MISSING_MANIFEST = 1 shl 4
+        const val MISSING_ARSC = 1 shl 5
+        const val MISSING_SIGNATURE = 1 shl 6
+        const val MISSING_NATIVE = 1 shl 7
+        const val CRC_MISMATCH = 1 shl 8
+    }
 
     /**
      * Reads the APK signing certificate directly from the APK file, bypassing
@@ -98,21 +132,32 @@ object SignatureVerifier {
         return readApkCertificate(apkPath)?.let { certBytesToDigest(it) }
     }
 
-    /** Maps a DER X.509 certificate (as extracted by native code) to its SHA-256 hex digest. */
-    private fun certBytesToDigest(certBytes: ByteArray): String? = try {
-        val cf = CertificateFactory.getInstance("X.509")
-        val cert = cf.generateCertificate(certBytes.inputStream())
-        val digest = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
-        digest.joinToString("") { "%02X".format(it) }
-    } catch (e: Exception) {
-        AppLog.e("SignatureVerifier: certificate parsing failed", e)
-        // Fallback: compute SHA-256 of the raw DER bytes
-        try {
-            val digest = MessageDigest.getInstance("SHA-256").digest(certBytes)
+    /**
+     * Maps a DER X.509 certificate (as extracted by native code) to its
+     * SHA-256 hex digest.
+     *
+     * The digest is computed by native code (sha256_hex in signature_verify.cpp)
+     * so a Java-layer hook of MessageDigest (used by signature-bypass
+     * frameworks) cannot alter the result. Falls back to Java MessageDigest
+     * only when the native library is unavailable.
+     */
+    private fun certBytesToDigest(certBytes: ByteArray): String? {
+        nativeComputeSha256Hex(certBytes)?.let { return it }
+        return try {
+            val cf = CertificateFactory.getInstance("X.509")
+            val cert = cf.generateCertificate(certBytes.inputStream())
+            val digest = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
             digest.joinToString("") { "%02X".format(it) }
-        } catch (e2: Exception) {
-            AppLog.e("SignatureVerifier: fallback digest failed", e2)
-            null
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: certificate parsing failed", e)
+            // Fallback: compute SHA-256 of the raw DER bytes
+            try {
+                val digest = MessageDigest.getInstance("SHA-256").digest(certBytes)
+                digest.joinToString("") { "%02X".format(it) }
+            } catch (e2: Exception) {
+                AppLog.e("SignatureVerifier: fallback digest failed", e2)
+                null
+            }
         }
     }
 
@@ -162,5 +207,65 @@ object SignatureVerifier {
             AppLog.e("SignatureVerifier: APK signer MISMATCH (expected=$expected, actual=$actual)")
         }
         return match
+    }
+
+    /**
+     * Verifies that the running package name matches the value pinned inside the
+     * native library (XOR-obfuscated).
+     *
+     * The check runs in native code on the raw package name passed in, so a
+     * Java-layer hook of [Context.getPackageName] (or the ApplicationInfo
+     * source) cannot influence the comparison result.
+     *
+     * @return true if package name matches the pinned value, false otherwise
+     *         (also false when the native library is unavailable).
+     */
+    fun verifyPackageName(context: Context): Boolean {
+        if (!loaded) return false
+        val packageName = try {
+            context.packageName
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: cannot get packageName", e)
+            return false
+        }
+        return try {
+            nativeVerifyPackageName(packageName)
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: nativeVerifyPackageName failed", e)
+            false
+        }
+    }
+
+    /**
+     * Verifies APK integrity entirely in native code:
+     *   - ZIP End Of Central Directory (EOCD) structure is well formed;
+     *   - central directory entries are consistent with local headers;
+     *   - critical entries exist (classes.dex, AndroidManifest.xml,
+     *     resources.arsc, META-INF signature files, lib/<abi>/*.so);
+     *   - classes.dex stored CRC matches the CRC recorded in the central
+     *     directory (detects repackaging that deflates a replaced dex).
+     *
+     * Performed at the filesystem level, so Java-layer hooks of
+     * ZipFile / AssetManager / PackageManager cannot hide a tampered APK.
+     *
+     * @param context used to resolve the running APK path (packageCodePath)
+     * @return [IntegrityCode.OK] (0) on success, otherwise a bitmask of
+     *         [IntegrityCode] error flags; [IntegrityCode.READ_FAILED] if the
+     *         native library is unavailable or the APK cannot be read.
+     */
+    fun verifyApkIntegrity(context: Context): Int {
+        if (!loaded) return IntegrityCode.READ_FAILED
+        val apkPath = try {
+            context.packageCodePath
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: cannot get packageCodePath", e)
+            return IntegrityCode.READ_FAILED
+        }
+        return try {
+            nativeVerifyApkIntegrity(apkPath)
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: nativeVerifyApkIntegrity failed", e)
+            IntegrityCode.READ_FAILED
+        }
     }
 }
