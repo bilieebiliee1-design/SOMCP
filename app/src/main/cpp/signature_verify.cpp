@@ -291,33 +291,6 @@ static const DerNode* find_der_child(const DerNode* node, uint8_t tag) {
     return nullptr;
 }
 
-// Find a child node by tag at direct children only
-static const DerNode* find_direct_child(const DerNode* node, uint8_t tag) {
-    if (!node) return nullptr;
-    for (const auto& child : node->children) {
-        if (child.tag == tag) return &child;
-    }
-    return nullptr;
-}
-
-// Find a child node by walking a tag path
-static const DerNode* find_der_path(const DerNode* node, std::initializer_list<uint8_t> tags) {
-    const DerNode* current = node;
-    for (uint8_t tag : tags) {
-        if (!current) return nullptr;
-        bool found = false;
-        for (const auto& child : current->children) {
-            if (child.tag == tag) {
-                current = &child;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return nullptr;
-    }
-    return current;
-}
-
 // Extract X.509 certificate from a PKCS7 SignedData (.RSA/.DSA/.EC file)
 // The .RSA file is a DER-encoded PKCS7 ContentInfo containing SignedData.
 // The certificates are in the "certificates" field [0] EXPLICIT SET OF Certificate.
@@ -872,8 +845,14 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
             has_native = true;
         }
 
-        cd_pos += sizeof(ZipCentralDirEntry) + entry.filename_length +
-                  entry.extra_length + entry.comment_length;
+        // Advance to the next central-directory entry. Compute in 64-bit and
+        // stop as soon as the next entry would leave the file, so a hostile
+        // APK cannot make cd_pos wrap around on 32-bit ABIs.
+        uint64_t next_cd =
+            static_cast<uint64_t>(cd_pos) + sizeof(ZipCentralDirEntry) +
+            entry.filename_length + entry.extra_length + entry.comment_length;
+        if (next_cd > apk_size) break;
+        cd_pos = static_cast<size_t>(next_cd);
     }
 
     int result = kIntegrityOk;
@@ -1084,8 +1063,14 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
             }
         }
 
-        cd_pos += sizeof(ZipCentralDirEntry) + entry.filename_length +
-                  entry.extra_length + entry.comment_length;
+        // Advance to the next central-directory entry. Compute in 64-bit and
+        // stop as soon as the next entry would leave the file, so a hostile
+        // APK cannot make cd_pos wrap around on 32-bit ABIs.
+        uint64_t next_cd =
+            static_cast<uint64_t>(cd_pos) + sizeof(ZipCentralDirEntry) +
+            entry.filename_length + entry.extra_length + entry.comment_length;
+        if (next_cd > apk_size) break;
+        cd_pos = static_cast<size_t>(next_cd);
     }
 
     if (signature_file_data.empty()) {
