@@ -133,6 +133,8 @@ jobs:
               printf '该 issue 所关联的 PR 已合并，感谢反馈！\n' > "/tmp/close-${N}.md"
               echo "::warning::LLM call failed for issue #$N; used fallback text."
             fi
+            # 记录回答时间（固定使用北京时间，UTC+8）并追加到关闭说明末尾
+            printf '\n\n---\n**回答时间：%s（北京时间）**\n' "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')" >> "/tmp/close-${N}.md"
           done
           echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_OUTPUT"
 
