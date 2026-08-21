@@ -26,8 +26,8 @@ import com.soreverse.mcp.mcp.ToolContext
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -47,21 +47,10 @@ class DynamicAnalysisService(private val appContext: Context) {
     val partsDraft: StateFlow<List<RikkaPart>> = _partsDraft
 
     /** Blocking entry used by the MCP dynamic_analyze_ai tool (heavy tool). */
-    fun analyzeSync(
-        dynamicRun: String,
-        path: String,
-        settings: SettingsStore,
-        zh: Boolean,
-        request: String
-    ): Result<String> = runBlocking(Dispatchers.IO) { analyze(dynamicRun, path, settings, zh, request) }
+    fun analyzeSync(dynamicRun: String, path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> =
+        runBlocking(Dispatchers.IO) { analyze(dynamicRun, path, settings, zh, request) }
 
-    suspend fun analyze(
-        dynamicRun: String,
-        path: String,
-        settings: SettingsStore,
-        zh: Boolean,
-        request: String
-    ): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun analyze(dynamicRun: String, path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             requireConfigured(settings)
             emit(DynamicAnalysisEvent.Kind.STATUS, if (zh) "正在初始化动态分析 AI 会话…" else "Initializing dynamic-analysis AI session…")
@@ -185,11 +174,15 @@ Requirements:
             val key = keys.next().trim()
             if (key.isBlank()) continue
             val value = body.opt(key)
-            properties[key] = runCatching { json.parseToJsonElement(when (value) {
-                null, org.json.JSONObject.NULL -> "null"
-                is String -> org.json.JSONObject.quote(value)
-                else -> value.toString()
-            }) }.getOrElse { kotlinx.serialization.json.JsonPrimitive(value?.toString().orEmpty()) }
+            properties[key] = runCatching {
+                json.parseToJsonElement(
+                    when (value) {
+                        null, org.json.JSONObject.NULL -> "null"
+                        is String -> org.json.JSONObject.quote(value)
+                        else -> value.toString()
+                    }
+                )
+            }.getOrElse { kotlinx.serialization.json.JsonPrimitive(value?.toString().orEmpty()) }
         }
         return properties
     }
