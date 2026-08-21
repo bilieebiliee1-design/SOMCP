@@ -315,6 +315,8 @@ jobs:
             echo "::warning::LLM returned an empty reply; skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
+            # 记录回答时间（固定使用北京时间，UTC+8）并追加到回复末尾
+            printf '\n\n---\n**回答时间：%s（北京时间）**\n' "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> /tmp/llm-reply.txt
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
