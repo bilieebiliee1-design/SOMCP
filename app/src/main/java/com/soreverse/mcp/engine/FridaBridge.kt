@@ -303,18 +303,29 @@ internal class FridaBridge(private val context: Context) {
                     .put("operation", operation)
                     .put("params", params)
             )
-            collectResponse(session)
+            collectResponse(session, operation)
         }
     }
 
-    private fun collectResponse(session: FridaSession): JSONObject {
-        // Reads a single framed response published on the agent result channel.
-        val text = FridaTransport.readMessage(session.connection)
-        val json = runCatching { JSONObject(text) }.getOrNull() ?: JSONObject().put("raw", text)
-        if (json.optString("error").isNotBlank()) {
-            throw IllegalStateException("Frida agent error: ${json.optString("error")}")
+    private fun collectResponse(session: FridaSession, operation: String): JSONObject {
+        // The link is half-duplex request/response, but the agent may push
+        // asynchronous frames (log / error / agent events) at any time. Skip
+        // non-`rpc` frames until the matching rpc response arrives, so stray
+        // async traffic cannot misalign or break the framing.
+        while (true) {
+            val text = FridaTransport.readMessage(session.connection)
+            val json = runCatching { JSONObject(text) }.getOrNull()
+                ?: JSONObject().put("raw", text)
+            if (json.optString("type") != "rpc") {
+                session.collectedMessages.putIfAbsent(operation, JSONArray())
+                session.collectedMessages[operation]?.put(json)
+                continue
+            }
+            if (json.optString("error").isNotBlank()) {
+                throw IllegalStateException("Frida agent error: ${json.optString("error")}")
+            }
+            return json
         }
-        return json
     }
 
     // ── Script / payload transfer ──
@@ -341,6 +352,10 @@ internal class FridaBridge(private val context: Context) {
         // capture registers, optional memory dump, send events back over rpc.
         return """
         'use strict';
+        // Module-level hook event buffer so events survive across RPC frames.
+        const __events = [];
+        let __lastContext = null;
+
         rpc.exports = {
             hookFunction(functionName) {
                 const mod = Process.findModuleByName(${moduleName.asJsLiteral()});
@@ -348,18 +363,32 @@ internal class FridaBridge(private val context: Context) {
                 const addr = Module.getExportByName(${moduleName.asJsLiteral()}, functionName) ||
                              Module.getGlobalExportByName(functionName);
                 if (!addr) return { error: 'export-not-found' };
-                const events = [];
                 Interceptor.attach(addr, {
-                    onEnter(args) { events.push({ kind: 'enter', args: [].slice.call(args, 0, 8) }); },
-                    onLeave(retval) { events.push({ kind: 'leave', retval: retval.toInt32() }); }
+                    onEnter(args) {
+                        __lastContext = this.context;
+                        __events.push({
+                            kind: 'enter',
+                            args: [].slice.call(args, 0, 8).map(function (a) {
+                                return a && a.toString ? a.toString() : String(a);
+                            })
+                        });
+                    },
+                    onLeave(retval) {
+                        __events.push({ kind: 'leave', retval: retval.toInt32() });
+                    }
                 });
                 return { hook: 'attached', at: addr.toString() };
+            },
+            getEvents() {
+                const snapshot = __events.slice();
+                __events.length = 0;
+                return { events: snapshot };
             },
             callFunction(functionName, argsJson) {
                 const addr = Module.getExportByName(${moduleName.asJsLiteral()}, functionName);
                 if (!addr) return { error: 'export-not-found' };
                 const args = JSON.parse(argsJson);
-                const fn = new NativeFunction(addr, 'int', args.map(a => 'int'));
+                const fn = new NativeFunction(addr, 'int', args.map(function (a) { return 'int'; }));
                 return { retval: fn.apply(null, args) };
             },
             readMemory(ptrStr, size) {
@@ -367,8 +396,15 @@ internal class FridaBridge(private val context: Context) {
                 return { hex: hexdump(p, { length: size, ansi: false }).slice(0, size * 3) };
             },
             registers() {
-                this.regs = Thread.backtrace(this.context, Backtracer.ACCURATE);
-                return { backtrace: this.regs.map(a => a.toString()) };
+                if (__lastContext) {
+                    const c = __lastContext;
+                    const bt = Thread.backtrace(c, Backtracer.ACCURATE);
+                    return {
+                        backtrace: bt.map(function (a) { return a.toString(); }),
+                        $ret: ${if (retaddr) "c.retAddress ? c.retAddress.toString() : c.pc.toString()" else "null"}
+                    };
+                }
+                return { error: 'no-context-captured-yet' };
             }
         };
         """.trimIndent()
