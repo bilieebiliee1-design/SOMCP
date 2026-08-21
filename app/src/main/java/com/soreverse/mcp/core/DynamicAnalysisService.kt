@@ -81,7 +81,8 @@ class DynamicAnalysisService(private val appContext: Context) {
                 if (report.isNotEmpty()) _reportDraft.value = report
                 val reasoning = parts.filterIsInstance<RikkaPart.Reasoning>().joinToString("") { it.text }
                 if (reasoning.length > lastReasoning.length) {
-                    emit(DynamicAnalysisEvent.Kind.THINKING, reasoning.drop(lastReasoning.length))
+                    // onParts is a non-suspend callback, so use tryEmit instead of suspend emit()
+                    _events.tryEmit(DynamicAnalysisEvent(DynamicAnalysisEvent.Kind.THINKING, reasoning.drop(lastReasoning.length)))
                     lastReasoning = reasoning
                 }
             }
