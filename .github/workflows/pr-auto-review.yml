@@ -19,6 +19,8 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  checks: read
   issues: write
   pull-requests: write
 
@@ -55,6 +57,107 @@ jobs:
           head -c 250000 /tmp/pr.diff > /tmp/pr.diff.trunc
           echo "diff_bytes=$(wc -c < /tmp/pr.diff.trunc)" >> "$GITHUB_OUTPUT"
 
+      # Waits for the PR's own CI (test-v7.yml) to finish on the head
+      # commit, then captures the check-run conclusions so the LLM review can
+      # factor CI results into its verdict. Without this, the review is based
+      # only on static code reading and ignores CI failures.
+      - name: Wait for CI checks and capture results
+        id: ci
+        if: steps.diff.outputs.fetch_ok == 'true'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          RUN_ID: ${{ github.run_id }}
+        timeout-minutes: 90
+        run: |
+          set -euo pipefail
+          PERIOD=30
+          MAX_WAIT=5400   # 90 minutes
+          elapsed=0
+          ci_found=false
+          all_done=false
+          # This workflow's own run creates check-runs on the head commit
+          # (each job's id equals its check-run id). Resolve them once via
+          # github.run_id and exclude by id — precise, and safe against job
+          # renames, matrix expansion, and workflow renames. This prevents the
+          # workflow from blocking on its own in-progress check runs.
+          if ! JOBS=$(curl -sS -f -L \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" 2>/dev/null); then
+            echo "::warning::Failed to resolve this run's check-runs; cannot wait for CI safely. Skipping CI wait."
+            echo "ci_state=no_ci" >> "$GITHUB_OUTPUT"
+            printf '无法解析本工作流自身的 check-run，已跳过 CI 等待。\n' > /tmp/ci-results.txt
+            printf '0' > /tmp/ci-failing.txt
+            exit 0
+          fi
+          SELF_IDS=$(printf '%s' "$JOBS" | jq -c '[.jobs[].id]')
+
+          # CI is only configured for the main branch (test-v7.yml); PRs
+          # targeting other branches have no CI to wait on.
+          if [ "${BASE_REF:-}" != "main" ]; then
+            echo "::notice::PR targets $BASE_REF (CI only runs on main); skipping CI wait."
+            echo "ci_state=no_ci" >> "$GITHUB_OUTPUT"
+            printf '该 PR 目标分支为 %s，未配置 CI 检查（仅 main 分支运行 CI）。\n' "${BASE_REF:-?}" > /tmp/ci-results.txt
+            exit 0
+          fi
+
+          while (( elapsed < MAX_WAIT )); do
+            if ! resp=$(curl -sS -f -L \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" 2>/dev/null); then
+              echo "::warning::Failed to query CI check-runs (elapsed ${elapsed}s); retrying."
+              sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
+            fi
+            count=$(printf '%s' "$resp" | jq -r '.total_count // 0')
+            if [ "$count" -eq 0 ]; then
+              echo "::notice::No CI check-runs yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
+              sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
+            fi
+            ci_found=true
+            incomplete=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+              '.check_runs[]? | select((.id as $i | $self | index($i) | not) and .status != "completed") | .name' | wc -l)
+            if [ "$incomplete" -eq 0 ]; then
+              all_done=true
+              break
+            fi
+            echo "::notice::CI still running (${incomplete} check(s) pending); elapsed ${elapsed}s."
+            sleep "$PERIOD"; elapsed=$((elapsed+PERIOD))
+          done
+
+          if [ "$ci_found" = false ]; then
+            echo "ci_state=no_ci" >> "$GITHUB_OUTPUT"
+            printf '在等待窗口内未检测到针对提交 %s 的 CI 检查。\n' "$HEAD_SHA" > /tmp/ci-results.txt
+            printf '0' > /tmp/ci-failing.txt
+            exit 0
+          fi
+          if [ "$all_done" = false ]; then
+            echo "ci_state=timeout" >> "$GITHUB_OUTPUT"
+            printf '等待 CI 超过 %s 分钟仍未全部完成，未获取最终结论。\n' "$((MAX_WAIT/60))" > /tmp/ci-results.txt
+            printf '0' > /tmp/ci-failing.txt
+            exit 0
+          fi
+
+          {
+            printf '提交 %s 的 CI 检查结果（已等待 CI 完成后读取）：\n' "$HEAD_SHA"
+            printf '共 %s 项。\n' "$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" '[.check_runs[]? | select(.id as $i | $self | index($i) | not)] | length')"
+            printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+              '.check_runs[]? | select(.id as $i | $self | index($i) | not) | "  - " + .name + "：" + ((.conclusion // .status) // "unknown")'
+          } > /tmp/ci-results.txt
+
+          failing=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+            '[.check_runs[]? | select(.id as $i | $self | index($i) | not) |
+              select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral" and .conclusion != "cancelled")] | length')
+          printf '%s' "$failing" > /tmp/ci-failing.txt
+          if [ "$failing" -gt 0 ]; then
+            echo "ci_state=fail" >> "$GITHUB_OUTPUT"
+          else
+            echo "ci_state=pass" >> "$GITHUB_OUTPUT"
+          fi
+          echo "ci_failing=$failing" >> "$GITHUB_OUTPUT"
+
       - name: Run LLM code review
         id: review
         if: steps.diff.outputs.fetch_ok == 'true'
@@ -63,6 +166,8 @@ jobs:
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
+          CI_STATE: ${{ steps.ci.outputs.ci_state }}
+          CI_FAILING: ${{ steps.ci.outputs.ci_failing }}
           # All PR-provided content is untrusted data (review target only).
           SYSTEM_PROMPT: |
             你是开源 Android 应用 SOMCP（Kotlin + C++/JNI 逆向分析工具）的资深代码审查员，负责审查 GitHub Pull Request。
@@ -72,7 +177,10 @@ jobs:
             3) 资源与内存问题（内存泄漏、未释放、并发竞态等）；
             4) 对项目架构（Android Kotlin + 原生 C++ JNI）的契合度；
             5) GPL-3.0-only 合规：新增源码文件必须带 GPL 许可证头，LICENSE 文件不可删除或修改；
-            6) 代码风格与可维护性。
+            6) 代码风格与可维护性；
+            7) CI 检查结果：审查信息末尾会附上该 PR 的 CI 检查结果，请结合 CI 结果综合判定——
+               若 CI 存在失败项，务必在 summary 与 issues 中指出，并更倾向于 request_changes 而非 approve；
+               若 CI 全部通过，可在 summary 中简要说明。
             必须只输出一个 JSON 对象（不要 Markdown 代码块，不要任何多余文字），格式：
             {"verdict": "approve" 或 "request_changes" 或 "reject", "summary": "总体评价（简体中文，2-4 句）", "issues": [{"severity": "critical" 或 "warning" 或 "info", "file": "受影响文件路径", "line": 行号(整数，未知填0), "comment": "问题描述（简体中文）"}]}
             判定规则：
@@ -94,6 +202,12 @@ jobs:
             printf '\nPR 描述:\n%s\n' "$PR_BODY"
             printf '\n代码变更（diff）:\n'
             cat /tmp/pr.diff.trunc
+            printf '\nCI 检查结果:\n'
+            if [ -f /tmp/ci-results.txt ]; then
+              cat /tmp/ci-results.txt
+            else
+              printf '（未获取到 CI 检查结果）\n'
+            fi
           } > /tmp/llm-input.txt
           # Endpoint policy: Tencent Copilot uses /v2/chat/completions and
           # needs a User-Agent header; DeepSeek serves /chat/completions
@@ -122,7 +236,7 @@ jobs:
             exit 0
           fi
           python3 - <<'PYEOF'
-          import json, re, sys
+          import json, re, sys, os
           from datetime import datetime, timezone, timedelta
           raw = open('/tmp/llm-review-raw.txt', encoding='utf-8').read()
           # Strip markdown fences if the model wrapped the JSON.
@@ -142,6 +256,24 @@ jobs:
           verdict = data['verdict']
           summary = str(data.get('summary') or '').strip()
           issues = data.get('issues') or []
+
+          # CI-based gating: never APPROVE while CI is failing. This overrides
+          # the LLM verdict so a PR cannot get an approve review while its own
+          # CI checks are red, regardless of how the model judged the diff.
+          ci_state = (os.environ.get('CI_STATE') or '').strip()
+          try:
+              ci_failing = int(os.environ.get('CI_FAILING') or '0')
+          except Exception:
+              ci_failing = 0
+          if ci_state == 'fail' and verdict == 'approve':
+              verdict = 'request_changes'
+              issues = list(issues) + [{'severity': 'critical', 'file': '', 'line': 0,
+                  'comment': 'CI 检查存在失败项（共 %d 项未通过），因此不批准合并，请先修复 CI 失败项。' % ci_failing}]
+              if summary:
+                  summary = summary + ' 此外，该 PR 的 CI 检查未通过，本次判定已改为“需要修改”，修复 CI 后再行合并。'
+              else:
+                  summary = '该 PR 的 CI 检查未通过，本次判定为“需要修改”，请先修复 CI 失败项。'
+
           verdict_cn = {'approve': '通过（可以合并）',
                         'request_changes': '需要修改',
                         'reject': '存在严重问题，需要修改'}[verdict]
