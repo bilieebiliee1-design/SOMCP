@@ -163,6 +163,19 @@ struct ZipLocalFileHeader {
 #pragma pack(pop)
 
 // ---------------------------------------------------------------------------
+// Overflow-safe bounds helper
+//
+// ZIP offsets/sizes come straight from the file and are 32-bit. On 32-bit
+// ABIs a naive `a + b > cap` can wrap around (e.g. local_header_offset near
+// 0xFFFFFFFF) and bypass the boundary check, leading to an out-of-bounds read
+// (Segfault) on a hostile APK. Always compare in 64-bit.
+// ---------------------------------------------------------------------------
+static inline bool sum_exceeds(size_t a, size_t b, size_t cap) {
+    return static_cast<uint64_t>(a) + static_cast<uint64_t>(b) >
+           static_cast<uint64_t>(cap);
+}
+
+// ---------------------------------------------------------------------------
 // Minimal DER/PKCS7 parser
 // ---------------------------------------------------------------------------
 struct DerNode {
@@ -194,7 +207,9 @@ static DerNode parse_der(const uint8_t* data, size_t offset, size_t end) {
         length = data[pos++];
     }
 
-    if (pos + length > end) {
+    // Clamp hostile long-form lengths (up to 0xFFFFFFFF) without overflow:
+    // compare against the remaining space directly, never `pos + length`.
+    if (length > end - pos) {
         length = end - pos;
     }
 
@@ -770,7 +785,7 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
     bool found = false;
     for (size_t i = eocd_pos; i >= search_start && i < apk_size; i--) {
         ZipEocd e;
-        if (i + sizeof(ZipEocd) > apk_size) continue;
+        if (sum_exceeds(i, sizeof(ZipEocd), apk_size)) continue;
         std::memcpy(&e, apk + i, sizeof(ZipEocd));
         if (e.signature == 0x06054b50) { eocd_pos = i; found = true; break; }
         if (i == 0) break;
@@ -790,12 +805,12 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
 
     size_t cd_pos = eocd.central_dir_offset;
     for (uint16_t i = 0;
-         i < eocd.total_entries && cd_pos + sizeof(ZipCentralDirEntry) <= apk_size;
+         i < eocd.total_entries && !sum_exceeds(cd_pos, sizeof(ZipCentralDirEntry), apk_size);
          i++) {
         ZipCentralDirEntry entry;
         std::memcpy(&entry, apk + cd_pos, sizeof(ZipCentralDirEntry));
         if (entry.signature != 0x02014b50) break;
-        if (cd_pos + sizeof(ZipCentralDirEntry) + entry.filename_length > apk_size) break;
+        if (sum_exceeds(cd_pos, sizeof(ZipCentralDirEntry) + entry.filename_length, apk_size)) break;
 
         std::string name(
             reinterpret_cast<const char*>(apk + cd_pos + sizeof(ZipCentralDirEntry)),
@@ -808,7 +823,7 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
             // ZIP structure itself is still intact. Uses bounded memory: stored
             // payloads are crc'd in place, deflate payloads are streamed.
             size_t local_offset = entry.local_header_offset;
-            if (local_offset + sizeof(ZipLocalFileHeader) > apk_size) {
+            if (sum_exceeds(local_offset, sizeof(ZipLocalFileHeader), apk_size)) {
                 crc_fail = true;
             } else {
                 ZipLocalFileHeader local;
@@ -816,23 +831,28 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
                 if (local.signature != 0x04034b50) {
                     crc_fail = true;
                 } else {
-                    size_t data_offset = local_offset + sizeof(ZipLocalFileHeader) +
-                                         local.filename_length + local.extra_length;
-                    if (data_offset + entry.compressed_size > apk_size) {
+                    uint64_t data_off = static_cast<uint64_t>(local_offset) +
+                                        sizeof(ZipLocalFileHeader) +
+                                        local.filename_length + local.extra_length;
+                    if (data_off > apk_size ||
+                        data_off + entry.compressed_size > apk_size) {
                         crc_fail = true;
-                    } else if (entry.compression == 0) {
-                        uLong actual = crc32(0L, Z_NULL, 0);
-                        actual = crc32(actual, apk + data_offset,
-                                       static_cast<uInt>(entry.compressed_size));
-                        if (static_cast<uint32_t>(actual) != entry.crc32) crc_fail = true;
-                    } else if (entry.compression == 8) {
-                        if (!crc32_matches_inflated(
-                                apk + data_offset, entry.compressed_size,
-                                entry.uncompressed_size, entry.crc32)) {
-                            crc_fail = true;
-                        }
                     } else {
-                        crc_fail = true; // unsupported compression for classes.dex
+                        size_t data_offset = static_cast<size_t>(data_off);
+                        if (entry.compression == 0) {
+                            uLong actual = crc32(0L, Z_NULL, 0);
+                            actual = crc32(actual, apk + data_offset,
+                                           static_cast<uInt>(entry.compressed_size));
+                            if (static_cast<uint32_t>(actual) != entry.crc32) crc_fail = true;
+                        } else if (entry.compression == 8) {
+                            if (!crc32_matches_inflated(
+                                    apk + data_offset, entry.compressed_size,
+                                    entry.uncompressed_size, entry.crc32)) {
+                                crc_fail = true;
+                            }
+                        } else {
+                            crc_fail = true; // unsupported compression for classes.dex
+                        }
                     }
                 }
             }
@@ -932,7 +952,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     for (size_t i = eocd_pos; i >= search_start && i < apk_size; i--) {
         ZipEocd eocd;
-        if (i + sizeof(ZipEocd) > apk_size) continue;
+        if (sum_exceeds(i, sizeof(ZipEocd), apk_size)) continue;
         std::memcpy(&eocd, apk_data + i, sizeof(ZipEocd));
         if (eocd.signature == 0x06054b50) {
             eocd_pos = i;
@@ -952,7 +972,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
     LOGI("Central dir: offset=%u, size=%u, entries=%u",
          eocd.central_dir_offset, eocd.central_dir_size, eocd.total_entries);
 
-    if (eocd.central_dir_offset + eocd.central_dir_size > apk_size) {
+    if (sum_exceeds(eocd.central_dir_offset, eocd.central_dir_size, apk_size)) {
         LOGE("Central directory exceeds file bounds");
         return nullptr;
     }
@@ -965,7 +985,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     size_t cd_pos = eocd.central_dir_offset;
     for (uint16_t i = 0; i < eocd.total_entries; i++) {
-        if (cd_pos + sizeof(ZipCentralDirEntry) > apk_size) {
+        if (sum_exceeds(cd_pos, sizeof(ZipCentralDirEntry), apk_size)) {
             LOGE("Central directory entry %d out of bounds", i);
             break;
         }
@@ -978,7 +998,8 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
             break;
         }
 
-        if (cd_pos + sizeof(ZipCentralDirEntry) + entry.filename_length > apk_size) {
+        if (sum_exceeds(cd_pos, sizeof(ZipCentralDirEntry) + entry.filename_length,
+                        apk_size)) {
             break;
         }
 
@@ -1005,7 +1026,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
                 // Read the file data from the local file header
                 size_t local_offset = entry.local_header_offset;
-                if (local_offset + sizeof(ZipLocalFileHeader) > apk_size) {
+                if (sum_exceeds(local_offset, sizeof(ZipLocalFileHeader), apk_size)) {
                     LOGE("Local header offset out of bounds for %s", filename.c_str());
                     continue;
                 }
@@ -1018,13 +1039,15 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
                     continue;
                 }
 
-                size_t data_offset = local_offset + sizeof(ZipLocalFileHeader) +
-                                     local.filename_length + local.extra_length;
-
-                if (data_offset + entry.compressed_size > apk_size) {
+                uint64_t data_off = static_cast<uint64_t>(local_offset) +
+                                    sizeof(ZipLocalFileHeader) +
+                                    local.filename_length + local.extra_length;
+                if (data_off > apk_size ||
+                    data_off + entry.compressed_size > apk_size) {
                     LOGE("File data out of bounds for %s", filename.c_str());
                     continue;
                 }
+                size_t data_offset = static_cast<size_t>(data_off);
 
                 // For META-INF signature files, compression is typically 0 (stored)
                 if (entry.compression == 0) {
