@@ -55,12 +55,7 @@ internal data class FridaTarget(
     val readTimeoutMillis: Long = 15_000L
 )
 
-internal data class FridaConnection(
-    val target: FridaTarget,
-    val socket: Socket,
-    val input: BufferedInputStream,
-    val output: BufferedOutputStream
-)
+internal data class FridaConnection(val target: FridaTarget, val socket: Socket, val input: BufferedInputStream, val output: BufferedOutputStream)
 
 /** Minimal wire framing for the Frida host transport. See NOTE above. */
 internal object FridaTransport {
@@ -107,13 +102,7 @@ internal object FridaTransport {
  * target process. Holds the negotiated process/script handles and the hook /
  * memory operations exposed to the parent engine.
  */
-internal class FridaSession(
-    val id: String,
-    val target: FridaTarget,
-    val connection: FridaConnection,
-    val mode: String,
-    val targetIdentifier: String
-) {
+internal class FridaSession(val id: String, val target: FridaTarget, val connection: FridaConnection, val mode: String, val targetIdentifier: String) {
     var processId: Int = -1
     var scriptLoaded: Boolean = false
     val collectedMessages = ConcurrentHashMap<String, JSONArray>()
@@ -166,7 +155,9 @@ internal class FridaBridge(private val context: Context) {
 
     fun unavailableReason(target: FridaTarget = FridaTarget()): String {
         if (!available(target)) {
-            return "no frida daemon reachable at ${target.host}:${target.port} — install and start frida-server (or use frida-gadget) on the device, then set the target host/port via the dynamic_analyze tool arguments"
+            return "no frida daemon reachable at ${target.host}:${target.port} — " +
+                "install and start frida-server (or use frida-gadget) on the device, " +
+                "then set the target host/port via the dynamic_analyze tool arguments"
         }
         return ""
     }
@@ -193,12 +184,7 @@ internal class FridaBridge(private val context: Context) {
 
     fun getSession(id: String): FridaSession? = sessions[id]
 
-    fun createSession(
-        target: FridaTarget,
-        mode: String,
-        targetIdentifier: String,
-        script: String
-    ): FridaSession {
+    fun createSession(target: FridaTarget, mode: String, targetIdentifier: String, script: String): FridaSession {
         val connection = connect(target)
         try {
             // Negotiate the daemon hello and establish the injected script.
@@ -233,9 +219,13 @@ internal class FridaBridge(private val context: Context) {
         val session = sessions[sessionId]
             ?: throw IllegalStateException("Frida session $sessionId not found")
         if (session.closed) throw IllegalStateException("Frida session $sessionId is closed")
-        sendScriptPayload(session.connection, "rpc", JSONObject()
-            .put("operation", operation)
-            .put("params", params))
+        sendScriptPayload(
+            session.connection,
+            "rpc",
+            JSONObject()
+                .put("operation", operation)
+                .put("params", params)
+        )
         val response = collectResponse(session)
         return response
     }
@@ -258,10 +248,13 @@ internal class FridaBridge(private val context: Context) {
         }
 
         fun sendScriptPayload(connection: FridaConnection, type: String, payload: JSONObject) {
-            FridaTransport.writeMessage(connection, JSONObject()
-                .put("type", type)
-                .put("payload", payload)
-                .toString())
+            FridaTransport.writeMessage(
+                connection,
+                JSONObject()
+                    .put("type", type)
+                    .put("payload", payload)
+                    .toString()
+            )
         }
     }
 
