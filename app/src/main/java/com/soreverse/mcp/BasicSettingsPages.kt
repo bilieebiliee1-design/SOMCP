@@ -182,6 +182,7 @@ internal fun SurfacePanel(modifier: Modifier = Modifier, content: @Composable Co
 internal fun SettingsKeepAlivePage(t: UiText, settings: SettingsStore) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var floating by remember { mutableStateOf(settings.floatingEnabled) }
+    var edgeHide by remember { mutableStateOf(settings.floatingEdgeHide) }
     var wakeLock by remember { mutableStateOf(settings.wakeLockEnabled) }
     var bootAutoStart by remember { mutableStateOf(settings.bootAutoStart) }
     PageScroll {
@@ -202,6 +203,15 @@ internal fun SettingsKeepAlivePage(t: UiText, settings: SettingsStore) {
                 }
                 floating = it
                 settings.floatingEnabled = it
+                com.soreverse.mcp.service.McpForegroundService.refreshFloating(context)
+            }
+            GroupDivider()
+            ToggleRow(
+                if (t.zh) "浮窗贴边隐藏" else "Dock-hide floating bubble",
+                edgeHide
+            ) {
+                edgeHide = it
+                settings.floatingEdgeHide = it
                 com.soreverse.mcp.service.McpForegroundService.refreshFloating(context)
             }
             GroupDivider()
