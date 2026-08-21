@@ -47,10 +47,20 @@ jobs:
             } catch (e) {
               console.log('listCommits failed (ignored): ' + e.message);
             }
-            // Match "fixes/closes/resolves #N" style references (same
-            // semantics GitHub itself uses to auto-close issues).
-            const re = /(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)[:\s]*#(\d+)/gi;
-            const issues = [...new Set([...texts.join('\n').matchAll(re)].map(m => Number(m[1])))];
+            // Match "fixes/closes/resolves #N" style references, plus the
+            // "fixes .../issues/N" full-URL form, mirroring the semantics
+            // GitHub itself uses to auto-close issues.
+            const all = texts.join('\n');
+            const reHash = /(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)[:\s]*#\s*(\d+)/gi;
+            const reUrl = new RegExp(
+              '(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)[^\\n]*?(?:github\\.com/)?' +
+              owner + '/' + repo + '/issues/(\\d+)',
+              'gi'
+            );
+            const issues = [...new Set([
+              ...[...all.matchAll(reHash)].map(m => Number(m[1])),
+              ...[...all.matchAll(reUrl)].map(m => Number(m[1]))
+            ])].filter(Boolean);
             fs.writeFileSync('/tmp/linked_issues.txt', issues.join(' '));
             console.log('Linked issues: ' + (issues.join(' ') || '(none)'));
 
