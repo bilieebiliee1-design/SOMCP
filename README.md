@@ -128,7 +128,34 @@ lief_api(action=capabilities|parse|list|patch_address|add_export|remove_symbol|b
 unidbg_api(action=capabilities|status|call|dump)
 xanso_api(action=capabilities|status|fix_sections)
 flutter_blutter(action=inspect|analyze|status|result|cancel|packages|prune)
+dynamic_api(action=capabilities|dispatch|status|analyze)
+dynamic_analyze_ai(evidence=...|function=...|request=...)
 ```
+
+## 动态分析（手动加载到内存 → AI 分析）
+
+SOMCP 提供一套**独立**的动态分析工具流程，与静态 deep-analysis 循环彼此分离，把「把 `.so` 手动加载到内存 → 执行 → 采集证据 → 交给 AI 分析」串成一条可被 MCP 调用的链路。核心入口是两个工具：
+
+```text
+dynamic_api(action=capabilities|dispatch|status|analyze, op=unidbg_session_open|unidbg_session_call|unidbg_session_registers|frida_hook|frida_call|analyze, backend=unidbg|frida, targetFunction=...)
+dynamic_analyze_ai(function=... | evidence=...)
+```
+
+两个后端共用同一套编排层 `dynamicDispatch`：
+
+- **unidbg（模拟）**：`unidbg_session_open` 把选中的 `.so` 映射进模拟内存，`unidbg_session_call` 解析指定导出函数并执行，随后采集寄存器和目标地址的内存 dump。无需真机，适合快速验证目标函数行为。
+- **frida（真机 hook）**：`FridaBridge` 以纯 Kotlin 实现 `frida-server`/`frida-gadget` 的 TCP 协议客户端，`frida_hook` 通过 JS agent（Interceptor/Module）挂钩目标函数捕获入参与返回，`frida_call` 触发调用并回读 hook 结果。**注意**：`frida-server`/`frida-gadget` 不随 APK 内置，需在已 root 设备上单独安装并在推开时先对目标进程 `ptrace`/注入；未就绪时 `dynamic_api(action=capabilities)` 的 `status.fridaAvailable` 会如实标注 `false`，不会伪装成可用。
+
+`dynamic_analyze_ai` 复用 `RikkaAgentEngine`，把 `dynamicRun` 证据（寄存器现场、内存 dump、hook 记录、调用返回）喂给 AI 生成结构化动态分析报告：
+
+```text
+dynamic_api(action=capabilities)        # 查看 backends.dynamic，确认 unidbg/frida 可用性
+dynamic_api(action=dispatch, backend=unidbg, op=unidbg_session_open, targetFunction="JNI_OnLoad")
+dynamic_api(action=dispatch, backend=unidbg, op=unidbg_session_call, targetFunction="JNI_OnLoad")
+dynamic_analyze_ai(function="JNI_OnLoad")  # 或直接传入上一步 evidence
+```
+
+`meta_info(action=capabilities)` 的 `backends.dynamic` 是动态分析的能力真实面来源，明确列出 unidbg/frida 的支持状态与限制。
 
 `rizin_api(action=command)` 提供受控 Rizin raw command 通道，用于覆盖大量 Rizin 命令式底层能力；为安全起见，写入、文件、shell 等危险命令会被阻止。
 
