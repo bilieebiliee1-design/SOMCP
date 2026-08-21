@@ -753,6 +753,13 @@ enum : int {
     kIntegrityCrcMismatch       = 1 << 8, // classes.dex content CRC mismatch
 };
 
+// The bundled native library name is librz_native.so: CMakeLists.txt declares
+// "add_library(rz_native SHARED ...)" (which yields librz_native.so), and the
+// Kotlin side loads it via System.loadLibrary("rz_native"). The integrity
+// check below therefore verifies that this exact library ships inside the APK
+// under lib/<abi>/, so a repackaged build that strips the native verification
+// code is rejected.
+
 static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
     if (!apk || apk_size < sizeof(ZipEocd)) return kIntegrityReadFailed;
 
