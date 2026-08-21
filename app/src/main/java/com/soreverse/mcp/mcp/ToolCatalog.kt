@@ -1432,7 +1432,25 @@ object ToolCatalog {
                     if (args.has("dumpSize")) put("dumpSize", args.optInt("dumpSize"))
                     args.optString("dumpAddress").takeIf(String::isNotBlank)?.let { put("dumpAddress", it) }
                 }
-                ctx.engine.dynamicDispatch(workspaceId, editSessionId, "analyze", "", JSONArray().put(params)).toString()
+                val dispatch = ctx.engine.dynamicDispatch(
+                    workspaceId,
+                    editSessionId,
+                    "analyze",
+                    "",
+                    JSONArray().put(params)
+                )
+                // Intercept failed dispatch up front so its error JSON is never
+                // misread as valid evidence by the AI layer.
+                if (!dispatch.optBoolean("ok", true) || dispatch.has("error")) {
+                    return err(
+                        "DYNAMIC_DISPATCH_FAILED",
+                        dispatch.optJSONObject("error")?.optString("message")
+                            ?: ("could not collect dynamic evidence: " + dispatch.toString().take(400)),
+                        "backend",
+                        params.optString("backend")
+                    )
+                }
+                dispatch.toString()
             }
             if (evidence.isBlank()) {
                 return err("NO_DYNAMIC_EVIDENCE", "No dynamic evidence was produced; check backend/workspace/targetFunction.", "workspaceId", workspaceId)
