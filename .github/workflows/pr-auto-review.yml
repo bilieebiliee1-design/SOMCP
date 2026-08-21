@@ -67,6 +67,7 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          RUN_ID: ${{ github.run_id }}
         timeout-minutes: 90
         run: |
           set -euo pipefail
@@ -75,10 +76,22 @@ jobs:
           elapsed=0
           ci_found=false
           all_done=false
-          # This review workflow's own job appears as a check-run on the head
-          # commit; excluding it (both when waiting and when scoring) prevents
-          # the workflow from blocking on itself.
-          SELF_JOB='review'
+          # This workflow's own run creates check-runs on the head commit
+          # (each job's id equals its check-run id). Resolve them once via
+          # github.run_id and exclude by id — precise, and safe against job
+          # renames, matrix expansion, and workflow renames. This prevents the
+          # workflow from blocking on its own in-progress check runs.
+          if ! JOBS=$(curl -sS -f -L \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" 2>/dev/null); then
+            echo "::warning::Failed to resolve this run's check-runs; cannot wait for CI safely. Skipping CI wait."
+            echo "ci_state=no_ci" >> "$GITHUB_OUTPUT"
+            printf '无法解析本工作流自身的 check-run，已跳过 CI 等待。\n' > /tmp/ci-results.txt
+            printf '0' > /tmp/ci-failing.txt
+            exit 0
+          fi
+          SELF_IDS=$(printf '%s' "$JOBS" | jq -c '[.jobs[].id]')
 
           # CI is only configured for the main branch (test-v7.yml); PRs
           # targeting other branches have no CI to wait on.
@@ -103,8 +116,8 @@ jobs:
               sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
             fi
             ci_found=true
-            incomplete=$(printf '%s' "$resp" | jq -r --arg self "$SELF_JOB" \
-              '.check_runs[]? | select(.status != "completed" and .name != $self) | .name' | wc -l)
+            incomplete=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+              '.check_runs[]? | select((.id as $i | $self | index($i) | not) and .status != "completed") | .name' | wc -l)
             if [ "$incomplete" -eq 0 ]; then
               all_done=true
               break
@@ -128,13 +141,13 @@ jobs:
 
           {
             printf '提交 %s 的 CI 检查结果（已等待 CI 完成后读取）：\n' "$HEAD_SHA"
-            printf '共 %s 项。\n' "$(printf '%s' "$resp" | jq -r --arg self "$SELF_JOB" '.check_runs[]? | select(.name != $self)' | wc -l)"
-            printf '%s' "$resp" | jq -r --arg self "$SELF_JOB" \
-              '.check_runs[]? | select(.name != $self) | "  - " + .name + "：" + ((.conclusion // .status) // "unknown")'
+            printf '共 %s 项。\n' "$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" '[.check_runs[]? | select(.id as $i | $self | index($i) | not)] | length')"
+            printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+              '.check_runs[]? | select(.id as $i | $self | index($i) | not) | "  - " + .name + "：" + ((.conclusion // .status) // "unknown")'
           } > /tmp/ci-results.txt
 
-          failing=$(printf '%s' "$resp" | jq -r --arg self "$SELF_JOB" \
-            '[.check_runs[]? | select(.name != $self) |
+          failing=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+            '[.check_runs[]? | select(.id as $i | $self | index($i) | not) |
               select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral" and .conclusion != "cancelled")] | length')
           printf '%s' "$failing" > /tmp/ci-failing.txt
           if [ "$failing" -gt 0 ]; then
