@@ -124,11 +124,11 @@ internal object FridaTransport {
     }
 
     fun readMessage(connection: FridaConnection): String {
-        val lengthText = readLine(connection.input)
-            ?: throw EOFException("Frida transport closed while reading frame header")
-        val length = runCatching { lengthText.trim().toInt() }.getOrNull()
-        if (length == null || length < 0 || length > MAX_FRAME) {
-            throw IOException("Frida frame has invalid length '$lengthText'")
+        // The D-Bus stream framing writes a NUL (0x00) terminated decimal
+        // length prefix, so read bytes until 0x00 (NOT until '\n') to parse it.
+        val length = readLengthPrefix(connection.input)
+        if (length < 0 || length > MAX_FRAME) {
+            throw IOException("Frida frame has invalid payload length $length")
         }
         val body = ByteArray(length)
         var done = 0
@@ -138,6 +138,19 @@ internal object FridaTransport {
             done += n
         }
         return String(body, utf8)
+    }
+
+    private fun readLengthPrefix(input: BufferedInputStream): Int {
+        var length = 0
+        while (true) {
+            val value = input.read()
+            if (value < 0) throw EOFException("Frida transport closed while reading frame header")
+            if (value == 0x00) return length
+            if (value < '0'.code || value > '9'.code) {
+                throw IOException("Frida frame header has non-numeric byte 0x${value.toString(16)}")
+            }
+            length = Math.multiplyExact(length, 10) + (value - '0'.code)
+        }
     }
 
     private fun writeLine(output: BufferedOutputStream, line: String) {
