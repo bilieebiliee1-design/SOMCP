@@ -218,8 +218,19 @@ fi
 if [[ $SKIP_KEYSTONE -eq 0 ]]; then
   build_one keystone "$PROJECT/third_party/keystone-engine-src" \
     -DBUILD_SHARED_LIBS=ON -DBUILD_LIBS_ONLY=ON -DLLVM_BUILD_TOOLS=OFF
-  cp "$BUILD_ROOT/keystone/libkeystone.so" "$JNI_LIBS/"
-  echo "[unidbg-native] copied libkeystone.so -> $JNI_LIBS"
+  # keystone's bundled LLVM build redirects libkeystone.so into
+  # <build>/llvm/lib/ (LIBRARY_OUTPUT_DIRECTORY from its llvm CMake), not the
+  # build root; locate it defensively in case the layout changes upstream.
+  keystone_so="$BUILD_ROOT/keystone/llvm/lib/libkeystone.so"
+  if [[ ! -f "$keystone_so" ]]; then
+    keystone_so="$(find "$BUILD_ROOT/keystone" -name 'libkeystone.so' -print -quit || true)"
+  fi
+  if [[ -z "$keystone_so" || ! -f "$keystone_so" ]]; then
+    echo "error: libkeystone.so not found under $BUILD_ROOT/keystone" >&2
+    exit 1
+  fi
+  cp "$keystone_so" "$JNI_LIBS/"
+  echo "[unidbg-native] copied $(basename "$keystone_so") -> $JNI_LIBS"
 fi
 
 if [[ $SKIP_UNICORN -eq 0 ]]; then
