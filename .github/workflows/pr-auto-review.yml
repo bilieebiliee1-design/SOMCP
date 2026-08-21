@@ -123,6 +123,7 @@ jobs:
           fi
           python3 - <<'PYEOF'
           import json, re, sys
+          from datetime import datetime, timezone, timedelta
           raw = open('/tmp/llm-review-raw.txt', encoding='utf-8').read()
           # Strip markdown fences if the model wrapped the JSON.
           raw = re.sub(r'```(?:json)?', '', raw).strip()
@@ -144,7 +145,13 @@ jobs:
           verdict_cn = {'approve': '通过（可以合并）',
                         'request_changes': '需要修改',
                         'reject': '存在严重问题，需要修改'}[verdict]
-          lines = ['## LLM 自动审查结果', '', f'**判定：{verdict_cn}**', '']
+          # 记录回答时间（固定使用北京时间，UTC+8）
+          beijing_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')
+          lines = ['## LLM 自动审查结果', '',
+                   f'**判定：{verdict_cn}**',
+                   '',
+                   f'**回答时间：{beijing_time}（北京时间）**',
+                   '']
           if summary:
               lines.append(summary)
               lines.append('')
