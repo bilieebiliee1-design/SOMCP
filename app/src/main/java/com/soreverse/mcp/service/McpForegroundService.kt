@@ -69,7 +69,12 @@ class McpForegroundService : Service() {
                 stopSelf()
             }
 
-            ACTION_REFRESH_FLOATING -> updateFloating()
+            ACTION_REFRESH_FLOATING -> {
+                // Recreate the bubble so settings like floatingEdgeHide take
+                // effect immediately even while the service is running.
+                removeFloating()
+                updateFloating()
+            }
         }
         return START_STICKY
     }
@@ -353,19 +358,67 @@ class McpForegroundService : Service() {
             y = 280
         }
         val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        val edgeHide = settings.floatingEdgeHide
+        // Visible tab width (dp) left on screen when the bubble is dock-hidden.
+        val edgePx = (5 * density).toInt()
         var downX = 0f
         var downY = 0f
         var startX = 0
         var startY = 0
         var moved = false
+        var dockedRight = false
+        var collapsed = false
+        var revealedByTouch = false
+        var slideAnimator: ValueAnimator? = null
+
+        fun relayout() {
+            windowManager?.updateViewLayout(tv, params)
+        }
+
+        // x at which the bubble is fully shown against its nearest edge.
+        fun dockX(): Int {
+            val width = resources.displayMetrics.widthPixels
+            dockedRight = params.x + tv.width / 2 > width / 2
+            return if (dockedRight) width - tv.width else 0
+        }
+
+        // x at which only [edgePx] stays visible (the hidden/tabbed state).
+        fun hiddenX(): Int {
+            val width = resources.displayMetrics.widthPixels
+            return if (dockedRight) width - edgePx else edgePx - tv.width
+        }
+
+        fun animateX(target: Int) {
+            slideAnimator?.cancel()
+            slideAnimator = ValueAnimator.ofInt(params.x, target).apply {
+                duration = 240
+                addUpdateListener {
+                    params.x = it.animatedValue as Int
+                    relayout()
+                }
+                start()
+            }
+        }
+
         tv.setOnClickListener { launchMainActivity() }
         tv.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    tv.animate().scaleX(1.08f).scaleY(1.08f).setDuration(120).start()
+                    if (collapsed) {
+                        // Tapping the tab slides the bubble back out; tracked
+                        // from the fully-shown dock position so an immediate
+                        // drag starts at the right spot.
+                        collapsed = false
+                        revealedByTouch = true
+                        val dx = dockX()
+                        startX = dx
+                        animateX(dx)
+                    } else {
+                        tv.animate().scaleX(1.08f).scaleY(1.08f).setDuration(120).start()
+                        startX = params.x
+                    }
                     downX = event.rawX
                     downY = event.rawY
-                    startX = params.x
                     startY = params.y
                     moved = false
                     true
@@ -378,9 +431,10 @@ class McpForegroundService : Service() {
                         moved = true
                     }
                     if (moved) {
+                        slideAnimator?.cancel()
                         params.x = startX + deltaX.toInt()
                         params.y = startY + deltaY.toInt()
-                        windowManager?.updateViewLayout(tv, params)
+                        relayout()
                     }
                     true
                 }
@@ -389,12 +443,23 @@ class McpForegroundService : Service() {
                     tv.animate().scaleX(
                         1f
                     ).scaleY(1f).setInterpolator(OvershootInterpolator()).setDuration(260).start()
-                    if (moved) {
-                        val width = resources.displayMetrics.widthPixels
-                        params.x = if (params.x > width / 2) width - tv.width else 0
-                        windowManager?.updateViewLayout(tv, params)
-                    } else {
-                        tv.performClick()
+                    when {
+                        moved -> {
+                            // Dock to the nearest edge, then slide most of the
+                            // bubble off-screen when edge-hide is enabled.
+                            dockX()
+                            if (edgeHide) {
+                                animateX(hiddenX())
+                                collapsed = true
+                            } else {
+                                animateX(dockX())
+                            }
+                        }
+                        revealedByTouch -> {
+                            // A tap on a hidden tab just reveals the bubble.
+                            revealedByTouch = false
+                        }
+                        else -> tv.performClick()
                     }
                     true
                 }
