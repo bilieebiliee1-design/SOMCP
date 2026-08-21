@@ -253,6 +253,7 @@ private fun EngineRuntime.dynamicAnalyze(workspaceId: String, editSessionId: Str
         )
     }
     val trace = params.bool("trace", false)
+    val retaddr = params.bool("retaddr", false)
     val dumpSize = params.intValue("dumpSize", 256).coerceIn(1, 65536)
     val functionArgs = params.optJSONArray("args") ?: JSONArray()
 
@@ -346,7 +347,7 @@ private fun EngineRuntime.dynamicAnalyze(workspaceId: String, editSessionId: Str
                 target,
                 mode,
                 processTarget,
-                frida.defaultAgentHtml(moduleName, targetFunction, trace)
+                frida.defaultAgentHtml(moduleName, retaddr)
             )
             run.put("fridaSessionId", session.id)
             // 2) Hook the target function and call it live.
