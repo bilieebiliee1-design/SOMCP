@@ -217,7 +217,7 @@ fi
 
 if [[ $SKIP_KEYSTONE -eq 0 ]]; then
   build_one keystone "$PROJECT/third_party/keystone-engine-src" \
-    -DBUILD_LIBS_ONLY=ON -DLLVM_BUILD_TOOLS=OFF
+    -DBUILD_SHARED_LIBS=ON -DBUILD_LIBS_ONLY=ON -DLLVM_BUILD_TOOLS=OFF
   cp "$BUILD_ROOT/keystone/libkeystone.so" "$JNI_LIBS/"
   echo "[unidbg-native] copied libkeystone.so -> $JNI_LIBS"
 fi
