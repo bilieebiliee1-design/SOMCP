@@ -356,6 +356,10 @@ private fun EngineRuntime.dynamicAnalyze(workspaceId: String, editSessionId: Str
                 JSONObject().put("functionName", targetFunction)
             )
             run.put("hook", hook)
+            // Retrieve any events captured by the interceptor since hook
+            // installation (module-level buffer drained on each poll).
+            val hookEvents = frida.invokeRpc(session.id, "getEvents", JSONObject())
+            run.put("hookEvents", hookEvents)
             val callResult = frida.invokeRpc(
                 session.id,
                 "callFunction",
