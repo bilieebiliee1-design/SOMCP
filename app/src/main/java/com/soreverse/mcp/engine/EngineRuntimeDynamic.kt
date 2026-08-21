@@ -32,7 +32,6 @@ package com.soreverse.mcp.engine
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.core.str
-import java.net.UnknownHostException
 import org.json.JSONArray
 import org.json.JSONObject
 
