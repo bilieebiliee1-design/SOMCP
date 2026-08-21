@@ -63,7 +63,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - 编辑会话：snapshot、rollback、undo、redo、check、audit、persist。
 - 构建导出：自动改名/覆盖、patch report、多输出变体、镜像到工作目录。
 - Cloudflare Tunnel：quick/named 隧道、keepalive、状态统计。
-- 可选 Unidbg：`emulate_call`、`emulate_dump`。**注意**：Unidbg 的 Android 原生库（`libcapstone.so` / `libkeystone.so` / `libunicorn.so` / `libjnidispatch.so`）不随 APK 内置，需自行交叉编译 unidbg 上游 native 并放入 `app/src/main/jniLibs/<abi>/` 后重新构建，或在设备上额外安装；未内置时 `system_control(action=status)` 的 `emulation.setup` 会明确标注 `requires-extra-install`，`emulate_*` 调用返回 `EMULATOR_UNAVAILABLE` 并说明缺失原因，不会伪装成可用。
+- 可选 Unidbg：`emulate_call`、`emulate_dump`。**注意**：Unidbg 的 Android 原生库（`libcapstone.so` / `libkeystone.so` / `libunicorn.so` / `libjnidispatch.so`）不随 Debug APK 内置，需自行交叉编译 unidbg 上游 native 并放入 `app/src/main/jniLibs/<abi>/` 后重新构建，或在设备上额外安装；**官方 Release APK（v1.0.18+）已内置 arm64-v8a / armeabi-v7a / x86 / x86_64 全部四个 ABI 的 Unidbg 原生库**，直接安装即可使用。库缺失时 `system_control(action=status)` 的 `emulation.setup` 会明确标注 `requires-extra-install`，`emulate_*` 调用返回 `EMULATOR_UNAVAILABLE` 并说明缺失原因，不会伪装成可用。
 - 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
 - APK 内 SO 使用流式扫描与按需提取，分析页可一键释放工作区、索引缓存和已结束的 Blutter 数据。
