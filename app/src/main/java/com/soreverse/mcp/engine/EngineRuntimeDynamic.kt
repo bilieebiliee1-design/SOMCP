@@ -237,11 +237,7 @@ internal fun EngineRuntime.dynamicDispatch(
 
 // ── High-level orchestration: "手动加载到内存 → 执行 → 采集证据" ──
 
-private fun EngineRuntime.dynamicAnalyze(
-    workspaceId: String,
-    editSessionId: String,
-    args: JSONArray
-): JSONObject = guarded {
+private fun EngineRuntime.dynamicAnalyze(workspaceId: String, editSessionId: String, args: JSONArray): JSONObject = guarded {
     val params = args.optJSONObject(0) ?: JSONObject()
     val backend = params.str("backend", "unidbg")
     if (workspaceId.isBlank()) {
@@ -274,7 +270,9 @@ private fun EngineRuntime.dynamicAnalyze(
             if (emulatorSessionId.isBlank()) {
                 return@guarded err(
                     "UNIDBG_LOAD_FAILED",
-                    "Could not manually load the .so into emulated memory: ${opened.optJSONObject("error")?.optString("message") ?: opened.optString("message")}",
+                    "Could not manually load the .so into emulated memory: ${opened.optJSONObject(
+                        "error"
+                    )?.optString("message") ?: opened.optString("message")}",
                     "backend",
                     "unidbg",
                     "openResult" to opened
@@ -320,9 +318,13 @@ private fun EngineRuntime.dynamicAnalyze(
         "frida" -> {
             val target = fridaTargetFromArgs(params)
             if (!frida.available(target)) {
+                val reason = "Frida is not reachable at " +
+                    "${target.host}:${target.port}. " +
+                    "Install and start frida-server / frida-gadget " +
+                    "on the device, then retry. ${frida.unavailableReason(target)}"
                 return@guarded err(
                     "FRIDA_UNAVAILABLE",
-                    "Frida is not reachable at ${target.host}:${target.port}. Install and start frida-server / frida-gadget on the device, then retry. ${frida.unavailableReason(target)}",
+                    reason,
                     "backend",
                     "frida",
                     "target" to target.host + ":" + target.port
@@ -403,5 +405,4 @@ private fun EngineRuntime.fridaTargetFromArgs(raw: Any?): FridaTarget {
     )
 }
 
-private fun JSONObject.bool(name: String, default: Boolean): Boolean =
-    if (has(name)) optBoolean(name, default) else default
+private fun JSONObject.bool(name: String, default: Boolean): Boolean = if (has(name)) optBoolean(name, default) else default
