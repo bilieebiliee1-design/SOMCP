@@ -122,6 +122,13 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean("floatingEnabled", false)
         set(value) = prefs.edit().putBoolean("floatingEnabled", value).apply()
 
+    /** When true, the floating bubble docks to a screen edge and slides most of
+     *  itself off-screen (leaving a small tab) so it never blocks content.
+     *  Touching the tab slides it back out; dragging re-docks and re-hides. */
+    var floatingEdgeHide: Boolean
+        get() = prefs.getBoolean("floatingEdgeHide", true)
+        set(value) = prefs.edit().putBoolean("floatingEdgeHide", value).apply()
+
     var wakeLockEnabled: Boolean
         get() = prefs.getBoolean("wakeLockEnabled", true)
         set(value) = prefs.edit().putBoolean("wakeLockEnabled", value).apply()
@@ -767,6 +774,7 @@ class SettingsStore(context: Context) {
                     .put("useDefaultWorkDir", useDefaultWorkDir)
                     .put("hasTreeUri", treeUri != null)
                     .put("floatingEnabled", floatingEnabled)
+                    .put("floatingEdgeHide", floatingEdgeHide)
                     .put("wakeLockEnabled", wakeLockEnabled)
                     .put("bootAutoStart", bootAutoStart)
             )
@@ -920,6 +928,7 @@ class SettingsStore(context: Context) {
         applyStr(service, "defaultWorkDirPath") { defaultWorkDirPath = it }
         applyBool(service, "useDefaultWorkDir") { useDefaultWorkDir = it }
         applyBool(service, "floatingEnabled") { floatingEnabled = it }
+        applyBool(service, "floatingEdgeHide") { floatingEdgeHide = it }
         applyBool(service, "wakeLockEnabled") { wakeLockEnabled = it }
         applyBool(service, "bootAutoStart") { bootAutoStart = it }
 
@@ -1016,6 +1025,7 @@ class SettingsStore(context: Context) {
             "language", "themeMode", "accentColor", "pureBlackDark", "uiDensity", "cornerStyle",
             "motionMode", "showAdvancedHome", "highContrast", "textScale", "predictiveBackEnabled",
             "port", "bindHost", "authEnabled", "accessToken", "floatingEnabled",
+            "floatingEdgeHide",
             "wakeLockEnabled", "bootAutoStart", "defaultLimit", "stringLimit", "disasmLimit",
             "disasmMaxBytes", "emulationEnabled", "leanTools", "adaptiveLeanTools", "logLevel",
             "tunnelMode", "tunnelAutoStart", "tunnelTargetPort", "tunnelNamedToken", "tunnelProtocol",
@@ -1105,6 +1115,11 @@ class SettingsStore(context: Context) {
 
                 "floatingEnabled" -> {
                     floatingEnabled = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "floatingEdgeHide" -> {
+                    floatingEdgeHide = patch.optBoolean(key)
                     touch(key)
                 }
 
