@@ -241,7 +241,8 @@ object SignatureVerifier {
      *   - ZIP End Of Central Directory (EOCD) structure is well formed;
      *   - central directory entries are consistent with local headers;
      *   - critical entries exist (classes.dex, AndroidManifest.xml,
-     *     resources.arsc, META-INF signature files, lib/<abi>/*.so);
+     *     resources.arsc, META-INF signature files, and the bundled native
+     *     library under lib/abi);
      *   - classes.dex stored CRC matches the CRC recorded in the central
      *     directory (detects repackaging that deflates a replaced dex).
      *
