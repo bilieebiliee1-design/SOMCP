@@ -18,7 +18,7 @@ on:
     types: [created]
 
 permissions:
-  contents: read
+  contents: write
   actions: read
   checks: read
   issues: write
@@ -379,6 +379,41 @@ jobs:
                 }
               } catch (e) {
                 console.log('Close PR failed (ignored): ' + e.message);
+              }
+            }
+
+            // Auto-merge a fully-approved PR ("100% 无害") and delete the
+            // corresponding branch. `approve` here means the LLM judged the
+            // PR directly mergeable (CI-red approval is already downgraded to
+            // request_changes above), so no further hand-off is needed.
+            if (event === 'APPROVE') {
+              try {
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+                if (pr.state === 'open' && pr.mergeable === true) {
+                  try {
+                    await github.rest.pulls.merge({
+                      owner, repo, pull_number,
+                      merge_method: 'squash',
+                      commit_title: `Merge pull request #${pull_number}: ${pr.title}`
+                    });
+                    console.log(`Auto-merged approved PR #${pull_number}.`);
+                  } catch (e) {
+                    console.log('Auto-merge not possible (ignored): ' + e.message);
+                  }
+                  try {
+                    const branch = pr.head.ref;
+                    if (branch) {
+                      await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+                      console.log(`Deleted branch ${branch}.`);
+                    }
+                  } catch (e) {
+                    console.log('Branch deletion skipped (protected / not found): ' + e.message);
+                  }
+                } else {
+                  console.log(`PR #${pull_number} not open/mergeable (state=${pr.state}, mergeable=${pr.mergeable}); skipping auto-merge.`);
+                }
+              } catch (e) {
+                console.log('Auto-merge step failed (ignored): ' + e.message);
               }
             }
 
