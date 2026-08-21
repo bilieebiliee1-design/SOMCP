@@ -208,6 +208,13 @@ jobs:
           fi
           echo "Release notes written to release_notes.md"
 
+      - name: Append build time to release notes
+        run: |
+          set -euo pipefail
+          # 构建时间固定使用北京时间（UTC+8），精确到秒
+          printf '\n---\n\n**构建时间：%s（北京时间）**\n' "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')" >> release_notes.md
+          echo "Appended build time to release notes."
+
       - name: Rename APKs and generate SHA256SUMS
         run: |
           set -euo pipefail
