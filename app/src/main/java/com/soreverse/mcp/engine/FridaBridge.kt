@@ -416,7 +416,10 @@ internal class FridaBridge(private val context: Context) {
                     const bt = Thread.backtrace(c, Backtracer.ACCURATE);
                     return {
                         backtrace: bt.map(function (a) { return a.toString(); }),
-                        $ret: ${if (retaddr) "c.retAddress ? c.retAddress.toString() : c.pc.toString()" else "null"}
+                        ${
+                        if (retaddr) "retAddress: c.retAddress ? c.retAddress.toString() : c.pc.toString()"
+                        else "retAddress: null"
+                        }
                     };
                 }
                 return { error: 'no-context-captured-yet' };
