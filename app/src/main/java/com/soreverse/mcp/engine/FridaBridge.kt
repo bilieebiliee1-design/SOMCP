@@ -365,6 +365,11 @@ internal class FridaBridge(private val context: Context) {
     fun defaultAgentHtml(moduleName: String, retaddr: Boolean): String {
         // Real Frida agent: Interceptor.attach on a resolved native export,
         // capture registers, optional memory dump, send events back over rpc.
+        val retAddrExpr = if (retaddr) {
+            "retAddress: c.retAddress ? c.retAddress.toString() : c.pc.toString()"
+        } else {
+            "retAddress: null"
+        }
         return """
         'use strict';
         // Module-level hook event buffer so events survive across RPC frames.
@@ -416,10 +421,7 @@ internal class FridaBridge(private val context: Context) {
                     const bt = Thread.backtrace(c, Backtracer.ACCURATE);
                     return {
                         backtrace: bt.map(function (a) { return a.toString(); }),
-                        ${
-                        if (retaddr) "retAddress: c.retAddress ? c.retAddress.toString() : c.pc.toString()"
-                        else "retAddress: null"
-                        }
+                        $retAddrExpr
                     };
                 }
                 return { error: 'no-context-captured-yet' };
