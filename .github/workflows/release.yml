@@ -63,6 +63,31 @@ jobs:
       - name: Build native backends (Rizin + LIEF)
         run: bash build-native-android.sh
 
+      - name: Build Unidbg native libs (capstone/keystone/unicorn)
+        run: |
+          set -euo pipefail
+          # Cross-compile the Android natives required by the Unidbg backend
+          # (libcapstone.so / libkeystone.so / libunicorn.so). unidbg 0.9.9
+          # Maven artifacts only ship linux_64/linux_aarch64 .so, so without
+          # this step the release APK would be published WITHOUT the libs and
+          # emulate_* would return EMULATOR_UNAVAILABLE (see issue #35).
+          # This step is fatal on failure so a release can never be built
+          # without the Unidbg natives again.
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            bash build-unidbg-native.sh --abi "$abi"
+          done
+          # Sanity-check that every ABI now has all three natives in jniLibs
+          # before the APK is assembled; abort if any is missing.
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            for lib in capstone keystone unicorn; do
+              test -f "app/src/main/jniLibs/$abi/lib$lib.so" || {
+                echo "::error::missing app/src/main/jniLibs/$abi/lib$lib.so after build-unidbg-native.sh"
+                exit 1
+              }
+            done
+          done
+          echo "Unidbg native libs present for all four ABIs."
+
       - name: Restore release signing keystore
         run: |
           set -euo pipefail
