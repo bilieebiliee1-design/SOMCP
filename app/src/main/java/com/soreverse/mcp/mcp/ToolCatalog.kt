@@ -13,6 +13,7 @@
 package com.soreverse.mcp.mcp
 
 import com.soreverse.mcp.core.HexCodec
+import com.soreverse.mcp.core.DynamicAnalysisService
 import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.doubleValue
 import com.soreverse.mcp.core.err
@@ -1325,11 +1326,11 @@ object ToolCatalog {
                         "dispatch"
                     )
                     "args" arr
-                        "Positional arguments. For action=analyze, args[0] is an object: { backend: unidbg|frida, targetFunction, args:[...], trace, dumpSize, dumpAddress, moduleName, fridaMode, fridaTarget/host/port, ... }."
-                    "analyze" obj
-                        "Inline analyze parameters (alternative to args[0]): backend, targetFunction, args, trace, dumpSize, dumpAddress."
-                    "fridaTarget" obj
-                        "Frida daemon connection: { host, port, connectTimeoutMillis, readTimeoutMillis }."
+                        "Positional arguments. For action=analyze, args[0] is a JSON object: { backend: unidbg|frida, targetFunction, args:[...], trace, dumpSize, dumpAddress, moduleName, fridaMode, fridaTarget/host/port, ... }."
+                    "analyze" str
+                        "Inline analyze parameters as JSON (alternative to args[0]): backend, targetFunction, args, trace, dumpSize, dumpAddress."
+                    "fridaTarget" str
+                        "Frida daemon connection as JSON: { host, port, connectTimeoutMillis, readTimeoutMillis }."
                 }
             )
         }

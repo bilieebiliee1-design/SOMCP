@@ -180,7 +180,22 @@ internal fun EngineRuntime.dynamicDispatch(
 
         "frida_sessions" -> ok(fridaSessionsView())
 
-        "frida_open" -> fridaOpen(args.opt(0) as? JSONObject ?: JSONObject())
+        "frida_open" -> {
+            val params = args.opt(0) as? JSONObject ?: JSONObject()
+            val target = fridaTargetFromArgs(params)
+            val moduleName = params.str("moduleName", "libtarget.so")
+            val mode = params.str("mode", "attach")
+            val targetIdentifier = params.str("targetIdentifier", "com.example.target")
+            val script = params.str("script").ifBlank { frida.defaultAgentHtml(moduleName, params.bool("retaddr", false)) }
+            val session = frida.createSession(target, mode, targetIdentifier, script)
+            ok(
+                JSONObject()
+                    .put("fridaSessionId", session.id)
+                    .put("target", target.toString())
+                    .put("mode", mode)
+                    .put("targetIdentifier", targetIdentifier)
+            )
+        }
 
         "frida_close" -> {
             val sessionId = args.optString(0)
@@ -253,7 +268,7 @@ private fun EngineRuntime.dynamicAnalyze(workspaceId: String, editSessionId: Str
     }
     val trace = params.bool("trace", false)
     val retaddr = params.bool("retaddr", false)
-    val dumpSize = params.intValue("dumpSize", 256).coerceIn(1, 65536)
+    val dumpSize = params.int("dumpSize", 256).coerceIn(1, 65536)
     val functionArgs = params.optJSONArray("args") ?: JSONArray()
 
     val run = JSONObject()
@@ -403,10 +418,12 @@ private fun EngineRuntime.fridaTargetFromArgs(raw: Any?): FridaTarget {
     val json = raw as? JSONObject ?: JSONObject()
     return FridaTarget(
         host = json.str("host", "127.0.0.1"),
-        port = json.intValue("port", 27042).coerceIn(1, 65535),
-        connectTimeoutMillis = json.intValue("connectTimeoutMillis", 5_000).toLong(),
-        readTimeoutMillis = json.intValue("readTimeoutMillis", 15_000).toLong()
+        port = json.int("port", 27042).coerceIn(1, 65535),
+        connectTimeoutMillis = json.int("connectTimeoutMillis", 5_000).toLong(),
+        readTimeoutMillis = json.int("readTimeoutMillis", 15_000).toLong()
     )
 }
+
+private fun JSONObject.int(name: String, default: Int): Int = if (has(name)) optInt(name, default) else default
 
 private fun JSONObject.bool(name: String, default: Boolean): Boolean = if (has(name)) optBoolean(name, default) else default
