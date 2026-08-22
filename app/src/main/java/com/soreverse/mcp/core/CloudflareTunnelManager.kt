@@ -27,7 +27,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         const val CLOUDFLARED_DOWNLOAD_URL =
             "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
         const val CLOUDFLARED_MIRROR_URL =
-            "https://mirror.ghproxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
+            "https://gh-proxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
         const val CLOUDFLARED_DIR = "cloudflared"
         const val CLOUDFLARED_FILE = "cloudflared"
 
