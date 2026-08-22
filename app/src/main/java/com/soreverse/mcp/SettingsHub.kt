@@ -1,14 +1,14 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
+// GNU Affero General Public License for more details.
 //
 package com.soreverse.mcp
 
@@ -444,9 +444,9 @@ internal fun SettingsHub(
                                 GlassGroup(title = if (t.zh) "开源许可" else "License") {
                                     Text(
                                         if (t.zh) {
-                                            "${com.soreverse.mcp.core.Provenance.PROJECT} 是 GPL-3.0-only 自由软件。任何再分发（含修改、改名、二次打包版本）必须保留本版权与许可声明、继续以 GPL-3.0-only 授权，并向每一位接收者提供完整对应源代码。"
+                                            "${com.soreverse.mcp.core.Provenance.PROJECT} 是 AGPL-3.0-only 自由软件。任何再分发（含修改、改名、二次打包版本）必须保留本版权与许可声明、继续以 AGPL-3.0-only 授权，并向每一位接收者提供完整对应源代码。"
                                         } else {
-                                            "${com.soreverse.mcp.core.Provenance.PROJECT} is GPL-3.0-only free software. Any redistribution must retain this notice, remain under GPL-3.0-only, and provide complete corresponding source code."
+                                            "${com.soreverse.mcp.core.Provenance.PROJECT} is AGPL-3.0-only free software. Any redistribution must retain this notice, remain under AGPL-3.0-only, and provide complete corresponding source code."
                                         },
                                         modifier = Modifier.padding(14.dp),
                                         style = MaterialTheme.typography.bodySmall,
@@ -501,8 +501,8 @@ internal fun SettingsHub(
                                         GroupDivider()
                                         Text(
                                             if (t.zh) {
-                                                "本软件为 GPL-3.0 自由软件，受《中华人民共和国著作权法》《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：" +
-                                                    "保留本版权与许可声明、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码。\n\n" +
+                                                "本软件为 AGPL-3.0 自由软件，受《中华人民共和国著作权法》《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：" +
+                                                    "保留本版权与许可声明、继续以 AGPL-3.0 授权、向每一位接收者提供完整对应源代码。\n\n" +
                                                     "闭源分发、抹除署名、改名冒充原创即构成侵权。依据《著作权法》第五十二条、第五十三条，权利人可要求停止侵害、消除影响、赔礼道歉并赔偿损失；" +
                                                     "情节严重的可按《著作权法》第五十四条主张惩罚性赔偿。GPL 作为授权合同在中国司法实践中已被确认有效并可强制执行（参见" +
                                                     "北京高院\u201c数字天堂诉柚子科技\u201d、\u201c罗盒诉风灵\u201d等 GPL/开源协议案）。\n\n" +
