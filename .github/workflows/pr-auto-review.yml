@@ -176,7 +176,7 @@ jobs:
             2) 正确性与逻辑错误、边界条件；
             3) 资源与内存问题（内存泄漏、未释放、并发竞态等）；
             4) 对项目架构（Android Kotlin + 原生 C++ JNI）的契合度；
-            5) GPL-3.0-only 合规：新增源码文件必须带 GPL 许可证头，LICENSE 文件不可删除或修改；
+            5) AGPL-3.0-only 合规：新增源码文件必须带 AGPL 许可证头，LICENSE 文件不可删除或更换为其他许可证；
             6) 代码风格与可维护性；
             7) CI 检查结果：审查信息末尾会附上该 PR 的 CI 检查结果，请结合 CI 结果综合判定——
                若 CI 存在失败项，务必在 summary 与 issues 中指出，并更倾向于 request_changes 而非 approve；

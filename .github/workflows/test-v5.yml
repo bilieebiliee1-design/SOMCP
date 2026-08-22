@@ -61,38 +61,40 @@ jobs:
           fi
           echo "Profanity check passed."
 
-      - name: GPL-3.0-only license compliance check
+      - name: AGPL-3.0-only license compliance check
         run: |
           BASE="${{ steps.base-rev.outputs.base }}"
           exit_code=0
 
           # 1. Ensure the LICENSE file is not removed
           if git diff "$BASE"...HEAD --name-only --diff-filter=D | grep -q "^LICENSE$"; then
-            echo "::error::The LICENSE file must not be deleted. This project is GPL-3.0-only."
+            echo "::error::The LICENSE file must not be deleted. This project is AGPL-3.0-only."
             exit_code=1
           fi
 
-          # 2. Ensure the LICENSE file is not replaced with a different license
+          # 2. Ensure the LICENSE file, if modified, still carries the AGPL-3.0 notice
           if git diff "$BASE"...HEAD --name-only --diff-filter=M | grep -q "^LICENSE$"; then
-            echo "::error::The LICENSE file must not be modified. GPL-3.0-only is the governing license."
-            exit_code=1
+            if ! head -n 1 LICENSE | grep -qi "GNU AFFERO GENERAL PUBLIC LICENSE"; then
+              echo "::error::The LICENSE file must remain licensed under AGPL-3.0-only."
+              exit_code=1
+            fi
           fi
 
-          # 3. Check newly added source files for a GPL-3.0 license header
+          # 3. Check newly added source files for a AGPL-3.0 license header
           NEW_SOURCE_FILES=$(git diff "$BASE"...HEAD --name-only --diff-filter=A \
             | grep -E '\.(kt|java|cpp|c|h|hpp|py|rs|go|sh|gradle|groovy)$' || true)
           if [ -n "$NEW_SOURCE_FILES" ]; then
             while IFS= read -r file; do
-              # Check for GPL-3.0 reference in the first 30 lines
-              if ! head -n 30 "$file" | grep -qi "GNU.*General.*Public.*License\|GPL[- ]3\.0\|GPL-3\.0-only"; then
-                echo "::error::New source file '$file' is missing a GPL-3.0 license header. All new files must be licensed under GPL-3.0-only."
+              # Check for AGPL-3.0 reference in the first 30 lines
+              if ! head -n 30 "$file" | grep -qi "GNU.*Affero.*General.*Public.*License\|AGPL[- ]3\.0\|AGPL-3\.0-only"; then
+                echo "::error::New source file '$file' is missing a AGPL-3.0 license header. All new files must be licensed under AGPL-3.0-only."
                 exit_code=1
               fi
             done <<< "$NEW_SOURCE_FILES"
           fi
 
           if [ $exit_code -eq 0 ]; then
-            echo "GPL-3.0-only compliance check passed."
+            echo "AGPL-3.0-only compliance check passed."
           fi
           exit $exit_code
 

@@ -1,14 +1,14 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
+// GNU Affero General Public License for more details.
 //
 package com.soreverse.mcp
 
@@ -35,9 +35,9 @@ internal fun SettingsCreditsPage(t: UiText) {
         ) {
             Text(
                 if (t.zh) {
-                    "本软件为 GPL-3.0-only 自由软件。再分发（含修改、改名、二次打包版本）必须保留版权与许可声明、继续以 GPL-3.0-only 授权、提供完整对应源代码。上游唯一官方来源："
+                    "本软件为 AGPL-3.0-only 自由软件。再分发（含修改、改名、二次打包版本）必须保留版权与许可声明、继续以 AGPL-3.0-only 授权、提供完整对应源代码。上游唯一官方来源："
                 } else {
-                    "SOMCP is GPL-3.0-only free software. Redistribution must retain notices, remian under GPL-3.0-only, and provide complete corresponding source. Upstream: "
+                    "SOMCP is AGPL-3.0-only free software. Redistribution must retain notices, remian under AGPL-3.0-only, and provide complete corresponding source. Upstream: "
                 },
                 modifier = Modifier.padding(14.dp),
                 style = MaterialTheme.typography.bodySmall,
