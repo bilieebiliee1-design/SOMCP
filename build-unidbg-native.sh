@@ -234,13 +234,23 @@ if [[ $SKIP_KEYSTONE -eq 0 ]]; then
 fi
 
 if [[ $SKIP_UNICORN -eq 0 ]]; then
-  # unidbg 0.9.9's Unicorn2Factory uses unicorn2 (the zhkl0228 fork).
-  uni="$PROJECT/third_party/unicorn-zhkl0228"
-  [[ -d "$uni" ]] || uni="$PROJECT/third_party/unicorn-engine-unicorn2"
-  build_one unicorn "$uni" \
-    -DUNICORN_ARCH=arm,aarch64 -DUNICORN_BUILD_TESTS=OFF -DUNICORN_BUILD_SAMPLES=OFF
-  cp "$BUILD_ROOT/unicorn/libunicorn.so" "$JNI_LIBS/"
-  echo "[unidbg-native] copied libunicorn.so -> $JNI_LIBS"
+  # unicorn's bundled QEMU uses __uint128_t (CONFIG_INT128 in host-utils.h),
+  # which the Android NDK does not provide for 32-bit targets (armeabi-v7a,
+  # x86), so it only compiles for 64-bit ABIs. On 32-bit ABIs we skip
+  # libunicorn so the (still 32-bit) APKs build; Unidbg is unavailable there
+  # but degrades gracefully via UnidbgEmulator's native load handling.
+  # capstone/keystone compile for every ABI.
+  if [[ "$ABI" != "arm64-v8a" && "$ABI" != "x86_64" ]]; then
+    echo "[unidbg-native] WARNING: unicorn cannot compile on 32-bit ABI '$ABI' (needs __uint128_t); skipping libunicorn.so for this ABI"
+  else
+    # unidbg 0.9.9's Unicorn2Factory uses unicorn2 (the zhkl0228 fork).
+    uni="$PROJECT/third_party/unicorn-zhkl0228"
+    [[ -d "$uni" ]] || uni="$PROJECT/third_party/unicorn-engine-unicorn2"
+    build_one unicorn "$uni" \
+      -DUNICORN_ARCH=arm,aarch64 -DUNICORN_BUILD_TESTS=OFF -DUNICORN_BUILD_SAMPLES=OFF
+    cp "$BUILD_ROOT/unicorn/libunicorn.so" "$JNI_LIBS/"
+    echo "[unidbg-native] copied libunicorn.so -> $JNI_LIBS"
+  fi
 fi
 
 echo "[unidbg-native] DONE - rebuild the APK to enable the Unidbg backend (libjnidispatch.so is provided automatically by the JNA AAR)"
