@@ -303,6 +303,13 @@ internal class FridaBridge(private val context: Context) {
         sessions.remove(id)?.close()
     }
 
+    /** Closes every tracked session, releasing all sockets/streams. Used by
+     *  [com.soreverse.mcp.engine.EngineRuntime.clearCaches] so abandoned Frida
+     *  sessions (never closed via frida_close) cannot leak their TCP links. */
+    fun closeAll() {
+        sessions.keys.toList().forEach { closeSession(it) }
+    }
+
     fun invokeRpc(sessionId: String, operation: String, params: JSONObject): JSONObject {
         val session = sessions[sessionId]
             ?: throw IllegalStateException("Frida session $sessionId not found")
