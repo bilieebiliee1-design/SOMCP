@@ -179,33 +179,27 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     }
 
     /**
-     * Download the cloudflared binary from GitHub releases (or mirror if
-     * [useMirror] is true) to the app's private data directory.
+     * Download the cloudflared binary to the app's private data directory,
+     * automatically switching between GitHub official and multiple mirror
+     * sources until one succeeds.
      * Runs on the calling thread — caller should dispatch to [Dispatchers.IO].
      *
      * @throws Exception on download / write failure.
      */
-    fun downloadBinary(useMirror: Boolean = false) {
+    fun downloadBinary() {
         _binaryState.set(BinaryState.DOWNLOADING)
         try {
             val dir = File(context.filesDir, CLOUDFLARED_DIR)
             dir.mkdirs()
             val tmp = File(dir, "${CLOUDFLARED_FILE}.download")
-            // Build an ordered candidate list from the shared mirror policy:
-            // GitHub official first, then a pool of public GitHub mirrors as
-            // automatic fallbacks. If a single mirror (e.g. ghproxy) is
-            // unreachable we simply move on to the next candidate, so one down
-            // mirror can never block the binary download.
+            // Build an ordered candidate list: GitHub official first, then a
+            // pool of public GitHub mirrors as automatic fallbacks. Sources are
+            // switched automatically — if one (e.g. ghproxy) is unreachable we
+            // simply move on to the next candidate, so a single down source can
+            // never block the binary download.
             val policyCandidates = DownloadMirrorPolicy.candidates(CLOUDFLARED_DOWNLOAD_URL)
-            val urls = if (useMirror) {
-                // User asked for mirrors: try the mirror pool first, GitHub
-                // official remains the final fallback when every mirror fails.
-                policyCandidates
-            } else {
-                // GitHub official first; mirrors below are automatic fallbacks.
-                listOf(CLOUDFLARED_DOWNLOAD_URL) +
-                    policyCandidates.filter { it != CLOUDFLARED_DOWNLOAD_URL }
-            }
+            val urls = listOf(CLOUDFLARED_DOWNLOAD_URL) +
+                policyCandidates.filter { it != CLOUDFLARED_DOWNLOAD_URL }
             var lastError: Exception? = null
             for (url in urls) {
                 try {
