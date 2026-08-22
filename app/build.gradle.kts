@@ -219,7 +219,11 @@ abstract class UnidbgNativeBuildTask : DefaultTask() {
         val libs = nativeLibs.get()
         val haveAll = abis.get().all { abi ->
             val dir = jniLibsRoot.get().resolve(abi)
-            dir.isDirectory && libs.all { lib -> dir.resolve("lib$lib.so").exists() }
+            // unicorn (QEMU, __uint128_t) only compiles for the 64-bit ABIs;
+            // the 32-bit ABIs get capstone/keystone only (Unidbg degrades
+            // gracefully there but the APKs still build).
+            val required = if (abi == "arm64-v8a" || abi == "x86_64") libs else libs - "unicorn"
+            dir.isDirectory && required.all { lib -> dir.resolve("lib$lib.so").exists() }
         }
         if (haveAll) {
             logger.lifecycle("[unidbg-native] libs already present in jniLibs; skipping build")
