@@ -2,23 +2,23 @@ SOMCP
 Copyright (C) 2026 SOMCP authors
 Upstream: https://github.com/bilieebiliee1-design/SOMCP
 
-本程序是自由软件：你可以依据自由软件基金会发布的 GNU 通用公共许可证
-（GPL）第 3 版条款重新发布和/或修改它。
+本程序是自由软件：你可以依据自由软件基金会发布的 GNU Affero 通用公共许可证
+（AGPL）第 3 版条款重新发布和/或修改它。
 
 This program is free software: you can redistribute it and/or modify it
-under the terms of the GNU General Public License version 3 as published
+under the terms of the GNU Affero General Public License version 3 as published
 by the Free Software Foundation.
 
 本程序基于希望其有用而发布，但不作任何担保；甚至不包含对适销性或特定用途
-适用性的默示担保。详见 GNU 通用公共许可证。
+适用性的默示担保。详见 GNU Affero 通用公共许可证。
 
 This program is distributed in the hope that it will be useful, but
 WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
 for more details.
 
-你应当已随本程序收到一份 GNU 通用公共许可证副本（见 LICENSE 文件）。
-You should have received a copy of the GNU General Public License along
+你应当已随本程序收到一份 GNU Affero 通用公共许可证副本（见 LICENSE 文件）。
+You should have received a copy of the GNU Affero General Public License along
 with this program (see the LICENSE file).
 
 ============================================================
@@ -28,7 +28,7 @@ with this program (see the LICENSE file).
 任何对本软件的再分发（包括修改版、改名版、二次打包版）必须同时满足：
 
 1. 保留本 NOTICE、LICENSE 及所有版权与许可声明；
-2. 衍生作品继续以 GPL-3.0-only 授权，不得转为闭源或附加额外限制；
+2. 衍生作品继续以 AGPL-3.0-only 授权，不得转为闭源或附加额外限制；
 3. 向每一位接收者提供完整对应源代码（Corresponding Source），或提供
    书面的、有效的源代码获取方式；
 4. 标注你对文件所做的修改及日期。
@@ -37,14 +37,14 @@ Any redistribution of this software (including modified, rebranded, or
 repackaged builds) MUST:
 
 1. retain this NOTICE, the LICENSE, and all copyright/license notices;
-2. keep the derivative work licensed under GPL-3.0-only, with no
+2. keep the derivative work licensed under AGPL-3.0-only, with no
    relicensing to closed source and no additional restrictions;
 3. provide the complete Corresponding Source to every recipient, or a
    valid written offer to obtain it;
 4. state the changes you made and the dates.
 
-违反上述任一条款将导致你依 GPL-3.0 第 8 条自动丧失授权，继续分发即构成
+违反上述任一条款将导致你依 AGPL-3.0 第 8 条自动丧失授权，继续分发即构成
 著作权侵权。
 
 Failure to comply terminates your license automatically under section 8
-of GPL-3.0; continued distribution then constitutes copyright infringement.
+of AGPL-3.0; continued distribution then constitutes copyright infringement.
