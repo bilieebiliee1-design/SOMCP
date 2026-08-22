@@ -55,7 +55,6 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
     var tunnelLogLevel by remember { mutableStateOf(settings.tunnelLogLevel) }
     var tunnelReconnect by remember { mutableStateOf(settings.tunnelReconnect) }
     var tunnelKeepAlive by remember { mutableStateOf(settings.tunnelKeepAlive) }
-    var tunnelUseMirror by remember { mutableStateOf(settings.tunnelUseMirror) }
     var keepaliveInterval by remember {
         mutableStateOf(settings.tunnelKeepaliveIntervalSec.toString())
     }
@@ -138,13 +137,13 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                                 withContext(Dispatchers.IO) {
                                     val tunnel = activeTunnel(context)
                                     if (tunnel != null) {
-                                        tunnel.downloadBinary(settings.tunnelUseMirror)
+                                        tunnel.downloadBinary()
                                     } else {
                                         // MCP server not running: use a throw-away
                                         // manager so the binary can still be
                                         // downloaded from this page.
                                         CloudflareTunnelManager(context, settings)
-                                            .downloadBinary(settings.tunnelUseMirror)
+                                            .downloadBinary()
                                     }
                                 }
                             }.onSuccess {
@@ -356,10 +355,6 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                     it
             }
             GroupDivider()
-            ToggleRow(if (t.zh) "使用镜像源下载" else "Use mirror for download", tunnelUseMirror) {
-                tunnelUseMirror = it
-                settings.tunnelUseMirror = it
-            }
         }
         GlassGroup {
             ToggleRow(if (t.zh) "随服务自动启动" else "Auto-start with service", tunnelAutoStart) {
