@@ -75,6 +75,12 @@ object IntegrityGuard {
         // 2. Native-level check (reads APK directly, bypasses PackageManager hook)
         val nativePass = SignatureVerifier.verify(context)
 
+        // 2b. Native v2/v3 (APK Signing Block) signer check. Independently
+        //     verifies the certificate recorded in the v2/v3 signing block so a
+        //     scheme-confusion repack (preserved v1 files + re-signed v2/v3)
+        //     cannot pass the filesystem-level v1 check.
+        val v234Pass = SignatureVerifier.verifyV234(context)
+
         // 3. Native package-name pin (rejects repackaged builds that changed
         //    applicationId, even if the Java layer reports a spoofed name).
         val packagePass = SignatureVerifier.verifyPackageName(context)
@@ -83,12 +89,17 @@ object IntegrityGuard {
         val integrityCode = SignatureVerifier.verifyApkIntegrity(context)
         val integrityPass = integrityCode == SignatureVerifier.IntegrityCode.OK
 
-        if (!javaPass || !nativePass || !packagePass || !integrityPass) {
+        if (!javaPass || !nativePass || !v234Pass || !packagePass || !integrityPass) {
             val reasons = mutableListOf<String>()
             if (!javaPass) reasons.add("Java: ${javaResult.reason}")
             if (!nativePass) {
                 reasons.add(
                     "Native: APK signer mismatch detected by filesystem-level verification"
+                )
+            }
+            if (!v234Pass) {
+                reasons.add(
+                    "Native: v2/v3 APK Signing Block signer missing or mismatched"
                 )
             }
             if (!packagePass) {
@@ -115,6 +126,7 @@ object IntegrityGuard {
      */
     fun enforceEarly(context: Context) {
         if (!SignatureVerifier.verify(context) ||
+            !SignatureVerifier.verifyV234(context) ||
             !SignatureVerifier.verifyPackageName(context) ||
             SignatureVerifier.verifyApkIntegrity(context) != SignatureVerifier.IntegrityCode.OK
         ) {
@@ -145,11 +157,12 @@ object IntegrityGuard {
                 // faked but can be hooked, so it is cross-checked too.
                 val nativeOk = SignatureVerifier.verify(context)
                 val javaOk = verify(context).trusted
+                val v234Ok = SignatureVerifier.verifyV234(context)
                 val packageOk = SignatureVerifier.verifyPackageName(context)
                 val integrityOk =
                     SignatureVerifier.verifyApkIntegrity(context) ==
                         SignatureVerifier.IntegrityCode.OK
-                if (!nativeOk || !javaOk || !packageOk || !integrityOk) {
+                if (!nativeOk || !javaOk || !v234Ok || !packageOk || !integrityOk) {
                     AppLog.e("INTEGRITY PERIODIC CHECK FAILED: tampering detected at runtime")
                     terminateWithContext(context)
                     return@Thread
