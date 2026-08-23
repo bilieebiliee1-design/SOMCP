@@ -15,6 +15,7 @@ package com.soreverse.mcp.engine
 import android.net.Uri
 import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.core.AppLog
+import com.soreverse.mcp.core.SelfArtifactGuard
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
@@ -578,9 +579,13 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
         }
         error("SO path not found: $path")
     }
-    if (src.source == "apk" && src.apkPath != null && SignatureVerifier.isSelfSignedApk(src.apkPath)) {
+    // Own-artifact protection: never open/view/modify SOMCP's own APK or the
+    // native libraries it bundles, whether reached directly (local_file /
+    // build_output) or through an APK-embedded reference.
+    val selfCandidate = if (src.source == "apk") src.apkPath else src.path
+    if (!selfCandidate.isNullOrBlank() && SelfArtifactGuard.isSelfArtifact(context, selfCandidate)) {
         throw IllegalArgumentException(
-            "SELF_ANALYSIS_FORBIDDEN: SOMCP cannot analyze SO embedded in its own artifact ${src.apkPath}"
+            "SELF_ANALYSIS_FORBIDDEN: SOMCP cannot open, view, or modify its own artifact $selfCandidate"
         )
     }
     val key = sourceKey(src).ifBlank { keyFallback }
