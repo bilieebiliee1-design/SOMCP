@@ -309,6 +309,11 @@ jobs:
       - name: Submit review / close PR on severe defects
         if: steps.diff.outputs.fetch_ok == 'true'
         uses: actions/github-script@v7
+        env:
+          # Comma-separated maintainer/whitelisted usernames whose PRs are
+          # exempt from the 5-warning auto-close. The repo owner is always
+          # exempt. Configurable via the repo variable LLM_REVIEW_EXEMPT_USERS.
+          EXEMPT_USERS: ${{ vars.LLM_REVIEW_EXEMPT_USERS }}
         with:
           script: |
             const fs = require('fs');
@@ -317,6 +322,80 @@ jobs:
             const { owner, repo } = context.repo;
             const pull_number = context.issue.number;
             const action = context.payload.action; // opened | reopened | synchronize
+
+            // 作者及其豁免状态（供受限检查与警告计数共用）。
+            const author = ((context.payload.pull_request || {}).user || {}).login || '';
+            const authorKey = author.toLowerCase();
+            const exemptRaw = (process.env.EXEMPT_USERS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey);
+
+            // 作者 7 天限制检查：当作者因连续 7 天内累计 5 次审查警告被限制后，
+            // 限制期内其推送的 PR 一律自动关闭并删除对应分支；限制标签 7 天后
+            // 过期即自动解除（此处同时清理所有已过期的限制标签）。
+            const RESTRICT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+            const restrictPrefix = `llm-restricted-${authorKey}-`;
+            const restrictRe = new RegExp('^' + restrictPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$');
+            let authorRestricted = false;
+            if (!isExempt) {
+              try {
+                const { data: issues } = await github.rest.issues.listForRepo({
+                  owner, repo, creator: author, state: 'all', per_page: 100
+                });
+                for (const it of issues || []) {
+                  for (const name of (it.labels || []).map(l => l.name)) {
+                    const m = restrictRe.exec(name);
+                    if (!m) continue;
+                    const t = Number(m[1]) * 1000;
+                    if (Date.now() - t <= RESTRICT_WINDOW_MS) {
+                      authorRestricted = true;
+                    } else {
+                      try {
+                        await github.rest.issues.removeLabel({ owner, repo, issue_number: it.number, name });
+                        console.log('Removed expired restriction label ' + name);
+                      } catch (e) { /* ignore */ }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.log('Author restriction check failed (ignored): ' + e.message);
+              }
+            }
+            if (authorRestricted) {
+              const body = '## PR 已因作者处于审查限制期被自动关闭\n\n作者 @' + author +
+                ' 因在连续 7 天内累计 **5 次审查警告** 已被限制 **7 天**。限制期内，其推送的 PR 将自动关闭并删除对应分支。' +
+                '限制将于 7 天后自动解除。如有异议，请@维护者人工复核。';
+              try {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
+              } catch (e) {
+                console.log('Restriction close comment failed (ignored): ' + e.message);
+              }
+              try {
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+                if (pr.state === 'open') {
+                  await github.rest.pulls.update({ owner, repo, pull_number, state: 'closed' });
+                  console.log(`Closed PR #${pull_number} (author ${author} is in 7-day restriction).`);
+                  const head = pr.head && pr.head.ref;
+                  if (head) {
+                    try {
+                      const { data: repoInfo } = await github.rest.repos.get({ owner, repo });
+                      if (head !== repoInfo.default_branch) {
+                        const { data: openPrs } = await github.rest.pulls.list({ owner, repo, state: 'open', per_page: 100 });
+                        const usedElsewhere = (openPrs || []).some(p => p.head && p.head.ref === head && p.number !== pull_number);
+                        if (!usedElsewhere) {
+                          await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + head });
+                          console.log('Deleted branch ' + head + ' (author restriction).');
+                        }
+                      }
+                    } catch (e) {
+                      console.log('Restriction branch deletion failed (ignored): ' + e.message);
+                    }
+                  }
+                }
+              } catch (e) {
+                console.log('Restriction close failed (ignored): ' + e.message);
+              }
+              return;
+            }
 
             if (verdict === 'error') {
               // No review decision on a failed/unparseable call; never close.
@@ -379,6 +458,109 @@ jobs:
                 }
               } catch (e) {
                 console.log('Close PR failed (ignored): ' + e.message);
+              }
+            }
+
+            // 7-day rolling warning counter: every non-approve review verdict
+            // (request_changes / reject) records one warning attributed to the
+            // PR author. After 5 warnings accumulate within 7 consecutive
+            // days, the PR is closed and its head branch is deleted. PRs from
+            // the repo owner or whitelisted maintainers are exempt.
+            if (verdict === 'request_changes' || verdict === 'reject') {
+              if (isExempt) {
+                console.log(`PR #${pull_number} author ${author} is exempt; skip warning auto-close.`);
+              } else {
+                const nowMs = Date.now();
+                const windowMs = 7 * 24 * 60 * 60 * 1000;
+                // Persist the warning with a per-author, timestamped label so
+                // the count survives across workflow runs and is tracked per
+                // submitting user.
+                try {
+                  await github.rest.issues.addLabels({
+                    owner, repo, issue_number: pull_number,
+                    labels: [`llm-warning-${authorKey}-${Math.floor(nowMs / 1000)}`]
+                  });
+                } catch (e) {
+                  console.log('addWarningLabel failed (ignored): ' + e.message);
+                }
+                let pr;
+                try {
+                  ({ data: pr } = await github.rest.pulls.get({ owner, repo, pull_number }));
+                } catch (e) {
+                  console.log('pulls.get failed (ignored): ' + e.message);
+                  return;
+                }
+                if (pr.state !== 'open') return;
+                const prefix = `llm-warning-${authorKey}-`;
+                const re = new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$');
+                const labels = (pr.labels || []).map(l => l.name);
+                const active = [];
+                for (const name of labels) {
+                  const m = re.exec(name);
+                  if (!m) continue;
+                  const t = Number(m[1]) * 1000;
+                  if (nowMs - t <= windowMs) {
+                    active.push(t);
+                  } else {
+                    try {
+                      await github.rest.issues.removeLabel({ owner, repo, issue_number: pull_number, name });
+                    } catch (e) { /* ignore */ }
+                  }
+                }
+                console.log(`PR #${pull_number} (author ${author}) has ${active.length} warnings in the last 7 days.`);
+                if (active.length >= 5) {
+                  // 触发 7 天限制：为作者打上带时间戳的限制标签。限制期内其
+                  // 推送的 PR 将被自动关闭并删除分支；标签 7 天后过期自动解除。
+                  try {
+                    await github.rest.issues.addLabels({
+                      owner, repo, issue_number: pull_number,
+                      labels: [`llm-restricted-${authorKey}-${Math.floor(nowMs / 1000)}`]
+                    });
+                    console.log(`Author ${author} is now restricted for 7 days (5 warnings in 7 days).`);
+                  } catch (e) {
+                    console.log('Add restriction label failed (ignored): ' + e.message);
+                  }
+                  const body = '## PR 已因多次审查警告被自动关闭\n\nLLM 自动审查在连续 7 天内对作者 @' + author +
+                    ' 的 PR 累计收到 **' + active.length + ' 次警告**（多次未通过审查），因此自动关闭了本 PR，并删除其对应分支。' +
+                    '请根据上方审查意见充分修复后重新提交。如需人工复核，请@维护者重新打开。';
+                  try {
+                    await github.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
+                  } catch (e) {
+                    console.log('Warning close comment failed (ignored): ' + e.message);
+                  }
+                  try {
+                    await github.rest.pulls.update({ owner, repo, pull_number, state: 'closed' });
+                    console.log(`Closed PR #${pull_number} after ${active.length} warnings in 7 days.`);
+                  } catch (e) {
+                    console.log('Warning close failed (ignored): ' + e.message);
+                  }
+                  // Delete the head branch (unless it is the default branch or
+                  // still used by another open PR).
+                  const head = pr.head && pr.head.ref;
+                  if (head) {
+                    try {
+                      const { data: repoInfo } = await github.rest.repos.get({ owner, repo });
+                      if (head === repoInfo.default_branch) {
+                        console.log('Skip deleting default branch ' + head);
+                      } else {
+                        const { data: openPrs } = await github.rest.pulls.list({ owner, repo, state: 'open', per_page: 100 });
+                        const usedElsewhere = (openPrs || []).some(p => p.head && p.head.ref === head && p.number !== pull_number);
+                        if (usedElsewhere) {
+                          console.log('Skip deleting branch ' + head + ' (used by another open PR).');
+                        } else {
+                          try {
+                            await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + head });
+                            console.log('Deleted branch ' + head + ' after closing PR #' + pull_number + '.');
+                          } catch (e) {
+                            console.log('deleteRef failed (ignored): ' + e.message);
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      console.log('Branch deletion checks failed (ignored): ' + e.message);
+                    }
+                  }
+                }
               }
             }
 
