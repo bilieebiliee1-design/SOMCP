@@ -338,7 +338,7 @@ internal fun ServiceTab(t: UiText, settings: SettingsStore, onOpenApkBridge: () 
                 Button(onClick = {
                     setupPrompt = null
                     when (target) {
-                        SetupTarget.Directory -> pickTree.launch(null)
+                        SetupTarget.Directory -> launchSafTreePicker(context, t.zh, pickTree)
                         SetupTarget.ApkMcp -> onOpenApkBridge()
                         SetupTarget.KeepAlive -> onOpenKeepAlive()
                     }
