@@ -1,3 +1,22 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Copyright (C) 2026 bilieebiliee1-design
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.soreverse.mcp.core
 
 import android.content.Context
@@ -26,8 +45,6 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         /** GitHub release URL for the cloudflared Android arm64 binary. */
         const val CLOUDFLARED_DOWNLOAD_URL =
             "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
-        const val CLOUDFLARED_MIRROR_URL =
-            "https://mirror.ghproxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
         const val CLOUDFLARED_DIR = "cloudflared"
         const val CLOUDFLARED_FILE = "cloudflared"
 
@@ -162,24 +179,27 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     }
 
     /**
-     * Download the cloudflared binary from GitHub releases (or mirror if
-     * [useMirror] is true) to the app's private data directory.
+     * Download the cloudflared binary to the app's private data directory,
+     * automatically switching between GitHub official and multiple mirror
+     * sources until one succeeds.
      * Runs on the calling thread — caller should dispatch to [Dispatchers.IO].
      *
      * @throws Exception on download / write failure.
      */
-    fun downloadBinary(useMirror: Boolean = false) {
+    fun downloadBinary() {
         _binaryState.set(BinaryState.DOWNLOADING)
         try {
             val dir = File(context.filesDir, CLOUDFLARED_DIR)
             dir.mkdirs()
             val tmp = File(dir, "${CLOUDFLARED_FILE}.download")
-            // Try URLs in order: selected source first, then fallback
-            val urls = if (useMirror) {
-                listOf(CLOUDFLARED_MIRROR_URL, CLOUDFLARED_DOWNLOAD_URL)
-            } else {
-                listOf(CLOUDFLARED_DOWNLOAD_URL, CLOUDFLARED_MIRROR_URL)
-            }
+            // Build an ordered candidate list: GitHub official first, then a
+            // pool of public GitHub mirrors as automatic fallbacks. Sources are
+            // switched automatically — if one (e.g. ghproxy) is unreachable we
+            // simply move on to the next candidate, so a single down source can
+            // never block the binary download.
+            val policyCandidates = DownloadMirrorPolicy.candidates(CLOUDFLARED_DOWNLOAD_URL)
+            val urls = listOf(CLOUDFLARED_DOWNLOAD_URL) +
+                policyCandidates.filter { it != CLOUDFLARED_DOWNLOAD_URL }
             var lastError: Exception? = null
             for (url in urls) {
                 try {
