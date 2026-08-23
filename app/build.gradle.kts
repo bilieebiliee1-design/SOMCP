@@ -1,3 +1,17 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ */
+
 import java.util.Properties
 
 plugins {
@@ -19,8 +33,8 @@ android {
         applicationId = "com.soreverse.mcp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.0.18"
+        versionCode = 20
+        versionName = "1.0.19"
 
         externalNativeBuild {
             cmake {
@@ -205,7 +219,11 @@ abstract class UnidbgNativeBuildTask : DefaultTask() {
         val libs = nativeLibs.get()
         val haveAll = abis.get().all { abi ->
             val dir = jniLibsRoot.get().resolve(abi)
-            dir.isDirectory && libs.all { lib -> dir.resolve("lib$lib.so").exists() }
+            // unicorn (QEMU, __uint128_t) only compiles for the 64-bit ABIs;
+            // the 32-bit ABIs get capstone/keystone only (Unidbg degrades
+            // gracefully there but the APKs still build).
+            val required = if (abi == "arm64-v8a" || abi == "x86_64") libs else libs - "unicorn"
+            dir.isDirectory && required.all { lib -> dir.resolve("lib$lib.so").exists() }
         }
         if (haveAll) {
             logger.lifecycle("[unidbg-native] libs already present in jniLibs; skipping build")

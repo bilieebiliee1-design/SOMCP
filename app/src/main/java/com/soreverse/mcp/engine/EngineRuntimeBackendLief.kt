@@ -1,3 +1,15 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
 package com.soreverse.mcp.engine
 
 import com.soreverse.mcp.core.err
@@ -182,7 +194,58 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                         "Complete public xAnSo CLI/core functionality: h/help, build-section, quit/session close semantics"
                     )
             )
+            .put(
+                "dynamic",
+                dynamicCapabilityEntry()
+            )
     )
+
+internal fun EngineRuntime.dynamicCapabilityEntry(): JSONObject {
+    val unidbgAvailable = unidbg.available()
+    val fridaTarget = FridaTarget()
+    val fridaAvailable = frida.available(fridaTarget)
+    return JSONObject()
+        .put(
+            "status",
+            JSONObject()
+                .put("unidbgAvailable", unidbgAvailable)
+                .put("fridaAvailable", fridaAvailable)
+                .put(
+                    "fridaSetup",
+                    "requires-extra-install: frida-server / frida-gadget (${fridaTarget.host}:${fridaTarget.port}) — ${frida.unavailableReason(fridaTarget)}"
+                )
+        )
+        .put("coverageClass", "standalone_dynamic_analysis_gateway")
+        .put(
+            "supported",
+            JSONArray(
+                listOf(
+                    "unidbg: manual load .so into emulated memory",
+                    "unidbg: session_call / registers / dump / trace / close",
+                    "frida: real-device attach/spawn + JS agent",
+                    "frida: Interceptor hook, native call, read memory, backtrace",
+                    "dynamic_analyze orchestration -> structured dynamicRun evidence",
+                    "dynamic_analyze_ai independent AI analysis"
+                )
+            )
+        )
+        .put(
+            "backendSplit",
+            JSONObject()
+                .put(
+                    "unidbg",
+                    "emulated VM memory space; no device required; reused verified engine path"
+                )
+                .put(
+                    "frida",
+                    "live device process address space; requires frida-server/gadget; loaded & driven with Frida JS"
+                )
+        )
+        .put(
+            "note",
+            "dynamicRun evidence produced by dynamic_analyze can be handed to DynamicAnalysisService / dynamic_analyze_ai for an independent AI report, separate from the static deep-analysis loop."
+        )
+}
 
 internal fun EngineRuntime.liefDispatch(
     workspaceId: String,

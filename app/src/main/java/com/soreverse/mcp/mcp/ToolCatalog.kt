@@ -1,5 +1,18 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
 package com.soreverse.mcp.mcp
 
+import com.soreverse.mcp.core.DynamicAnalysisService
 import com.soreverse.mcp.core.HexCodec
 import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.doubleValue
@@ -1265,6 +1278,202 @@ object ToolCatalog {
         }
     }
 
+    private val dynamicApi = EngineToolHandler(
+        ToolMeta(
+            "dynamic_api",
+            "独立动态分析网关（unidbg 模拟 + Frida 真机，手动加载到内存→执行→采集寄存器/内存/hook/trace→AI 分析）",
+            "Standalone dynamic-analysis gateway. Manually load a target .so+function into an execution context (Unidbg emulated memory or Frida live process), run it, and collect runtime evidence (registers/memory/hook/backtrace/trace) as a structured dynamicRun envelope for independent AI analysis.",
+            "lowlevel",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf(
+                        "Dynamic-analysis operation",
+                        "capabilities",
+                        "dispatch",
+                        "status",
+                        "roots",
+                        "methods",
+                        "analyze"
+                    )
+                    "workspaceId" str "Workspace ID (from so_open)"
+                    "editSessionId" str "Edit session ID"
+                    "method" str
+                        "Dispatcher method. One of: dynamic status/roots/methods/capabilities/analyze, unidbg_session_{open,call,dump,registers,trace,close}, frida_{status,sessions,open,close,hook,call,read,backtrace}."
+                    "op".oneOf(
+                        "Dispatcher operation",
+                        "status",
+                        "roots",
+                        "methods",
+                        "capabilities",
+                        "analyze",
+                        "unidbg_session_open",
+                        "unidbg_session_call",
+                        "unidbg_session_dump",
+                        "unidbg_session_registers",
+                        "unidbg_session_trace",
+                        "unidbg_session_close",
+                        "frida_status",
+                        "frida_sessions",
+                        "frida_open",
+                        "frida_close",
+                        "frida_hook",
+                        "frida_call",
+                        "frida_read",
+                        "frida_backtrace",
+                        "dispatch"
+                    )
+                    "args" arr
+                        "Positional arguments. For action=analyze, args[0] is a JSON object: { backend: unidbg|frida, targetFunction, args:[...], trace, dumpSize, dumpAddress, moduleName, fridaMode, fridaTarget/host/port, ... }."
+                    "analyze" str
+                        "Inline analyze parameters as JSON (alternative to args[0]): backend, targetFunction, args, trace, dumpSize, dumpAddress."
+                    "fridaTarget" str
+                        "Frida daemon connection as JSON: { host, port, connectTimeoutMillis, readTimeoutMillis }."
+                }
+            )
+        }
+    ) { e, a, s ->
+        when (a.str("action", "status")) {
+            "capabilities" -> ok(
+                e.capabilityRegistry().getJSONObject("backends").getJSONObject("dynamic")
+            )
+
+            "roots" -> e.dynamicDispatch(
+                a.str("workspaceId"),
+                a.str("editSessionId"),
+                "roots",
+                "",
+                JSONArray()
+            )
+
+            "methods" -> e.dynamicDispatch(
+                a.str("workspaceId"),
+                a.str("editSessionId"),
+                "methods",
+                "",
+                JSONArray()
+            )
+
+            "status" -> ok(e.dynamicStatus())
+
+            "analyze" -> {
+                val workspaceId = a.str("workspaceId")
+                val editSessionId = a.str("editSessionId")
+                val params = a.optJSONObject("analyze") ?: JSONObject().apply {
+                    a.optString("backend").takeIf(String::isNotBlank)
+                        ?.let { put("backend", it) }
+                    a.optString("targetFunction").takeIf(String::isNotBlank)
+                        ?.let { put("targetFunction", it) }
+                    a.optJSONArray("args")?.let { put("args", it) }
+                    if (a.has("trace")) put("trace", a.optBoolean("trace"))
+                    if (a.has("dumpSize")) put("dumpSize", a.optInt("dumpSize"))
+                    a.optString("dumpAddress").takeIf(String::isNotBlank)
+                        ?.let { put("dumpAddress", it) }
+                }
+                e.dynamicDispatch(workspaceId, editSessionId, "analyze", "", JSONArray().put(params))
+            }
+
+            "dispatch" -> e.dynamicDispatch(
+                a.str("workspaceId"),
+                a.str("editSessionId"),
+                a.str("op", "status"),
+                a.str("method"),
+                a.optJSONArray("args") ?: JSONArray()
+            )
+
+            else -> e.dynamicDispatch(
+                a.str("workspaceId"),
+                a.str("editSessionId"),
+                a.str("op", "status"),
+                a.str("method"),
+                a.optJSONArray("args") ?: JSONArray()
+            )
+        }
+    }
+
+    private val dynamicAnalyzeAi = object : ToolHandler {
+        override val meta = ToolMeta(
+            "dynamic_analyze_ai",
+            "独立动态分析 AI（对 unidbg/Frida 动态运行证据出报告）",
+            "Run the standalone dynamic-analysis AI: collect runtime evidence (unidbg emulated or Frida on-device) with dynamic_api analyze, then have an AI agent produce an independent analysis report over that evidence.",
+            "emulate",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "workspaceId" str "Workspace ID (from so_open)"
+                    "editSessionId" str "Edit session ID"
+                    "backend" str "Execution backend: unidbg or frida"
+                    "targetFunction" str "Target export/function to manually load and run"
+                    "targetPath" str "Display path of the target .so for the report"
+                    "args" arr "Integer/string arguments passed to the target function"
+                    "trace" bool "Enable trace"
+                    "dumpSize" int "Memory dump size"
+                    "dumpAddress" str "Hex address to dump"
+                    "dynamicRun" str "Pre-built dynamicRun evidence (skip re-running dynamic_api analyze when provided)"
+                    "request" str "User focus for this analysis turn"
+                }
+            )
+        }
+
+        override fun handle(ctx: ToolContext, args: JSONObject): JSONObject {
+            val workspaceId = args.str("workspaceId")
+            val editSessionId = args.str("editSessionId")
+            val evidence = if (args.str("dynamicRun").isNotBlank()) {
+                args.str("dynamicRun")
+            } else {
+                val params = JSONObject().apply {
+                    args.optString("backend").takeIf(String::isNotBlank)?.let { put("backend", it) }
+                    args.optString("targetFunction")?.let { put("targetFunction", it) }
+                    args.optJSONArray("args")?.let { put("args", it) }
+                    if (args.has("trace")) put("trace", args.optBoolean("trace"))
+                    if (args.has("dumpSize")) put("dumpSize", args.optInt("dumpSize"))
+                    args.optString("dumpAddress").takeIf(String::isNotBlank)?.let { put("dumpAddress", it) }
+                }
+                val dispatch = ctx.engine.dynamicDispatch(
+                    workspaceId,
+                    editSessionId,
+                    "analyze",
+                    "",
+                    JSONArray().put(params)
+                )
+                // Intercept failed dispatch up front so its error JSON is never
+                // misread as valid evidence by the AI layer.
+                if (!dispatch.optBoolean("ok", true) || dispatch.has("error")) {
+                    return err(
+                        "DYNAMIC_DISPATCH_FAILED",
+                        dispatch.optJSONObject("error")?.optString("message")
+                            ?: ("could not collect dynamic evidence: " + dispatch.toString().take(400)),
+                        "backend",
+                        params.optString("backend")
+                    )
+                }
+                dispatch.toString()
+            }
+            if (evidence.isBlank()) {
+                return err("NO_DYNAMIC_EVIDENCE", "No dynamic evidence was produced; check backend/workspace/targetFunction.", "workspaceId", workspaceId)
+            }
+            val result = runCatching {
+                DynamicAnalysisService(ctx.context).analyzeSync(
+                    evidence,
+                    args.str("targetPath").ifBlank { workspaceId },
+                    ctx.settings,
+                    zh = true,
+                    request = args.str("request")
+                ).getOrThrow()
+            }
+            return result.fold(
+                onSuccess = { ok(JSONObject().put("report", it).put("evidence", evidence.take(8192))) },
+                onFailure = {
+                    err("DYNAMIC_AI_FAILED", it.message ?: "AI dynamic analysis failed", "workspaceId", workspaceId)
+                }
+            )
+        }
+    }
+
     private val unidbgSession = EngineToolHandler(
         ToolMeta(
             "unidbg_session",
@@ -2071,7 +2280,7 @@ object ToolCatalog {
         emulateCall, emulateDump,
         unidbgSession, unidbgMemory, unidbgDebug, unidbgBatch,
         diffSo,
-        rizinApi, liefApi, unidbgApi, xansoApi,
+        rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi,
         sessionOpen, sessionHistory, sessionAudit,
         buildSo,
         systemControl,

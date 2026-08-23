@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: AGPL-3.0-only
 #
 # SOMCP - build-unidbg-native.sh
 # Copyright (C) 2026 SOMCP authors
 # Upstream: https://github.com/bilieebiliee1-design/SOMCP
 #
 # This program is free software: you can redistribute it and/or modify it
-# under the terms of the GNU General Public License version 3 as published
+# under the terms of the GNU Affero General Public License version 3 as published
 # by the Free Software Foundation.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
 # for more details.
 #
-# You should have received a copy of the GNU General Public License along
+# You should have received a copy of the GNU Affero General Public License along
 # with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # build-unidbg-native.sh - Cross-compile the Android native libraries required
@@ -217,19 +217,40 @@ fi
 
 if [[ $SKIP_KEYSTONE -eq 0 ]]; then
   build_one keystone "$PROJECT/third_party/keystone-engine-src" \
-    -DBUILD_LIBS_ONLY=ON -DLLVM_BUILD_TOOLS=OFF
-  cp "$BUILD_ROOT/keystone/libkeystone.so" "$JNI_LIBS/"
-  echo "[unidbg-native] copied libkeystone.so -> $JNI_LIBS"
+    -DBUILD_SHARED_LIBS=ON -DBUILD_LIBS_ONLY=ON -DLLVM_BUILD_TOOLS=OFF
+  # keystone's bundled LLVM build redirects libkeystone.so into
+  # <build>/llvm/lib/ (LIBRARY_OUTPUT_DIRECTORY from its llvm CMake), not the
+  # build root; locate it defensively in case the layout changes upstream.
+  keystone_so="$BUILD_ROOT/keystone/llvm/lib/libkeystone.so"
+  if [[ ! -f "$keystone_so" ]]; then
+    keystone_so="$(find "$BUILD_ROOT/keystone" -name 'libkeystone.so' -print -quit || true)"
+  fi
+  if [[ -z "$keystone_so" || ! -f "$keystone_so" ]]; then
+    echo "error: libkeystone.so not found under $BUILD_ROOT/keystone" >&2
+    exit 1
+  fi
+  cp "$keystone_so" "$JNI_LIBS/"
+  echo "[unidbg-native] copied $(basename "$keystone_so") -> $JNI_LIBS"
 fi
 
 if [[ $SKIP_UNICORN -eq 0 ]]; then
-  # unidbg 0.9.9's Unicorn2Factory uses unicorn2 (the zhkl0228 fork).
-  uni="$PROJECT/third_party/unicorn-zhkl0228"
-  [[ -d "$uni" ]] || uni="$PROJECT/third_party/unicorn-engine-unicorn2"
-  build_one unicorn "$uni" \
-    -DUNICORN_ARCH=arm,aarch64 -DUNICORN_BUILD_TESTS=OFF -DUNICORN_BUILD_SAMPLES=OFF
-  cp "$BUILD_ROOT/unicorn/libunicorn.so" "$JNI_LIBS/"
-  echo "[unidbg-native] copied libunicorn.so -> $JNI_LIBS"
+  # unicorn's bundled QEMU uses __uint128_t (CONFIG_INT128 in host-utils.h),
+  # which the Android NDK does not provide for 32-bit targets (armeabi-v7a,
+  # x86), so it only compiles for 64-bit ABIs. On 32-bit ABIs we skip
+  # libunicorn so the (still 32-bit) APKs build; Unidbg is unavailable there
+  # but degrades gracefully via UnidbgEmulator's native load handling.
+  # capstone/keystone compile for every ABI.
+  if [[ "$ABI" != "arm64-v8a" && "$ABI" != "x86_64" ]]; then
+    echo "[unidbg-native] WARNING: unicorn cannot compile on 32-bit ABI '$ABI' (needs __uint128_t); skipping libunicorn.so for this ABI"
+  else
+    # unidbg 0.9.9's Unicorn2Factory uses unicorn2 (the zhkl0228 fork).
+    uni="$PROJECT/third_party/unicorn-zhkl0228"
+    [[ -d "$uni" ]] || uni="$PROJECT/third_party/unicorn-engine-unicorn2"
+    build_one unicorn "$uni" \
+      -DUNICORN_ARCH=arm,aarch64 -DUNICORN_BUILD_TESTS=OFF -DUNICORN_BUILD_SAMPLES=OFF
+    cp "$BUILD_ROOT/unicorn/libunicorn.so" "$JNI_LIBS/"
+    echo "[unidbg-native] copied libunicorn.so -> $JNI_LIBS"
+  fi
 fi
 
 echo "[unidbg-native] DONE - rebuild the APK to enable the Unidbg backend (libjnidispatch.so is provided automatically by the JNA AAR)"

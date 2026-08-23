@@ -2,15 +2,15 @@
 
 SOMCP 是一个运行在 Android 手机上的本地 SO 逆向 MCP 服务器。它通过 Streamable HTTP 暴露 MCP 工具，让客户端可以在手机上完成 ELF 结构分析、Rizin 反汇编/分析、LIEF ELF 修复/重写、补丁会话、构建导出、Cloudflare Tunnel 暴露和可选 APK MCP 桥接。
 
-当前版本：`1.0.18`
+当前版本：`1.0.19`
 
 包名：`com.soreverse.mcp`
 
 最低系统：Android 8.0 / API 26
 
-许可证：`GPL-3.0-only`。SOMCP 主项目依据 [GNU General Public License v3.0](LICENSE) 发布。仓库中的第三方依赖、submodule、生成资源和补丁仍分别遵循各自上游许可证，GPL-3.0 声明不会替代其原有许可条款。
+许可证：`AGPL-3.0-only`。SOMCP 主项目依据 [GNU Affero General Public License v3.0](LICENSE) 发布。仓库中的第三方依赖、submodule、生成资源和补丁仍分别遵循各自上游许可证，AGPL-3.0 声明不会替代其原有许可条款。
 
-> **再分发义务（重要）**：本软件受《中华人民共和国著作权法》与《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：保留版权与许可声明及 [NOTICE](NOTICE)、继续以 GPL-3.0 授权、向每一位接收者提供完整对应源代码、并标注所做修改。闭源分发、抹除署名或改名冒充原创即构成侵权——依 GPL-3.0 第 8 条授权自动终止，权利人可要求停止侵害、下架、公开更正并索赔（GPL 在中国司法实践中已被确认有效可强制执行，参见"数字天堂诉柚子科技""罗盒诉风灵"等案）。维权模板见 [docs/legal](docs/legal)。本软件在 MCP `initialize`/健康检查返回与"关于"页固定输出许可证、上游仓库与版权，作为运行时溯源证据。
+> **再分发义务（重要）**：本软件受《中华人民共和国著作权法》与《计算机软件保护条例》保护。任何再分发（含修改、改名、二次打包版本）必须：保留版权与许可声明及 [NOTICE](NOTICE)、继续以 AGPL-3.0 授权、向每一位接收者提供完整对应源代码、并标注所做修改。闭源分发、抹除署名或改名冒充原创即构成侵权——依 AGPL-3.0 第 8 条授权自动终止，权利人可要求停止侵害、下架、公开更正并索赔（GPL 在中国司法实践中已被确认有效可强制执行，参见"数字天堂诉柚子科技""罗盒诉风灵"等案）。维权模板见 [docs/legal](docs/legal)。本软件在 MCP `initialize`/健康检查返回与"关于"页固定输出许可证、上游仓库与版权，作为运行时溯源证据。
 
 ## APK 位置
 
@@ -39,11 +39,11 @@ app/build/outputs/apk/release/app-universal-release.apk
 推荐 Release tag 使用 `v<versionName>`，并上传按 ABI 命名的 APK：
 
 ```text
-SOMCP-1.0.18-arm64-v8a.apk
-SOMCP-1.0.18-armeabi-v7a.apk
-SOMCP-1.0.18-x86.apk
-SOMCP-1.0.18-x86_64.apk
-SOMCP-1.0.18-universal.apk
+SOMCP-1.0.19-arm64-v8a.apk
+SOMCP-1.0.19-armeabi-v7a.apk
+SOMCP-1.0.19-x86.apk
+SOMCP-1.0.19-x86_64.apk
+SOMCP-1.0.19-universal.apk
 ```
 
 可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI，存在校验资产时会在安装前强制验证 SHA-256。
@@ -63,7 +63,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - 编辑会话：snapshot、rollback、undo、redo、check、audit、persist。
 - 构建导出：自动改名/覆盖、patch report、多输出变体、镜像到工作目录。
 - Cloudflare Tunnel：quick/named 隧道、keepalive、状态统计。
-- 可选 Unidbg：`emulate_call`、`emulate_dump`。**注意**：Unidbg 的 Android 原生库（`libcapstone.so` / `libkeystone.so` / `libunicorn.so` / `libjnidispatch.so`）不随 APK 内置，需自行交叉编译 unidbg 上游 native 并放入 `app/src/main/jniLibs/<abi>/` 后重新构建，或在设备上额外安装；未内置时 `system_control(action=status)` 的 `emulation.setup` 会明确标注 `requires-extra-install`，`emulate_*` 调用返回 `EMULATOR_UNAVAILABLE` 并说明缺失原因，不会伪装成可用。
+- 可选 Unidbg：`emulate_call`、`emulate_dump`。**注意**：Unidbg 的 Android 原生库（`libcapstone.so` / `libkeystone.so` / `libunicorn.so` / `libjnidispatch.so`）不随 Debug APK 内置，需自行交叉编译 unidbg 上游 native 并放入 `app/src/main/jniLibs/<abi>/` 后重新构建，或在设备上额外安装；**官方 Release APK（v1.0.18+）已内置 arm64-v8a / armeabi-v7a / x86 / x86_64 全部四个 ABI 的 Unidbg 原生库**，直接安装即可使用。库缺失时 `system_control(action=status)` 的 `emulation.setup` 会明确标注 `requires-extra-install`，`emulate_*` 调用返回 `EMULATOR_UNAVAILABLE` 并说明缺失原因，不会伪装成可用。
 - 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
 - APK 内 SO 使用流式扫描与按需提取，分析页可一键释放工作区、索引缓存和已结束的 Blutter 数据。
@@ -128,7 +128,34 @@ lief_api(action=capabilities|parse|list|patch_address|add_export|remove_symbol|b
 unidbg_api(action=capabilities|status|call|dump)
 xanso_api(action=capabilities|status|fix_sections)
 flutter_blutter(action=inspect|analyze|status|result|cancel|packages|prune)
+dynamic_api(action=capabilities|dispatch|status|analyze)
+dynamic_analyze_ai(evidence=...|function=...|request=...)
 ```
+
+## 动态分析（手动加载到内存 → AI 分析）
+
+SOMCP 提供一套**独立**的动态分析工具流程，与静态 deep-analysis 循环彼此分离，把「把 `.so` 手动加载到内存 → 执行 → 采集证据 → 交给 AI 分析」串成一条可被 MCP 调用的链路。核心入口是两个工具：
+
+```text
+dynamic_api(action=capabilities|dispatch|status|analyze, op=unidbg_session_open|unidbg_session_call|unidbg_session_registers|frida_hook|frida_call|analyze, backend=unidbg|frida, targetFunction=...)
+dynamic_analyze_ai(function=... | evidence=...)
+```
+
+两个后端共用同一套编排层 `dynamicDispatch`：
+
+- **unidbg（模拟）**：`unidbg_session_open` 把选中的 `.so` 映射进模拟内存，`unidbg_session_call` 解析指定导出函数并执行，随后采集寄存器和目标地址的内存 dump。无需真机，适合快速验证目标函数行为。
+- **frida（真机 hook）**：`FridaBridge` 以纯 Kotlin 实现 `frida-server`/`frida-gadget` 的 TCP 协议客户端，`frida_hook` 通过 JS agent（Interceptor/Module）挂钩目标函数捕获入参与返回，`frida_call` 触发调用并回读 hook 结果。**注意**：`frida-server`/`frida-gadget` 不随 APK 内置，需在已 root 设备上单独安装并在推开时先对目标进程 `ptrace`/注入；未就绪时 `dynamic_api(action=capabilities)` 的 `status.fridaAvailable` 会如实标注 `false`，不会伪装成可用。
+
+`dynamic_analyze_ai` 复用 `RikkaAgentEngine`，把 `dynamicRun` 证据（寄存器现场、内存 dump、hook 记录、调用返回）喂给 AI 生成结构化动态分析报告：
+
+```text
+dynamic_api(action=capabilities)        # 查看 backends.dynamic，确认 unidbg/frida 可用性
+dynamic_api(action=dispatch, backend=unidbg, op=unidbg_session_open, targetFunction="JNI_OnLoad")
+dynamic_api(action=dispatch, backend=unidbg, op=unidbg_session_call, targetFunction="JNI_OnLoad")
+dynamic_analyze_ai(function="JNI_OnLoad")  # 或直接传入上一步 evidence
+```
+
+`meta_info(action=capabilities)` 的 `backends.dynamic` 是动态分析的能力真实面来源，明确列出 unidbg/frida 的支持状态与限制。
 
 `rizin_api(action=command)` 提供受控 Rizin raw command 通道，用于覆盖大量 Rizin 命令式底层能力；为安全起见，写入、文件、shell 等危险命令会被阻止。
 
@@ -265,12 +292,12 @@ Release 构建启用：
 
 ## 注意事项
 
-- 本项目采用 GPL-3.0-only 许可证。任何再分发（含修改、改名、二次打包版本）必须：
+- 本项目采用 AGPL-3.0-only 许可证。任何再分发（含修改、改名、二次打包版本）必须：
   - 保留版权与许可声明；
-  - 继续以 GPL-3.0-only 授权；
+  - 继续以 AGPL-3.0-only 授权；
   - 向每一位接收者提供完整对应源代码；
   - 标注所做修改。
-  - 闭源分发、抹除署名或改名冒充原创即构成侵权，依 GPL-3.0 第 8 条授权自动终止，SOMCP 项目组将依法提起诉讼以维护自身权益。
+  - 闭源分发、抹除署名或改名冒充原创即构成侵权，依 AGPL-3.0 第 8 条授权自动终止，SOMCP 项目组将依法提起诉讼以维护自身权益。
 - 本工具只适合分析自己有权处理的文件。第三方二进制的逆向、修改和分发可能受法律、协议或平台规则限制。
 - 汇编补丁更适合等长覆盖或明确边界内 patch，不会自动搬移后续代码。
 - 手机无法单独证明自己从公网可访问；公网可达性需要远端客户端、Cloudflare Tunnel 或其他外部探测配合。

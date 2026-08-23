@@ -1,3 +1,17 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ */
+
 package com.soreverse.mcp.core
 
 import android.app.Activity
@@ -61,7 +75,15 @@ object IntegrityGuard {
         // 2. Native-level check (reads APK directly, bypasses PackageManager hook)
         val nativePass = SignatureVerifier.verify(context)
 
-        if (!javaPass || !nativePass) {
+        // 3. Native package-name pin (rejects repackaged builds that changed
+        //    applicationId, even if the Java layer reports a spoofed name).
+        val packagePass = SignatureVerifier.verifyPackageName(context)
+
+        // 4. Native APK integrity (ZIP structure + critical entries + dex CRC)
+        val integrityCode = SignatureVerifier.verifyApkIntegrity(context)
+        val integrityPass = integrityCode == SignatureVerifier.IntegrityCode.OK
+
+        if (!javaPass || !nativePass || !packagePass || !integrityPass) {
             val reasons = mutableListOf<String>()
             if (!javaPass) reasons.add("Java: ${javaResult.reason}")
             if (!nativePass) {
@@ -69,24 +91,34 @@ object IntegrityGuard {
                     "Native: APK signer mismatch detected by filesystem-level verification"
                 )
             }
+            if (!packagePass) {
+                reasons.add("Native: package name does not match the pinned value")
+            }
+            if (!integrityPass) {
+                reasons.add("Native: APK integrity check failed (code=0x${integrityCode.toString(16)})")
+            }
             AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
             terminateWithContext(context)
             return
         }
 
-        // 3. Keep re-verifying at runtime so tampering after startup is caught.
+        // 5. Keep re-verifying at runtime so tampering after startup is caught.
         schedulePeriodicRecheck(context.applicationContext ?: context)
     }
 
     /**
      * Lightweight early gate executed from Application.attachBaseContext().
-     * Only the native filesystem-level signer check runs here: reading the APK
-     * directly bypasses the Java PackageManager hook that SigKill / TweakMe /
-     * SignatureKiller install at exactly this lifecycle point.
+     * Only the native filesystem-level checks run here (signer digest, package
+     * name pin, APK integrity): reading the APK directly bypasses the Java
+     * PackageManager hook that SigKill / TweakMe / SignatureKiller install at
+     * exactly this lifecycle point.
      */
     fun enforceEarly(context: Context) {
-        if (!SignatureVerifier.verify(context)) {
-            AppLog.e("INTEGRITY ENFORCEMENT (early) FAILED: native APK signer mismatch")
+        if (!SignatureVerifier.verify(context) ||
+            !SignatureVerifier.verifyPackageName(context) ||
+            SignatureVerifier.verifyApkIntegrity(context) != SignatureVerifier.IntegrityCode.OK
+        ) {
+            AppLog.e("INTEGRITY ENFORCEMENT (early) FAILED: native signer / package / integrity mismatch")
             terminateWithContext(context)
         }
     }
@@ -113,7 +145,11 @@ object IntegrityGuard {
                 // faked but can be hooked, so it is cross-checked too.
                 val nativeOk = SignatureVerifier.verify(context)
                 val javaOk = verify(context).trusted
-                if (!nativeOk || !javaOk) {
+                val packageOk = SignatureVerifier.verifyPackageName(context)
+                val integrityOk =
+                    SignatureVerifier.verifyApkIntegrity(context) ==
+                        SignatureVerifier.IntegrityCode.OK
+                if (!nativeOk || !javaOk || !packageOk || !integrityOk) {
                     AppLog.e("INTEGRITY PERIODIC CHECK FAILED: tampering detected at runtime")
                     terminateWithContext(context)
                     return@Thread
