@@ -176,6 +176,224 @@ static inline bool sum_exceeds(size_t a, size_t b, size_t cap) {
 }
 
 // ---------------------------------------------------------------------------
+// Little-endian readers with bounds checks
+// ---------------------------------------------------------------------------
+static inline bool in_bounds(size_t off, size_t len, size_t end) {
+    return off <= end && len <= end - off;
+}
+
+static bool read_u32le(const uint8_t* p, size_t off, size_t end, uint32_t* out) {
+    if (!in_bounds(off, 4, end)) return false;
+    const uint8_t* b = p + off;
+    *out = static_cast<uint32_t>(b[0]) |
+           (static_cast<uint32_t>(b[1]) << 8) |
+           (static_cast<uint32_t>(b[2]) << 16) |
+           (static_cast<uint32_t>(b[3]) << 24);
+    return true;
+}
+
+static bool read_u64le(const uint8_t* p, size_t off, size_t end, uint64_t* out) {
+    if (!in_bounds(off, 8, end)) return false;
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) {
+        v |= static_cast<uint64_t>(p[off + i]) << (8 * i);
+    }
+    *out = v;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// APK Signature Scheme v2 / v3 verification support
+//
+// WHY (context from google/apksigner and APKSignatureBypassDemo):
+//   Modern APKs are signed with up to three schemes: v1 (JAR) whose signing
+//   certificate lives in META-INF/*.RSA, and v2/v3 whose signing certificate
+//   lives in the "APK Signing Block" located immediately before the ZIP
+//   central directory.
+//
+//   Google/apksigner verifies the highest available scheme and treats the
+//   schemes as independent. A subtle, well-known bypass (demonstrated by
+//   APKSignatureBypassDemo, and discussed on the apksigner docs page) works by
+//   exploiting the difference between v1 and v2/v3 verification:
+//     * an attacker preserves the ORIGINAL META-INF/*.RSA v1 signature files
+//       (so a checker that only reads v1 sees the genuine certificate and
+//       passes the digest comparison), while
+//     * re-signing the same APK with a NEW key in the v2/v3 APK Signing Block
+//       (which cryptographically covers the file content), so the system
+//       install/verification path accepts the attacker's key.
+//   A verifier that validates only the v1 certificate therefore accepts a
+//   repackaged APK controlled by the attacker - exactly the failure mode our
+//   own previous implementation was exposed to.
+//
+//   The counter-measure implemented here is to ALSO read the signing
+//   certificate from the v2/v3 APK Signing Block. Because the v2/v3 signature
+//   covers the whole file, an attacker cannot keep our certificate there while
+//   using their own key; requiring the v2/v3 signer digest to match the pin
+//   closes the scheme-confusion gap.
+// ---------------------------------------------------------------------------
+
+// ASCII "APK Sig Block 42" (16 bytes), tags the end of the APK Signing Block.
+static const uint8_t kApkSigBlockMagic[16] = {
+    'A', 'P', 'K', ' ', 'S', 'i', 'g', ' ',
+    'B', 'l', 'o', 'c', 'k', ' ', '4', '2'
+};
+
+// v2 / v3 APK Signing Block entry IDs.
+static const uint32_t kApkSigSchemeV2BlockId = 0x7109871a;
+static const uint32_t kApkSigSchemeV3BlockId = 0xf05368c0;
+
+/**
+ * Locates a signing certificate inside an APK Signature Scheme v2/v3 block.
+ *
+ * @param block      pointer to the block payload for the requested scheme
+ * @param block_len  length of the block payload
+ * @param out_cert   receives the first X.509 certificate (DER) if found
+ * @return true when a certificate was extracted
+ */
+static bool extract_cert_from_sign_block(const uint8_t* block, size_t block_len,
+                                         std::vector<uint8_t>& out_cert) {
+    out_cert.clear();
+    if (!block || block_len == 0) return false;
+
+    // Block layout (AOSP apksig): a sequence of length-prefixed Signer
+    // structures. Each length prefix is a uint32 LE.
+    size_t pos = 0;
+
+    // --- signer ---
+    uint32_t signer_len = 0;
+    if (!read_u32le(block, pos, block_len, &signer_len)) return false;
+    if (!in_bounds(pos + 4, signer_len, block_len)) return false;
+    const size_t signer = pos + 4;
+    const size_t signer_end = signer + signer_len;
+
+    // --- signer.signedData : length-prefixed ---
+    uint32_t sd_len = 0;
+    if (!read_u32le(block, signer, signer_end, &sd_len)) return false;
+    if (!in_bounds(signer + 4, sd_len, signer_end)) return false;
+    const size_t sd = signer + 4;
+    const size_t sd_end = sd + sd_len;
+
+    // --- signedData.digests : length-prefixed, then certificates ---
+    uint32_t digests_len = 0;
+    if (!read_u32le(block, sd, sd_end, &digests_len)) return false;
+    if (!in_bounds(sd + 4, digests_len, sd_end)) return false;
+
+    uint32_t certs_len = 0;
+    const size_t digests_end = sd + 4 + digests_len;
+    if (!in_bounds(digests_end, 4, sd_end)) return false;
+    if (!read_u32le(block, digests_end, sd_end, &certs_len)) return false;
+    if (!in_bounds(digests_end + 4, certs_len, sd_end)) return false;
+
+    // --- certificates : sequence of length-prefixed X.509 certs ---
+    const size_t certs = digests_end + 4;
+    const size_t certs_end = certs + certs_len;
+    size_t c = certs;
+    uint32_t cert_len = 0;
+    if (!read_u32le(block, c, certs_end, &cert_len)) return false;
+    if (!in_bounds(c + 4, cert_len, certs_end)) return false;
+    out_cert.assign(block + c + 4, block + c + 4 + cert_len);
+    return !out_cert.empty();
+}
+
+/**
+ * Finds the APK Signing Block (the v2/v3 signing-block container) and, if the
+ * requested scheme block is present, extracts its first signing certificate.
+ *
+ * Layout (see google/apksigner ApkSigningBlockUtils):
+ *   ... [ uint64 signingBlockSize ][ block pairs (each uint64 size + uint32 id
+ *   + value) ... ][ uint64 signingBlockSize ][ "APK Sig Block 42" magic ]
+ *   |<------------ signing_block_size bytes ----------------->|
+ *   immediately followed by the ZIP central directory.
+ *
+ * @param apk                 mapped APK bytes
+ * @param apk_size            size of the mapping
+ * @param central_dir_offset  byte offset of the first central-directory entry
+ * @param prefer_v3           prefer the v3 signer certificate over v2
+ * @param out_cert            receives the signing certificate (DER) if found
+ * @return 1 if a v2/v3 sequence signer was found and parsed, 0 if no signing
+ *         block / no matching scheme id was found, -1 on a malformed block
+ *         (bounds violation) that should be treated as a hard failure.
+ */
+static int find_apk_sign_block_cert(const uint8_t* apk, size_t apk_size,
+                                    uint64_t central_dir_offset,
+                                    bool prefer_v3,
+                                    std::vector<uint8_t>& out_cert) {
+    out_cert.clear();
+    if (central_dir_offset < 16 ||
+        central_dir_offset > static_cast<uint64_t>(apk_size)) {
+        return -1;
+    }
+
+    const size_t magic_off = static_cast<size_t>(central_dir_offset) - 16;
+    if (std::memcmp(apk + magic_off, kApkSigBlockMagic, sizeof(kApkSigBlockMagic)) != 0) {
+        return 0; // not signed with a v2/v3 signing block
+    }
+
+    uint64_t block_size = 0;
+    if (!read_u64le(apk, magic_off - 8, apk_size, &block_size)) return -1;
+
+    const uint64_t block_end = static_cast<uint64_t>(magic_off) - 8;
+    // Guard against underflow on tiny/hostile APKs: there must be room for both
+    // the trailing 8-byte size field plus an 8-byte leading size field before
+    // the first block pair may be read.
+    if (block_end < 16) return -1;
+    if (block_size > block_end - 8) return -1; // hostile size: cannot wrap
+    const uint64_t block_start_u64 = block_end - block_size - 8;
+
+    // The leading 8 bytes hold the same size as the trailing field; cross-check.
+    uint64_t leading_size = 0;
+    if (!read_u64le(apk, block_start_u64, block_start_u64 + 8, &leading_size)) return -1;
+    if (leading_size != block_size) return -1;
+
+    // Walk the block pairs between block_start+8 and block_end.
+    std::vector<uint8_t> v2_cert, v3_cert;
+    size_t pair_pos = static_cast<size_t>(block_start_u64) + 8;
+    const size_t pairs_end = static_cast<size_t>(block_end);
+    int scheme_reported = -1; // -1 none yet, 0 v2 found, 1 v3 found
+
+    while (pair_pos < pairs_end) {
+        uint64_t pair_size = 0;
+        if (!read_u64le(apk, pair_pos, pairs_end, &pair_size)) return -1;
+        const size_t value_off = pair_pos + 8;
+        // pair_size counts the 4-byte id plus the value bytes. Entries for
+        // unknown IDs (e.g. other block types) may be tiny; skip them rather
+        // than treating a short unrelated entry as a hard parse failure.
+        if (pair_size < 4) { pair_pos += 8 + static_cast<size_t>(pair_size); continue; }
+        if (!in_bounds(value_off, static_cast<size_t>(pair_size - 4), pairs_end)) return -1;
+
+        uint32_t id = 0;
+        if (!read_u32le(apk, value_off, static_cast<size_t>(pair_size - 4) + value_off, &id))
+            return -1;
+
+        const size_t value_len = static_cast<size_t>(pair_size - 4);
+        const uint8_t* value = apk + value_off + 4;
+
+        if (id == kApkSigSchemeV3BlockId) {
+            if (extract_cert_from_sign_block(value, value_len, v3_cert)) scheme_reported = 1;
+        } else if (id == kApkSigSchemeV2BlockId) {
+            if (extract_cert_from_sign_block(value, value_len, v2_cert)) scheme_reported = 0;
+        }
+
+        // Advance to the next pair.
+        if (!in_bounds(pair_pos, 8 + static_cast<size_t>(pair_size), pairs_end)) break;
+        pair_pos += 8 + static_cast<size_t>(pair_size);
+    }
+
+    if (scheme_reported < 0) return 0; // signing block present but no valid v2/v3 signer
+
+    // Prefer the highest available scheme (v3 over v2) unless the caller asked
+    // otherwise, mirroring Android's "verify the strongest scheme" behaviour.
+    std::vector<uint8_t> chosen;
+    if (prefer_v3 && !v3_cert.empty()) chosen = std::move(v3_cert);
+    else if (!v2_cert.empty()) chosen = std::move(v2_cert);
+    else if (!v3_cert.empty()) chosen = std::move(v3_cert);
+    if (chosen.empty()) return 0;
+
+    out_cert = std::move(chosen);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Minimal DER/PKCS7 parser
 // ---------------------------------------------------------------------------
 struct DerNode {
@@ -739,6 +957,7 @@ enum : int {
     kIntegrityMissingSignature  = 1 << 6, // META-INF/*.{RSA,DSA,EC} absent
     kIntegrityMissingNative     = 1 << 7, // lib/<abi>/librz_native.so absent
     kIntegrityCrcMismatch       = 1 << 8, // classes.dex content CRC mismatch
+    kIntegrityMissingApkSigV234 = 1 << 9, // no v2/v3 APK Signing Block signer
 };
 
 // The bundled native library name is librz_native.so: CMakeLists.txt declares
@@ -776,7 +995,19 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
     bool has_signature = false, has_native = false;
     bool crc_fail = false;
 
+    // Detect presence of a v2/v3 APK Signing Block. An official apksigner-
+    // signed SOMCP build always carries one; its absence next to a preserved
+    // v1 signature is the signature of a scheme-confusion repack and is
+    // reported as kIntegrityMissingApkSigV234.
     size_t cd_pos = eocd.central_dir_offset;
+    bool has_apk_sign_block = false;
+    {
+        std::vector<uint8_t> probe_cert;
+        int probe = find_apk_sign_block_cert(apk, apk_size,
+                                             eocd.central_dir_offset,
+                                             /*prefer_v3=*/true, probe_cert);
+        has_apk_sign_block = (probe == 1);
+    }
     for (uint16_t i = 0;
          i < eocd.total_entries && !sum_exceeds(cd_pos, sizeof(ZipCentralDirEntry), apk_size);
          i++) {
@@ -861,6 +1092,7 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
     if (!has_arsc) result |= kIntegrityMissingArsc;
     if (!has_signature) result |= kIntegrityMissingSignature;
     if (!has_native) result |= kIntegrityMissingNative;
+    if (!has_apk_sign_block) result |= kIntegrityMissingApkSigV234;
     if (crc_fail) result |= kIntegrityCrcMismatch;
     return result;
 }
@@ -1106,6 +1338,97 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 }
 
 /**
+ * Reads the APK file directly from the filesystem and extracts the signing
+ * certificate recorded in the APK Signature Scheme v2/v3 block (the "APK
+ * Signing Block" located immediately before the ZIP central directory).
+ *
+ * WHY (see the WHY comment at the top of the v2/v3 support section): a
+ * v1-only (META-INF/*.RSA) certificate check is vulnerable to scheme-confusion
+ * repacking, where an attacker keeps the original v1 signature files and
+ * re-signs only with a new key via v2/v3. Because the v2/v3 signature
+ * cryptographically covers the entire file, its certificate cannot be
+ * preserved while the signing key changes; verifying THIS certificate against
+ * the pin therefore closes that bypass.
+ *
+ * The highest available scheme is preferred (v3 over v2), mirroring Android's
+ * "verify the strongest scheme" behaviour.
+ *
+ * @param env       JNI environment
+ * @param thiz      JNI object
+ * @param apkPath   Absolute path to the APK file (context.packageCodePath)
+ * @return          DER-encoded X.509 certificate bytes, or null when the APK
+ *                  has no v2/v3 signing block or the block is malformed.
+ */
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkV234Certificate(
+    JNIEnv* env, jobject thiz, jstring apkPath) {
+
+    if (!apkPath) {
+        LOGE("apkPath is null");
+        return nullptr;
+    }
+
+    const char* path_cstr = env->GetStringUTFChars(apkPath, nullptr);
+    if (!path_cstr) {
+        LOGE("Failed to read apkPath");
+        return nullptr;
+    }
+    std::string path(path_cstr);
+    env->ReleaseStringUTFChars(apkPath, path_cstr);
+
+    MappedApk apk;
+    if (!apk.map(path.c_str())) {
+        LOGE("Failed to map APK for v2/v3 check: %s", path.c_str());
+        return nullptr;
+    }
+    const uint8_t* apk_data = apk.data();
+    size_t apk_size = apk.size();
+
+    if (apk_size < sizeof(ZipEocd)) {
+        LOGE("APK too small");
+        return nullptr;
+    }
+
+    // Locate EOCD scanning backwards for the central-directory offset.
+    size_t eocd_pos = apk_size - sizeof(ZipEocd);
+    size_t search_start = (apk_size > 65557) ? apk_size - 65557 : 0;
+    bool found_eocd = false;
+    for (size_t i = eocd_pos; i >= search_start && i < apk_size; i--) {
+        ZipEocd eocd;
+        if (sum_exceeds(i, sizeof(ZipEocd), apk_size)) continue;
+        std::memcpy(&eocd, apk_data + i, sizeof(ZipEocd));
+        if (eocd.signature == 0x06054b50) { eocd_pos = i; found_eocd = true; break; }
+        if (i == 0) break;
+    }
+    if (!found_eocd) {
+        LOGI("v2/v3 check: EOCD not found");
+        return nullptr;
+    }
+
+    ZipEocd eocd;
+    std::memcpy(&eocd, apk_data + eocd_pos, sizeof(ZipEocd));
+
+    std::vector<uint8_t> cert;
+    int rc = find_apk_sign_block_cert(apk_data, apk_size,
+                                      eocd.central_dir_offset,
+                                      /*prefer_v3=*/true, cert);
+    if (rc != 1 || cert.empty()) {
+        LOGI("v2/v3 check: no signing certificate found (rc=%d): %s", rc, path.c_str());
+        return nullptr;
+    }
+    LOGI("Extracted v2/v3 signing certificate: %zu bytes", cert.size());
+
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(cert.size()));
+    if (!result) {
+        LOGE("Failed to allocate Java byte array");
+        return nullptr;
+    }
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(cert.size()),
+                            reinterpret_cast<const jbyte*>(cert.data()));
+    return result;
+}
+
+/**
  * Verifies that the running package name matches the pinned value
  * ("com.soreverse.mcp"). The expected value is stored XOR-obfuscated in the
  * binary, so a repackaged build with a changed applicationId is rejected here
@@ -1113,7 +1436,6 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
  *
  * @return JNI_TRUE if [packageName] matches the pin, JNI_FALSE otherwise.
  */
-extern "C" JNIEXPORT jboolean JNICALL
 Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyPackageName(
     JNIEnv* env, jobject thiz, jstring packageName) {
 
