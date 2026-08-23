@@ -63,6 +63,7 @@ object SignatureVerifier {
 
     // JNI: implemented in cpp/signature_verify.cpp
     private external fun nativeReadApkCertificate(apkPath: String): ByteArray?
+    private external fun nativeReadApkV234Certificate(apkPath: String): ByteArray?
     private external fun nativeGetExpectedSignerDigest(): String
     private external fun nativeVerifyPackageName(packageName: String): Boolean
     private external fun nativeVerifyApkIntegrity(apkPath: String): Int
@@ -83,6 +84,7 @@ object SignatureVerifier {
         const val MISSING_SIGNATURE = 1 shl 6
         const val MISSING_NATIVE = 1 shl 7
         const val CRC_MISMATCH = 1 shl 8
+        const val MISSING_APK_SIG_V234 = 1 shl 9
     }
 
     /**
@@ -201,12 +203,81 @@ object SignatureVerifier {
             return true // no pin configured, skip
         }
 
-        val actual = computeApkSignerDigest(context) ?: return false
-        val match = actual == expected
+        // Scheme-agnostic verification. We require BOTH the v1 (JAR) certificate
+        // AND the v2/v3 (APK Signing Block) certificate to match the pinned
+        // digest. A scheme-confusion repack preserves the v1 files while
+        // re-signing v2/v3 with a new key, so a v1-only check alone is
+        // insufficient (see the WHY note in cpp/signature_verify.cpp).
+        val actualV1 = computeApkSignerDigest(context) ?: return false
+        val actualV234 = computeApkV234SignerDigest(context) ?: return false
+
+        val match = actualV1 == expected && actualV234 == expected
         if (!match) {
-            AppLog.e("SignatureVerifier: APK signer MISMATCH (expected=$expected, actual=$actual)")
+            AppLog.e(
+                "SignatureVerifier: APK signer MISMATCH " +
+                    "(expected=$expected, v1=$actualV1, v2/v3=$actualV234)"
+            )
         }
         return match
+    }
+
+    /**
+     * Reads the signing certificate from the APK v2/v3 Signing Block and
+     * returns its SHA-256 digest. Prefers the highest available scheme (v3).
+     *
+     * @return uppercase hex digest, or null if the APK has no v2/v3 signing
+     *         block or the certificate cannot be extracted.
+     */
+    fun signerDigestV234(apkPath: String): String? {
+        if (!loaded) return null
+        val cert = try {
+            nativeReadApkV234Certificate(apkPath)
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: nativeReadApkV234Certificate failed", e)
+            null
+        } ?: return null
+        return certBytesToDigest(cert)
+    }
+
+    /**
+     * Computes the SHA-256 signer digest of the currently running APK from its
+     * v2/v3 APK Signing Block.
+     * @return uppercase hex digest, or null when unavailable.
+     */
+    fun computeApkV234SignerDigest(context: Context): String? {
+        val apkPath = try {
+            context.packageCodePath
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: cannot get packageCodePath", e)
+            return null
+        }
+        return signerDigestV234(apkPath)
+    }
+
+    /**
+     * True when the APK at [apkPath] was signed with SOMCP's own official key
+     * as recorded in its v2/v3 APK Signing Block.
+     */
+    fun isSelfSignedApkV234(apkPath: String): Boolean {
+        if (!loaded) return false
+        val expected = getExpectedSignerDigest().let { normalizeSignerDigest(it) }
+        if (expected.isBlank()) return false
+        return signerDigestV234(apkPath) == expected
+    }
+
+    /**
+     * Native-only signature check over the v2/v3 APK Signing Block
+     * certificate, executed at the filesystem level so it cannot be intercepted
+     * by a Java PackageManager / Binder hook.
+     *
+     * @return true if a v2/v3 certificate was found and matches the pinned
+     *         digest; false if it is missing or mismatched.
+     */
+    fun verifyV234(context: Context): Boolean {
+        val expected = getExpectedSignerDigest().let { normalizeSignerDigest(it) }
+        if (expected.isBlank()) return true // no pin configured, skip
+        val actual = computeApkV234SignerDigest(context) ?: return false
+        return actual == expected
     }
 
     /**
