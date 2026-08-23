@@ -530,10 +530,6 @@ class SettingsStore(context: Context) {
             }
         ).apply()
 
-    var tunnelUseMirror: Boolean
-        get() = prefs.getBoolean("tunnelUseMirror", false)
-        set(value) = prefs.edit().putBoolean("tunnelUseMirror", value).apply()
-
     var tunnelReconnect: Boolean
         get() = prefs.getBoolean("tunnelReconnect", true)
         set(value) = prefs.edit().putBoolean("tunnelReconnect", value).apply()
