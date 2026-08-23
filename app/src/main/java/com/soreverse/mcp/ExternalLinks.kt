@@ -1,9 +1,67 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Copyright (C) 2026 bilieebiliee1-design
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.soreverse.mcp
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
+import com.soreverse.mcp.core.AppLog
+
+/**
+ * Safely launches the SAF directory-tree picker ([Intent.ACTION_OPEN_DOCUMENT_TREE]).
+ *
+ * Some OEM builds (e.g. EMUI/HarmonyOS on Huawei) ship without any app that can
+ * handle this action. Pointing a plain `ActivityResultLauncher` at it would throw
+ * [ActivityNotFoundException] (and crash) when launched. This helper first checks
+ * [resolveActivity]; if no handler exists it surfaces a Toast instead of crashing,
+ * and still guards the launch against a race where the handler disappears.
+ */
+internal fun launchSafTreePicker(context: Context, zh: Boolean, launcher: ActivityResultLauncher<Uri?>) {
+    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+    if (intent.resolveActivity(context.packageManager) == null) {
+        AppLog.w("No activity can handle ACTION_OPEN_DOCUMENT_TREE; SAF folder picker unavailable.")
+        Toast.makeText(
+            context,
+            if (zh) {
+                "当前设备没有可用的文件夹选择器（无 SAF 文件提供方）。请在系统设置中安装或启用文件管理器后重试。"
+            } else {
+                "No folder picker available on this device (no SAF document provider). Install or enable a file manager and retry."
+            },
+            Toast.LENGTH_LONG
+        ).show()
+        return
+    }
+    try {
+        launcher.launch(null)
+    } catch (_: ActivityNotFoundException) {
+        AppLog.w("ACTION_OPEN_DOCUMENT_TREE handler vanished between resolveActivity and launch.")
+        Toast.makeText(
+            context,
+            if (zh) "无法打开文件夹选择器，请稍后重试。" else "Cannot open folder picker. Please retry.",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+}
 
 internal fun joinQqGroup(context: Context, zh: Boolean) {
     val uris = listOf(
