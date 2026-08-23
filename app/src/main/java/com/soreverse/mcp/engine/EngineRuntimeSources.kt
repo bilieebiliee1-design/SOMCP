@@ -1,3 +1,15 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
 package com.soreverse.mcp.engine
 
 import android.net.Uri
@@ -492,6 +504,17 @@ internal fun EngineRuntime.listWorkspaces(): JSONObject = guarded {
 }
 
 internal fun EngineRuntime.close(workspaceId: String): JSONObject = guarded {
+    // Release emulator sessions bound to this workspace so their native
+    // unidbg VMs (and the in-memory copy of the SO they hold) are freed
+    // immediately instead of lingering after so_close.
+    emulatorSessions.entries.removeAll { (_, session) ->
+        if (session.workspaceId == workspaceId) {
+            session.live?.let(unidbg::closeSession)
+            true
+        } else {
+            false
+        }
+    }
     workspaces.remove(workspaceId)
     pageStore.clear()
     searchCache.clear()
@@ -502,6 +525,7 @@ internal fun EngineRuntime.close(workspaceId: String): JSONObject = guarded {
 internal fun EngineRuntime.clearCaches() {
     emulatorSessions.values.forEach { session -> session.live?.let(unidbg::closeSession) }
     emulatorSessions.clear()
+    frida.closeAll()
     workspaces.clear()
     sources = emptyList()
     sourceFingerprint = emptyList()
