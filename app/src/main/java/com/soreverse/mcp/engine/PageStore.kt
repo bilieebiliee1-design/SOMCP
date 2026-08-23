@@ -39,8 +39,7 @@ internal class PageStore {
     private val lock = Any()
     private val maxPages = 64
     private val pages = object : LinkedHashMap<String, PageState>(16, 0.75f, false) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PageState>?): Boolean =
-            size > maxPages
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PageState>?): Boolean = size > maxPages
     }
 
     fun first(field: String, items: List<JSONObject>, limit: Int): PageSlice = synchronized(lock) {
