@@ -207,7 +207,7 @@ static bool read_u64le(const uint8_t* p, size_t off, size_t end, uint64_t* out) 
 //
 // WHY (context from google/apksigner and APKSignatureBypassDemo):
 //   Modern APKs are signed with up to three schemes: v1 (JAR) whose signing
-//   certificate lives in META-INF/*.RSA, and v2/v3 whose signing certificate
+//   certificate lives in META-INF/ *.RSA, and v2/v3 whose signing certificate
 //   lives in the "APK Signing Block" located immediately before the ZIP
 //   central directory.
 //
@@ -215,7 +215,7 @@ static bool read_u64le(const uint8_t* p, size_t off, size_t end, uint64_t* out) 
 //   schemes as independent. A subtle, well-known bypass (demonstrated by
 //   APKSignatureBypassDemo, and discussed on the apksigner docs page) works by
 //   exploiting the difference between v1 and v2/v3 verification:
-//     * an attacker preserves the ORIGINAL META-INF/*.RSA v1 signature files
+//     * an attacker preserves the ORIGINAL META-INF/ *.RSA v1 signature files
 //       (so a checker that only reads v1 sees the genuine certificate and
 //       passes the digest comparison), while
 //     * re-signing the same APK with a NEW key in the v2/v3 APK Signing Block
@@ -954,7 +954,7 @@ enum : int {
     kIntegrityMissingClasses    = 1 << 3, // classes.dex absent
     kIntegrityMissingManifest   = 1 << 4, // AndroidManifest.xml absent
     kIntegrityMissingArsc       = 1 << 5, // resources.arsc absent
-    kIntegrityMissingSignature  = 1 << 6, // META-INF/*.{RSA,DSA,EC} absent
+    kIntegrityMissingSignature  = 1 << 6, // META-INF/ *.{RSA,DSA,EC} absent
     kIntegrityMissingNative     = 1 << 7, // lib/<abi>/librz_native.so absent
     kIntegrityCrcMismatch       = 1 << 8, // classes.dex content CRC mismatch
     kIntegrityMissingApkSigV234 = 1 << 9, // no v2/v3 APK Signing Block signer
@@ -1343,7 +1343,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
  * Signing Block" located immediately before the ZIP central directory).
  *
  * WHY (see the WHY comment at the top of the v2/v3 support section): a
- * v1-only (META-INF/*.RSA) certificate check is vulnerable to scheme-confusion
+ * v1-only (META-INF/ *.RSA) certificate check is vulnerable to scheme-confusion
  * repacking, where an attacker keeps the original v1 signature files and
  * re-signs only with a new key via v2/v3. Because the v2/v3 signature
  * cryptographically covers the entire file, its certificate cannot be
@@ -1436,6 +1436,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkV234Certificate
  *
  * @return JNI_TRUE if [packageName] matches the pin, JNI_FALSE otherwise.
  */
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyPackageName(
     JNIEnv* env, jobject thiz, jstring packageName) {
 
