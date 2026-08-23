@@ -62,6 +62,21 @@ object SelfArtifactGuard {
             ?.takeIf { it.isNotBlank() }
             ?.let(::canonical)
 
+    /**
+     * Basenames of the `.so` files SOMCP actually bundles, taken from the build
+     * output / install location (`nativeLibraryDir`). Any later `lib/<abi>/…`
+     * APK-entry reference whose last segment matches one of these is SOMCP's
+     * own library, no matter where the APK copy is renamed or relocated.
+     */
+    fun ownLibraryNames(context: Context): Set<String> {
+        val root = nativeLibraryDir(context) ?: return emptySet()
+        return runCatching {
+            File(root).listFiles { f -> f.isFile && f.name.endsWith(".so", ignoreCase = true) }
+                ?.map { it.name }
+                ?.toSet().orEmpty()
+        }.getOrDefault(emptySet())
+    }
+
     /** True when [path] points at the running/base SOMCP APK itself. */
     fun isSelfApkPath(context: Context, path: String): Boolean =
         isSelfApkPathAgainst(runningApkPaths(context), path)
@@ -69,6 +84,17 @@ object SelfArtifactGuard {
     /** True when [path] is one of SOMCP's own bundled native libraries at its install location. */
     fun isSelfBundledSo(context: Context, path: String): Boolean =
         isSelfBundledSoAgainst(nativeLibraryDir(context), path)
+
+    /** True when [value] is a `lib/<abi>/<name>.so` APK entry naming an own bundled lib. */
+    fun isSelfLibEntry(context: Context, value: String): Boolean =
+        isSelfLibEntryAgainst(ownLibraryNames(context), value)
+
+    /** Context-free `lib/<abi>/…` entry check against an explicit set of own lib names. */
+    fun isSelfLibEntryAgainst(ownLibNames: Set<String>, value: String): Boolean {
+        if (ownLibNames.isEmpty() || !libEntryPattern.containsMatchIn(value)) return false
+        val name = value.trim().substringAfterLast('/').substringAfterLast('\\')
+        return ownLibNames.contains(name)
+    }
 
     /**
      * True when [path] is a copy of SOMCP's own APK whose v2/v3 signing-block
@@ -109,7 +135,8 @@ object SelfArtifactGuard {
     fun isSelfArtifact(context: Context, path: String): Boolean =
         isSelfApkPath(context, path) ||
             isSelfBundledSo(context, path) ||
-            isSelfSignedApkCopy(context, path)
+            isSelfSignedApkCopy(context, path) ||
+            isSelfLibEntry(context, path)
 
     // ---------------------------------------------------------------------
     // Argument scanning (for bridge/MCP tool calls)
@@ -125,8 +152,10 @@ object SelfArtifactGuard {
         findSelfArgAgainst(
             runningApkPaths(context),
             nativeLibraryDir(context),
-            args
-        ) { path -> isSelfSignedApkCopy(context, path) }
+            args,
+            signatureCheck = { path -> isSelfSignedApkCopy(context, path) },
+            ownLibNames = ownLibraryNames(context)
+        )
 
     /**
      * Context-free scan overload; lets tests exercise the bridge guard without
@@ -137,10 +166,11 @@ object SelfArtifactGuard {
         runningApks: List<String>,
         nativeLib: String?,
         args: JSONObject,
-        signatureCheck: ((String) -> Boolean)? = null
+        signatureCheck: ((String) -> Boolean)? = null,
+        ownLibNames: Set<String> = emptySet()
     ): String? {
         val holder = PathHolder()
-        scanValue(runningApks, nativeLib, signatureCheck, args, holder)
+        scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, args, holder)
         return holder.path
     }
 
@@ -152,6 +182,7 @@ object SelfArtifactGuard {
         runningApks: List<String>,
         nativeLib: String?,
         signatureCheck: ((String) -> Boolean)?,
+        ownLibNames: Set<String>,
         value: Any?,
         holder: PathHolder
     ) {
@@ -161,19 +192,19 @@ object SelfArtifactGuard {
                 val keys = value.keys()
                 while (keys.hasNext() && holder.path == null) {
                     val k = keys.next()
-                    scanValue(runningApks, nativeLib, signatureCheck, value.opt(k), holder)
+                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, value.opt(k), holder)
                 }
             }
 
             is JSONArray -> {
                 for (i in 0 until value.length()) {
                     if (holder.path != null) break
-                    scanValue(runningApks, nativeLib, signatureCheck, value.opt(i), holder)
+                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, value.opt(i), holder)
                 }
             }
 
             is String -> {
-                val found = selfReference(runningApks, nativeLib, signatureCheck, value)
+                val found = selfReference(runningApks, nativeLib, signatureCheck, ownLibNames, value)
                 if (found != null) holder.path = found
             }
 
@@ -185,11 +216,15 @@ object SelfArtifactGuard {
         runningApks: List<String>,
         nativeLib: String?,
         signatureCheck: ((String) -> Boolean)?,
+        ownLibNames: Set<String>,
         value: String
     ): String? {
         if (value.isBlank() || !isPathLike(value)) return null
         if (isSelfApkPathAgainst(runningApks, value)) return value
         if (isSelfBundledSoAgainst(nativeLib, value)) return value
+        // APK-entry reference like `App.apk!lib/<abi>/<own>.so` — matches by the
+        // own bundled lib name even when the APK itself is renamed/moved.
+        if (isSelfLibEntryAgainst(ownLibNames, value)) return value
         // Signature-based copy detection is only enabled when a live native
         // verifier is available; in JVM unit tests it is omitted entirely.
         if (signatureCheck != null && signatureCheck(value)) return value
@@ -217,6 +252,8 @@ object SelfArtifactGuard {
     )
 
     private val signatureCache = ConcurrentHashMap<String, Boolean>()
+
+    private val libEntryPattern = Regex("(?:^|[^A-Za-z0-9])lib/[^/]+/[^/]+\\.so$", RegexOption.IGNORE_CASE)
 
     private fun canonical(path: String): String = try {
         File(path).canonicalPath
