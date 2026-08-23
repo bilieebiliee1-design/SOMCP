@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copyright (C) 2026 bilieebiliee1-design
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 package com.soreverse.mcp.mcp
 
 import android.content.Context
@@ -7,6 +24,7 @@ import com.soreverse.mcp.core.AppLog
 import com.soreverse.mcp.core.CloudflareTunnelManager
 import com.soreverse.mcp.core.EngineProvider
 import com.soreverse.mcp.core.SettingsStore
+import com.soreverse.mcp.core.SelfArtifactGuard
 import com.soreverse.mcp.core.ToolStats
 import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.err
@@ -621,20 +639,20 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val payload = if (handler != null) {
             handler.handle(ctx, args)
         } else if (apkBridge.isBridgedTool(name)) {
-            if (apkBridge.isBridgedTool(
-                    name
+            // Own-artifact protection also covers tools that were merged into
+            // tools/list from an external APK MCP server (e.g. MT Manager).
+            // Block any bridged call whose arguments reference SOMCP's own APK
+            // or its bundled native libraries (open, view, edit, build, ...).
+            val selfArg = SelfArtifactGuard.findSelfArg(context, args)
+            if (selfArg != null) {
+                SelfArtifactGuard.forbidden(
+                    selfArg,
+                    "SOMCP refuses to forward bridged APK tool '$name' that targets its own artifact"
                 )
-            ) {
+            } else {
                 apkBridge.callTool(
                     name,
                     args
-                )
-            } else {
-                err(
-                    "APK_MCP_OFFLINE",
-                    "APK MCP bridge is offline. Run system_control (action=apk_probe) after starting an APK MCP server.",
-                    "tool",
-                    name
                 )
             }
         } else {

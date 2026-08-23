@@ -88,6 +88,10 @@ internal class EngineRuntime(internal val context: Context) {
                 "No work directory selected"
             ) -> err("WORK_DIRECTORY_NOT_SELECTED", message)
 
+            message.startsWith(
+                "SELF_ANALYSIS_FORBIDDEN"
+            ) -> err("SELF_ANALYSIS_FORBIDDEN", message, "path")
+
             message.startsWith("NOT_ELF_INPUT") -> err(
                 "NOT_ELF_INPUT",
                 message.substringAfter(": ").ifBlank {
