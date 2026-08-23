@@ -30,6 +30,7 @@ class SelfArtifactGuardTest {
 
     private val runningApk = "/data/app/~~somcp==/com.soreverse.mcp-1/base.apk"
     private val nativeLib = "/data/app/~~somcp==/com.soreverse.mcp-1/lib/arm64"
+    private val ownLibs = setOf("libsomcp_core.so", "liblief_elf.so")
 
     @Test
     fun detectsRunningApkPathExactly() {
@@ -104,6 +105,34 @@ class SelfArtifactGuardTest {
         val checker: (String) -> Boolean = { false }
         assertNull(
             SelfArtifactGuard.findSelfArgAgainst(listOf(runningApk), nativeLib, args, checker)
+        )
+    }
+
+    @Test
+    fun scanFlagsOwnLibApkEntryReference() {
+        // APK-internal reference to an own bundled lib, APK itself unnamed/renamed.
+        val args = JSONObject().put("filePath", "com.soreverse.mcp.apk!lib/arm64-v8a/liblief_elf.so")
+        assertEquals(
+            "com.soreverse.mcp.apk!lib/arm64-v8a/liblief_elf.so",
+            SelfArtifactGuard.findSelfArgAgainst(listOf(runningApk), nativeLib, args, ownLibNames = ownLibs)
+        )
+    }
+
+    @Test
+    fun scanAllowsThirdPartyLibEntryReference() {
+        val outside = "target.apk!lib/arm64-v8a/libexample.so"
+        val args = JSONObject().put("filePath", outside)
+        assertNull(
+            SelfArtifactGuard.findSelfArgAgainst(listOf(runningApk), nativeLib, args, ownLibNames = ownLibs)
+        )
+    }
+
+    @Test
+    fun scanIgnoresOwnNameWithoutLibEntryStructure() {
+        // Same name but not in lib/<abi>/ form must not be over-blocked.
+        val args = JSONObject().put("fileName", "libsomcp_core.so")
+        assertNull(
+            SelfArtifactGuard.findSelfArgAgainst(listOf(runningApk), nativeLib, args, ownLibNames = ownLibs)
         )
     }
 
