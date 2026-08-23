@@ -18,13 +18,13 @@
 package com.soreverse.mcp.core
 
 import com.soreverse.mcp.BuildConfig
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.json.JSONArray
-import org.json.JSONObject
 
 /** Context-free coverage of [SelfArtifactGuard] path detection and arg scanning. */
 class SelfArtifactGuardTest {
@@ -186,8 +186,11 @@ class SelfArtifactGuardTest {
         assertEquals(
             extracted,
             SelfArtifactGuard.findSelfArgAgainst(
-                listOf(runningApk), nativeLib, args,
-                ownLibNames = ownLibs, contentCheck = contentCheck
+                listOf(runningApk),
+                nativeLib,
+                args,
+                ownLibNames = ownLibs,
+                contentCheck = contentCheck
             )
         )
     }
