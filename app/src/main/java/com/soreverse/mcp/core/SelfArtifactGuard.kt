@@ -18,6 +18,7 @@
 package com.soreverse.mcp.core
 
 import android.content.Context
+import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.nativecore.SignatureVerifier
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -136,7 +137,65 @@ object SelfArtifactGuard {
         isSelfApkPath(context, path) ||
             isSelfBundledSo(context, path) ||
             isSelfSignedApkCopy(context, path) ||
-            isSelfLibEntry(context, path)
+            isSelfLibEntry(context, path) ||
+            isSelfFileByContent(path)
+
+    /**
+     * True when the file at [path] identifies SOMCP's own artifact by content,
+     * regardless of where it was extracted to or how it was renamed. This closes
+     * the gap where a user copies one of SOMCP's own bundled `.so` libraries out
+     * into a work directory and then asks MCP to open/view/modify it: the path no
+     * longer sits under `nativeLibraryDir`, but its bytes still carry the app id.
+     */
+    fun isSelfFileByContent(path: String): Boolean {
+        val lower = path.trim().lowercase()
+        if (!lower.endsWith(".so")) return false
+        return readMeOwnMarker(path)
+    }
+
+    //
+    // Byte-level own-package marker scan (ASCII/UTF-16LE), location-free and
+    // robust against renames and light edits. Mirrors the engine-side
+    // `containsPackageIdentifier` so `core` stays self-contained/testable.
+    //
+
+    private const val MARKER_SCAN_LIMIT = 1 shl 22 // 4 MiB prefix
+
+    fun containsOwnMarker(bytes: ByteArray): Boolean {
+        val marker = BuildConfig.APPLICATION_ID
+        if (marker.isBlank() || bytes.isEmpty()) return false
+        val ascii = marker.toByteArray(Charsets.US_ASCII)
+        val utf16le = marker.toByteArray(Charsets.UTF_16LE)
+        return containsSubsequence(bytes, ascii) || containsSubsequence(bytes, utf16le)
+    }
+
+    private fun containsSubsequence(haystack: ByteArray, needle: ByteArray): Boolean {
+        if (needle.isEmpty() || haystack.size < needle.size) return false
+        for (i in 0..(haystack.size - needle.size)) {
+            var j = 0
+            while (j < needle.size && haystack[i + j] == needle[j]) j++
+            if (j == needle.size) return true
+        }
+        return false
+    }
+
+    private fun readMeOwnMarker(path: String): Boolean {
+        if (path.isBlank()) return false
+        return runCatching {
+            val f = File(path)
+            if (!f.isFile) return false
+            f.inputStream().use { ins ->
+                val buf = ByteArray(MARKER_SCAN_LIMIT)
+                var read = 0
+                while (read < buf.size) {
+                    val n = ins.read(buf, read, buf.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                read > 0 && containsOwnMarker(buf.copyOf(read))
+            }
+        }.getOrDefault(false)
+    }
 
     // ---------------------------------------------------------------------
     // Argument scanning (for bridge/MCP tool calls)
@@ -154,7 +213,8 @@ object SelfArtifactGuard {
             nativeLibraryDir(context),
             args,
             signatureCheck = { path -> isSelfSignedApkCopy(context, path) },
-            ownLibNames = ownLibraryNames(context)
+            ownLibNames = ownLibraryNames(context),
+            contentCheck = ::isSelfFileByContent
         )
 
     /**
@@ -167,10 +227,11 @@ object SelfArtifactGuard {
         nativeLib: String?,
         args: JSONObject,
         signatureCheck: ((String) -> Boolean)? = null,
-        ownLibNames: Set<String> = emptySet()
+        ownLibNames: Set<String> = emptySet(),
+        contentCheck: ((String) -> Boolean)? = null
     ): String? {
         val holder = PathHolder()
-        scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, args, holder)
+        scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, args, holder)
         return holder.path
     }
 
@@ -183,6 +244,7 @@ object SelfArtifactGuard {
         nativeLib: String?,
         signatureCheck: ((String) -> Boolean)?,
         ownLibNames: Set<String>,
+        contentCheck: ((String) -> Boolean)?,
         value: Any?,
         holder: PathHolder
     ) {
@@ -192,19 +254,19 @@ object SelfArtifactGuard {
                 val keys = value.keys()
                 while (keys.hasNext() && holder.path == null) {
                     val k = keys.next()
-                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, value.opt(k), holder)
+                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, value.opt(k), holder)
                 }
             }
 
             is JSONArray -> {
                 for (i in 0 until value.length()) {
                     if (holder.path != null) break
-                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, value.opt(i), holder)
+                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, value.opt(i), holder)
                 }
             }
 
             is String -> {
-                val found = selfReference(runningApks, nativeLib, signatureCheck, ownLibNames, value)
+                val found = selfReference(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, value)
                 if (found != null) holder.path = found
             }
 
@@ -217,6 +279,7 @@ object SelfArtifactGuard {
         nativeLib: String?,
         signatureCheck: ((String) -> Boolean)?,
         ownLibNames: Set<String>,
+        contentCheck: ((String) -> Boolean)?,
         value: String
     ): String? {
         if (value.isBlank() || !isPathLike(value)) return null
@@ -225,6 +288,9 @@ object SelfArtifactGuard {
         // APK-entry reference like `App.apk!lib/<abi>/<own>.so` — matches by the
         // own bundled lib name even when the APK itself is renamed/moved.
         if (isSelfLibEntryAgainst(ownLibNames, value)) return value
+        // An extracted copy of an own `.so` outside its install dir is identified
+        // by content (own package marker), defeating the "copy to work dir" trick.
+        if (contentCheck != null && contentCheck(value)) return value
         // Signature-based copy detection is only enabled when a live native
         // verifier is available; in JVM unit tests it is omitted entirely.
         if (signatureCheck != null && signatureCheck(value)) return value
