@@ -17,6 +17,7 @@
 //
 package com.soreverse.mcp.core
 
+import com.soreverse.mcp.BuildConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -141,5 +142,53 @@ class SelfArtifactGuardTest {
         val result = SelfArtifactGuard.forbidden(runningApk)
         assertEquals(false, result.optBoolean("ok", true))
         assertEquals("SELF_ANALYSIS_FORBIDDEN", result.optJSONObject("error")?.optString("code"))
+    }
+
+    @Test
+    fun flagsExtractedSoByContentMarker() {
+        val marker = BuildConfig.APPLICATION_ID
+        val f = java.io.File.createTempFile("extracted", ".so").apply {
+            writeBytes((marker + "\u0000some bytes").toByteArray())
+            deleteOnExit()
+        }
+        assertTrue(SelfArtifactGuard.isSelfFileByContent(f.absolutePath))
+        // UTF-16LE encoding is also recognised.
+        val u = java.io.File.createTempFile("extracted-utf16", ".so").apply {
+            writeBytes(marker.toByteArray(Charsets.UTF_16LE))
+            deleteOnExit()
+        }
+        assertTrue(SelfArtifactGuard.isSelfFileByContent(u.absolutePath))
+    }
+
+    @Test
+    fun ignoresUnrelatedSoContent() {
+        val path = java.io.File.createTempFile("thirdparty", ".so").apply {
+            writeBytes("com.example.other lib".toByteArray())
+            deleteOnExit()
+        }.absolutePath
+        assertFalse(SelfArtifactGuard.isSelfFileByContent(path))
+        // Non-.so targets are never content-scanned.
+        val txt = java.io.File.createTempFile("marker", ".txt").apply {
+            writeBytes(BuildConfig.APPLICATION_ID.toByteArray())
+            deleteOnExit()
+        }.absolutePath
+        assertFalse(SelfArtifactGuard.isSelfFileByContent(txt))
+    }
+
+    @Test
+    fun scanFlagsExtractedSoViaContentCheck() {
+        val extracted = java.io.File.createTempFile("extracted", ".so").apply {
+            writeBytes((BuildConfig.APPLICATION_ID + " payload").toByteArray())
+            deleteOnExit()
+        }.absolutePath
+        val args = JSONObject().put("localPath", extracted)
+        val contentCheck: (String) -> Boolean = { it == extracted }
+        assertEquals(
+            extracted,
+            SelfArtifactGuard.findSelfArgAgainst(
+                listOf(runningApk), nativeLib, args,
+                ownLibNames = ownLibs, contentCheck = contentCheck
+            )
+        )
     }
 }
