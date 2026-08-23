@@ -58,10 +58,9 @@ object SelfArtifactGuard {
     }
 
     /** Canonical path of the directory holding SOMCP's own unpacked native libs. */
-    fun nativeLibraryDir(context: Context): String? =
-        runCatching { context.applicationInfo?.nativeLibraryDir }.getOrNull()
-            ?.takeIf { it.isNotBlank() }
-            ?.let(::canonical)
+    fun nativeLibraryDir(context: Context): String? = runCatching { context.applicationInfo?.nativeLibraryDir }.getOrNull()
+        ?.takeIf { it.isNotBlank() }
+        ?.let(::canonical)
 
     /**
      * Basenames of the `.so` files SOMCP actually bundles, taken from the build
@@ -79,16 +78,13 @@ object SelfArtifactGuard {
     }
 
     /** True when [path] points at the running/base SOMCP APK itself. */
-    fun isSelfApkPath(context: Context, path: String): Boolean =
-        isSelfApkPathAgainst(runningApkPaths(context), path)
+    fun isSelfApkPath(context: Context, path: String): Boolean = isSelfApkPathAgainst(runningApkPaths(context), path)
 
     /** True when [path] is one of SOMCP's own bundled native libraries at its install location. */
-    fun isSelfBundledSo(context: Context, path: String): Boolean =
-        isSelfBundledSoAgainst(nativeLibraryDir(context), path)
+    fun isSelfBundledSo(context: Context, path: String): Boolean = isSelfBundledSoAgainst(nativeLibraryDir(context), path)
 
     /** True when [value] is a `lib/<abi>/<name>.so` APK entry naming an own bundled lib. */
-    fun isSelfLibEntry(context: Context, value: String): Boolean =
-        isSelfLibEntryAgainst(ownLibraryNames(context), value)
+    fun isSelfLibEntry(context: Context, value: String): Boolean = isSelfLibEntryAgainst(ownLibraryNames(context), value)
 
     /** Context-free `lib/<abi>/…` entry check against an explicit set of own lib names. */
     fun isSelfLibEntryAgainst(ownLibNames: Set<String>, value: String): Boolean {
@@ -133,12 +129,11 @@ object SelfArtifactGuard {
     /**
      * Combined check: is [path] SOMCP's own APK or one of its bundled libs?
      */
-    fun isSelfArtifact(context: Context, path: String): Boolean =
-        isSelfApkPath(context, path) ||
-            isSelfBundledSo(context, path) ||
-            isSelfSignedApkCopy(context, path) ||
-            isSelfLibEntry(context, path) ||
-            isSelfFileByContent(path)
+    fun isSelfArtifact(context: Context, path: String): Boolean = isSelfApkPath(context, path) ||
+        isSelfBundledSo(context, path) ||
+        isSelfSignedApkCopy(context, path) ||
+        isSelfLibEntry(context, path) ||
+        isSelfFileByContent(path)
 
     /**
      * True when the file at [path] identifies SOMCP's own artifact by content,
@@ -207,15 +202,14 @@ object SelfArtifactGuard {
      * offending path on the first hit, or null when the call targets only
      * third-party files.
      */
-    fun findSelfArg(context: Context, args: JSONObject): String? =
-        findSelfArgAgainst(
-            runningApkPaths(context),
-            nativeLibraryDir(context),
-            args,
-            signatureCheck = { path -> isSelfSignedApkCopy(context, path) },
-            ownLibNames = ownLibraryNames(context),
-            contentCheck = ::isSelfFileByContent
-        )
+    fun findSelfArg(context: Context, args: JSONObject): String? = findSelfArgAgainst(
+        runningApkPaths(context),
+        nativeLibraryDir(context),
+        args,
+        signatureCheck = { path -> isSelfSignedApkCopy(context, path) },
+        ownLibNames = ownLibraryNames(context),
+        contentCheck = ::isSelfFileByContent
+    )
 
     /**
      * Context-free scan overload; lets tests exercise the bridge guard without
@@ -309,8 +303,7 @@ object SelfArtifactGuard {
     // ---------------------------------------------------------------------
 
     /** Standard MCP tool result for a blocked self-artifact operation. */
-    fun forbidden(path: String?, detail: String = "SOMCP refuses to open, view, or modify its own APK or bundled native library"):
-        JSONObject = err(
+    fun forbidden(path: String?, detail: String = "SOMCP refuses to open, view, or modify its own APK or bundled native library"): JSONObject = err(
         code = "SELF_ANALYSIS_FORBIDDEN",
         message = "$detail (own-artifact protection; no exceptions)",
         argument = "path",
