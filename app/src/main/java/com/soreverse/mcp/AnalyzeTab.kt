@@ -248,7 +248,7 @@ internal fun AnalyzeTab(
                     )
                     if (settings.treeUri == null) {
                         TextButton(onClick = {
-                            pickTree.launch(null)
+                            launchSafTreePicker(context, t.zh, pickTree)
                         }) { Text(if (t.zh) "选择目录" else "Choose") }
                     }
                 }

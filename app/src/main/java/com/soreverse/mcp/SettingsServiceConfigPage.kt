@@ -82,7 +82,7 @@ internal fun SettingsServiceConfigPage(t: UiText, settings: SettingsStore) {
                 subtitle = if (t.zh) "用于扫描、打开、修改与导出 SO" else "Used to scan, open, edit and export SO files",
                 icon = Icons.Default.FolderOpen,
                 trailing = if (t.zh) "选择" else "Choose",
-                onClick = { pickTree.launch(null) }
+                onClick = { launchSafTreePicker(context, t.zh, pickTree) }
             )
         }
         GlassGroup(
