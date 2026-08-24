@@ -52,6 +52,10 @@ jobs:
             // GitHub itself uses to auto-close issues.
             const all = texts.join('\n');
             const reHash = /(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)[:\s]*#\s*(\d+)/gi;
+            // This repo typically references the target issue as plain
+            // "issue #N" or "（issue #N）" (as in PR #47), which GitHub's own
+            // keyword-based auto-close does not match. Recognize that form too.
+            const reIssue = /\bissue\s*#?\s*(\d+)/gi;
             const reUrl = new RegExp(
               '(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)[^\\n]*?(?:github\\.com/)?' +
               owner + '/' + repo + '/issues/(\\d+)',
@@ -59,6 +63,7 @@ jobs:
             );
             const issues = [...new Set([
               ...[...all.matchAll(reHash)].map(m => Number(m[1])),
+              ...[...all.matchAll(reIssue)].map(m => Number(m[1])),
               ...[...all.matchAll(reUrl)].map(m => Number(m[1]))
             ])].filter(Boolean);
             fs.writeFileSync('/tmp/linked_issues.txt', issues.join(' '));
