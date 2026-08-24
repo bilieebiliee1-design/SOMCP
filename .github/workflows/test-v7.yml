@@ -135,6 +135,22 @@ jobs:
           key: native-linux-${{ hashFiles('build-native-android.sh', 'rizin-cross-*.ini', 'rizin-native.ini', 'app/src/main/cpp/CMakeLists.txt') }}-ndk29
       - name: Build native backends (Rizin + LIEF)
         run: bash build-native-android.sh
+      - name: Build Blutter runners (best-effort)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Validate that the curated Dart AOT blutter runner matrix
+          # (tools/blutter-matrix/curated-versions.json, e.g. Dart 3.11.5 /
+          # Flutter 3.41.x) cross-compiles on the NDK available in CI, and on
+          # success install the regenerated runners.json + libblutter_*.so so
+          # the debug/release APKs below also carry them (issue #5).
+          #
+          # Best-effort on purpose: this is a multi-hour Dart VM cross-compile.
+          # build-blutter-runners.sh only touches app/src/main after staging
+          # passes verify_manifest.py, so a failure here never breaks CI or the
+          # committed runners/manifest.
+          sudo apt-get install -y --no-install-recommends cmake ninja-build >/dev/null
+          bash tools/blutter-matrix/build-blutter-runners.sh
       - name: Debug build
         run: gradle :app:assembleDebug --stacktrace
       - name: Restore release signing keystore (or CI fallback)
