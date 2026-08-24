@@ -99,6 +99,24 @@ jobs:
           done
           echo "Unidbg native libs present for required ABIs."
 
+      - name: Build Blutter runners (best-effort)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Cross-compile the curated Dart AOT blutter runners (matrix
+          # versions from tools/blutter-matrix/curated-versions.json, e.g.
+          # Dart 3.11.5 / Flutter 3.41.x) and, on full success, install the
+          # regenerated runners.json + libblutter_*.so before assembleRelease
+          # so they are packaged into the APK (issue #5).
+          #
+          # Best-effort on purpose: runners need a multi-hour Dart VM
+          # cross-compile + native smoke. build-blutter-runners.sh only ever
+          # touches app/src/main after staging passes verify_manifest.py, so a
+          # failure here leaves the committed runners/manifest intact and can
+          # never block or regress the release.
+          sudo apt-get install -y --no-install-recommends cmake ninja-build >/dev/null
+          bash tools/blutter-matrix/build-blutter-runners.sh
+
       - name: Restore release signing keystore
         run: |
           set -euo pipefail
