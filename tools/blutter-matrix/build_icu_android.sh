@@ -35,7 +35,7 @@ fi
 rm -rf "$target" "$install"
 mkdir -p "$host" "$target" "$install"
 
-if [ ! -x "$host/install/bin/genccode" ] || [ ! -x "$host/install/bin/pkgdata" ]; then
+if [ ! -x "$host/bin/genccode" ] || [ ! -x "$host/bin/pkgdata" ]; then
   rm -rf "$host"
   mkdir -p "$host"
   cd "$host"
@@ -56,8 +56,8 @@ if [ ! -x "$host/install/bin/genccode" ] || [ ! -x "$host/install/bin/pkgdata" ]
   make -j"$jobs"
   make install
 fi
-test -x "$host/install/bin/genccode"
-test -x "$host/install/bin/pkgdata"
+test -x "$host/bin/genccode"
+test -x "$host/bin/pkgdata"
 
 cd "$target"
 "$src/configure" \
