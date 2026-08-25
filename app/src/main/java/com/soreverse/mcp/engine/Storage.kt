@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copyright (C) 2026 bilieebiliee1-design
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 package com.soreverse.mcp.engine
 
 import android.content.ContentResolver
@@ -410,6 +427,24 @@ class WorkDirectory(private val context: Context, private val treeUri: Uri) {
             found ?: error("File not found in work directory: $relativePath"),
             maxBytes
         )
+    }
+
+    /**
+     * Size in bytes of a file inside the work directory, or null when it cannot be
+     * found or measured. Used by the memory guard to estimate how much heap an
+     * analysis of [relativePath] would need before reading it fully into memory.
+     */
+    fun fileSize(relativePath: String): Long? {
+        var result: Long? = null
+        walk(
+            treeUri,
+            "",
+            0,
+            ScanOptions(scanApks = true, scanSubdirectories = true, maxDepth = 32)
+        ) { _, _, path, size, _ ->
+            if (path == relativePath) result = size
+        }
+        return result
     }
 
     fun writeRootFile(displayName: String, bytes: ByteArray, mimeType: String = "application/octet-stream"): SoSource {
