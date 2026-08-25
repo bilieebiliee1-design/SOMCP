@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
+// Copyright (C) 2026 bilieebiliee1-design
+//
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
@@ -10,11 +12,16 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Affero General Public License for more details.
 //
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 package com.soreverse.mcp.engine
 
 import android.net.Uri
 import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.core.AppLog
+import com.soreverse.mcp.core.InsufficientMemoryException
+import com.soreverse.mcp.core.MemoryGuard
 import com.soreverse.mcp.core.SelfArtifactGuard
 import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.err
@@ -243,9 +250,13 @@ internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSON
     }
     val bytes = try {
         if (local.isFile) {
+            MemoryGuard.ensureAnalysisMemory(
+                local.length(),
+                "Analyzing APK ${local.name}"
+            )
             local.readBytes()
         } else {
-            (
+            val workDirForApk =
                 workDir
                     ?: return@guarded err(
                         "WORK_DIRECTORY_NOT_SELECTED",
@@ -253,7 +264,11 @@ internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSON
                         "path",
                         path
                     )
-                ).readFile(path, ApkAnalyzer.MAX_INPUT_BYTES)
+            MemoryGuard.ensureAnalysisMemory(
+                workDirForApk.fileSize(path) ?: ApkAnalyzer.MAX_INPUT_BYTES,
+                "Analyzing APK $path"
+            )
+            workDirForApk.readFile(path, ApkAnalyzer.MAX_INPUT_BYTES)
         }
     } catch (error: ApkAnalysisLimitException) {
         return@guarded err(
@@ -590,6 +605,13 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     }
     val key = sourceKey(src).ifBlank { keyFallback }
     workspaceBySourceKey[key]?.let { existingId -> workspaces[existingId]?.let { return it } }
+    // Stop before reading the whole SO into memory when the process heap cannot
+    // safely hold it plus the parse copies — otherwise a large libapp.so on a
+    // constrained device ends in an OutOfMemoryError instead of a clean error.
+    MemoryGuard.ensureAnalysisMemory(
+        src.size,
+        "Opening ${src.name} for analysis"
+    )
     val original = when (src.source) {
         "build_output", "local_file" -> runCatching {
             File(src.path).readBytes()
@@ -933,8 +955,14 @@ internal fun EngineRuntime.sourceSummary(dir: WorkDirectory, src: SoSource): Sou
             }
         }
 
-        // Fallback: read full file and parse with LIEF
+        // Fallback: read full file and parse with LIEF. When the heap cannot hold
+        // the file, degrade to an "unknown" summary instead of crashing the scan
+        // with an OutOfMemoryError.
         runCatching {
+            MemoryGuard.ensureAnalysisMemory(
+                src.size,
+                "Reading ${src.name} metadata during scan"
+            )
             lief.parse(dir.readSource(src)).let { elf ->
                 SourceSummary(
                     elf.architecture,
@@ -956,6 +984,10 @@ internal fun EngineRuntime.sourceSummary(dir: WorkDirectory, src: SoSource): Sou
                         )
                     )
                 }
+            }
+        }.onFailure { failure ->
+            if (failure is InsufficientMemoryException) {
+                AppLog.w(failure.message ?: "Skipping metadata parse: insufficient memory")
             }
         }.getOrElse { SourceSummary("unknown", 0, "little", false, true) }
     }
