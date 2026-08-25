@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copyright (C) 2026 bilieebiliee1-design
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 // rizin_core.cpp — JNI bridge exposing Rizin (librz) full capabilities to Kotlin.
 //
 // Rizin is the sole disasm/asm/analysis/search/emulation/diff engine.
@@ -566,21 +583,25 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzConfigureGhidra(
         ghidraPluginDir = jStr(env, pluginDir);
         ghidraSleighHome = jStr(env, sleighHome);
         if (!ghidraPluginDir.empty()) setenv("RZ_LIB_PLUGINS", ghidraPluginDir.c_str(), 1);
+        if (!ghidraSleighHome.empty()) setenv("SLEIGHHOME", ghidraSleighHome.c_str(), 1);
         RZ_NATIVE_LOG("configure ghidra pluginDir=%s sleighHome=%s", ghidraPluginDir.c_str(), ghidraSleighHome.c_str());
     }
+    // Do NOT spin up a full RzCore here just to probe the Ghidra plugin. On the
+    // x86_64 emulator assigning the "pdg?" command to a short-lived RzCore that
+    // is immediately torn down with rz_core_free() triggers a use-after-free in
+    // Rizin's plugin/config teardown (>#52, signal 11 / SEGV_MAPERR at
+    // 0xdead1005, ~1s after process start). The plugin gets loaded lazily by the
+    // actual analysis path (applyGhidraConfig is already called before every
+    // decompile), so here we only verify the plugin file is present.
     bool ok = !ghidraPluginDir.empty() && !ghidraSleighHome.empty();
     if (ok) {
-        RzCore* core = rz_core_new();
-        if (core) {
-            applyGhidraConfig(core);
-            char* help = rz_core_cmd_str(core, "pdg?");
-            bool hasPdg = help && help[0] && std::string(help).find("unknown command") == std::string::npos;
-            RZ_NATIVE_LOG("ghidra selftest pdg=%d help=%s", hasPdg ? 1 : 0, help ? help : "");
-            if (help) free(help);
-            rz_core_free(core);
-            ok = hasPdg;
+        std::string pluginFile = ghidraPluginDir + "/libcore_ghidra.so";
+        FILE* f = fopen(pluginFile.c_str(), "r");
+        if (f) {
+            fclose(f);
         } else {
             ok = false;
+            RZ_NATIVE_LOG("ghidra plugin missing at %s", pluginFile.c_str());
         }
     }
     return ok;
