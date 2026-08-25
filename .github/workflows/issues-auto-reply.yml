@@ -17,11 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     # issues: only reply when the issue author is not a bot.
     # issue_comment: only reply to human comments on plain issues (skip PRs).
+    #   - Skip when issue is already closed (maintainer closed it).
+    #   - Skip when commenter is a maintainer (OWNER/COLLABORATOR/MEMBER) to
+    #     avoid interrupting maintainer replies.
     if: >-
       (github.event_name == 'issues' && github.event.issue.user.type != 'Bot') ||
       (github.event_name == 'issue_comment' &&
        github.event.comment.user.type != 'Bot' &&
-       !github.event.issue.pull_request)
+       !github.event.issue.pull_request &&
+       github.event.issue.state == 'open' &&
+       github.event.comment.author_association == 'CONTRIBUTOR')
     concurrency:
       group: llm-issue-${{ github.event.issue.number }}
       cancel-in-progress: false
