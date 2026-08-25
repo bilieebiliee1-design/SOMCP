@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
+// Copyright (C) 2026 bilieebiliee1-design
+//
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
@@ -10,11 +12,15 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Affero General Public License for more details.
 //
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 package com.soreverse.mcp.engine
 
 import android.content.Context
 import android.net.Uri
 import com.soreverse.mcp.core.AppLog
+import com.soreverse.mcp.core.InsufficientMemoryException
 import com.soreverse.mcp.core.err
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
@@ -107,6 +113,11 @@ internal class EngineRuntime(internal val context: Context) {
                 "Invalid URI",
                 ignoreCase = true
             ) -> err("INVALID_WORK_DIRECTORY", message)
+
+            error is InsufficientMemoryException -> err(
+                "INSUFFICIENT_MEMORY",
+                message
+            )
 
             error is java.io.IOException -> err(
                 "IO_ERROR",
