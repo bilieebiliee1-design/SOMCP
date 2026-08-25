@@ -169,11 +169,12 @@ jobs:
           storePassword=$(grep '^storePassword=' release/keystore.properties | head -1 | cut -d= -f2-)
           keyAlias=$(grep '^keyAlias=' release/keystore.properties | head -1 | cut -d= -f2-)
           keyPassword=$(grep '^keyPassword=' release/keystore.properties | head -1 | cut -d= -f2-)
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           for apk in app/build/outputs/apk/release/*.apk; do
             echo "=== Checking signing schemes: $(basename "$apk") ==="
-            if apksigner verify --verbose "$apk" 2>&1 | grep -qi "NOT PRESENT"; then
+            if "$APKSIGNER" verify --verbose "$apk" 2>&1 | grep -qi "NOT PRESENT"; then
               echo "::warning::v2/v3 signing NOT verified in $(basename "$apk"); re-signing with apksigner"
-              apksigner sign \
+              "$APKSIGNER" sign \
                 --ks "$storeFile" \
                 --ks-pass "pass:$storePassword" \
                 --ks-key-alias "$keyAlias" \
@@ -184,7 +185,7 @@ jobs:
                 --v4-signing-enabled true \
                 "$apk"
             fi
-            apksigner verify --print-certs "$apk"
+            "$APKSIGNER" verify --print-certs "$apk"
             echo "✓ $(basename "$apk") has valid v2/v3 signing"
           done
       - name: Unit tests (strict)
