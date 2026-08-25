@@ -62,20 +62,32 @@ fi
 
 USER_INPUT="$(cat)"
 
-# Build the payload with jq so prompts are passed as data, never evaluated
-# by the shell. Temperature is kept low for deterministic review output.
-payload=$(jq -n \
+# The user prompt carries the whole repository code context, which can exceed
+# Linux's per-argument limit (MAX_ARG_STRLEN = 128KB). Passing it (and a large
+# system prompt) to jq via `--arg` used to blow the argv limit and fail with
+# "Argument list too long" (E2BIG), silently skipping the auto-reply. So we
+# write both prompts to temp files and read them back with jq --rawfile, and
+# hand curl the payload via `-d @file` — no large string ever travels through
+# argv. Temperature is kept low for deterministic review output.
+sys_file="$(mktemp)"
+user_file="$(mktemp)"
+payload_file="$(mktemp)"
+trap 'rm -f "$sys_file" "$user_file" "$payload_file"' EXIT
+printf '%s' "${LLM_SYSTEM_PROMPT:-}" > "$sys_file"
+printf '%s' "$USER_INPUT" > "$user_file"
+
+jq -n \
   --arg model "$LLM_MODEL" \
-  --arg sys "${LLM_SYSTEM_PROMPT:-}" \
-  --arg user "$USER_INPUT" \
+  --rawfile sys "$sys_file" \
+  --rawfile user "$user_file" \
   '{model: $model, messages: [
      {role: "system", content: $sys},
      {role: "user", content: $user}
-   ], temperature: 0.3}')
+   ], temperature: 0.3}' > "$payload_file"
 
 curl -sS -f -m 240 -X POST \
   -H "Authorization: Bearer $LLM_KEY" \
   -H "Content-Type: application/json" \
   "${CURL_EXTRA_ARGS[@]}" \
-  -d "$payload" "$ENDPOINT" \
+  -d "@$payload_file" "$ENDPOINT" \
   | jq -r '.choices[0].message.content // empty'
