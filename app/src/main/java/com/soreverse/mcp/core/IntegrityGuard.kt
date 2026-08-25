@@ -1,6 +1,8 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
+ * Copyright (C) 2026 bilieebiliee1-design
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -123,6 +125,15 @@ object IntegrityGuard {
      * name pin, APK integrity): reading the APK directly bypasses the Java
      * PackageManager hook that SigKill / TweakMe / SignatureKiller install at
      * exactly this lifecycle point.
+     *
+     * NOTE: this gate is NON-FATAL on failure. At attachBaseContext() the app
+     * has neither initialized AppLog nor installed CrashReporter, so a hard
+     * kill (Process.killProcess) here produced no diagnosable evidence and
+     * reboot-looped the app on any transient or false mismatch - the root cause
+     * of the startup-crash issue. We therefore only record the mismatch here;
+     * the authoritative kill happens in Application.onCreate() via [enforce],
+     * which re-runs the same native checks after AppLog has been initialized
+     * and logs the exact reason before terminating.
      */
     fun enforceEarly(context: Context) {
         if (!SignatureVerifier.verify(context) ||
@@ -130,8 +141,10 @@ object IntegrityGuard {
             !SignatureVerifier.verifyPackageName(context) ||
             SignatureVerifier.verifyApkIntegrity(context) != SignatureVerifier.IntegrityCode.OK
         ) {
-            AppLog.e("INTEGRITY ENFORCEMENT (early) FAILED: native signer / package / integrity mismatch")
-            terminateWithContext(context)
+            AppLog.w(
+                "INTEGRITY (early) native signer / package / integrity mismatch detected; " +
+                    "deferring termination to onCreate (attachBaseContext has no crash reporter)"
+            )
         }
     }
 

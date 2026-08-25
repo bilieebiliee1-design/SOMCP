@@ -1,6 +1,8 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
+ * Copyright (C) 2026 bilieebiliee1-design
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -10,6 +12,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -402,99 +407,64 @@ static int find_apk_sign_block_cert(const uint8_t* apk, size_t apk_size,
 // Minimal DER/PKCS7 parser
 // ---------------------------------------------------------------------------
 struct DerNode {
-    uint8_t tag;
-    bool constructed;
+    uint8_t tag = 0;
+    bool constructed = false;
+    size_t header_len = 0;   // tag + length-of-length bytes
     std::vector<uint8_t> value;   // raw value bytes (tag+length stripped)
     std::vector<DerNode> children;
 };
 
 static DerNode parse_der(const uint8_t* data, size_t offset, size_t end) {
     DerNode node;
-    if (offset + 2 > end) return node;
+    // Need at least a tag octet and a length octet before any element access.
+    if (offset >= end || end - offset < 2) return node;
 
     node.tag = data[offset];
     node.constructed = (node.tag & 0x20) != 0;
     size_t pos = offset + 1;
 
-    // Length
+    // Length: short form when the high bit is clear, long form otherwise.
+    if (pos >= end) return node; // need the length octet itself
     size_t length = 0;
+    size_t header_len = 1; // the tag byte
     if (data[pos] & 0x80) {
         int num_bytes = data[pos] & 0x7f;
         if (num_bytes == 0 || num_bytes > 4) return node; // indefinite or too long
+        // num_bytes value-octets follow the length octet at pos; guard the
+        // long-form read so a truncated/malformed DER cannot read past `end`.
+        if (num_bytes > end - pos - 1) return node;
         pos++;
-        if (pos + num_bytes > end) return node;
         for (int i = 0; i < num_bytes; i++) {
             length = (length << 8) | data[pos++];
         }
+        header_len += 1 + static_cast<size_t>(num_bytes);
     } else {
         length = data[pos++];
+        header_len += 1;
     }
 
     // Clamp hostile long-form lengths (up to 0xFFFFFFFF) without overflow:
     // compare against the remaining space directly, never `pos + length`.
-    if (length > end - pos) {
-        length = end - pos;
-    }
+    if (length > end - pos) length = end - pos;
 
+    node.header_len = header_len;
     node.value.assign(data + pos, data + pos + length);
 
-    // Parse children for constructed tags
+    // Recursively parse children of a constructed node. The value of a
+    // constructed node is itself a stream of one or more DER nodes; a child
+    // occupies (header_len + value.size()) bytes of that stream, so advance by
+    // that prefix sum. Without this recursive population the PKCS7 certificate
+    // extraction below cannot walk down to the certificates SET and falls back
+    // to a loose heuristic that returns a wrong-sized "certificate".
     if (node.constructed) {
         size_t child_pos = 0;
         while (child_pos < node.value.size()) {
-            auto child = parse_der(node.value.data(), child_pos, node.value.size());
-            if (child.value.empty() && child.children.empty()) break;
-            node.children.push_back(child);
-            child_pos += (child.tag == 0) ? 0 : (child.value.data() - node.value.data() + child.value.size() - child_pos);
-            // Better: advance by the full encoded length
-            // Recalculate:
-            size_t consumed = 0;
-            for (const auto& c : node.children) {
-                consumed += 2; // tag + length (at minimum)
-                if (c.value.size() > 127) consumed += (c.value.size() > 255) ? 3 : 2; // long-form length
-                consumed += c.value.size();
-            }
-            child_pos = consumed;
-        }
-        // Re-parse more accurately
-        node.children.clear();
-        child_pos = 0;
-        while (child_pos < node.value.size()) {
-            // Skip tag byte
-            if (child_pos >= node.value.size()) break;
-            uint8_t child_tag = node.value[child_pos];
-            size_t child_len_pos = child_pos + 1;
-            if (child_len_pos >= node.value.size()) break;
-
-            size_t child_length = 0;
-            size_t child_len_bytes = 1;
-            if (node.value[child_len_pos] & 0x80) {
-                child_len_bytes = (node.value[child_len_pos] & 0x7f) + 1;
-                if (child_len_bytes > 5) break;
-                for (size_t i = 1; i < child_len_bytes; i++) {
-                    if (child_len_pos + i >= node.value.size()) { child_len_bytes = 0; break; }
-                    child_length = (child_length << 8) | node.value[child_len_pos + i];
-                }
-                if (child_len_bytes == 0) break;
-            } else {
-                child_length = node.value[child_len_pos];
-            }
-
-            size_t header_size = 1 + child_len_bytes;
-            size_t child_end = child_pos + header_size + child_length;
-            if (child_end > node.value.size()) break;
-
-            DerNode child;
-            child.tag = child_tag;
-            child.constructed = (child_tag & 0x20) != 0;
-            child.value.assign(node.value.data() + child_pos + header_size,
-                               node.value.data() + child_end);
-            if (child.constructed) {
-                // Recursively parse children
-                // (skip for now, we only need the leaf certificate)
-            }
-            node.children.push_back(child);
-            child_pos = child_end;
+            DerNode child = parse_der(node.value.data(), child_pos, node.value.size());
+            if (child.header_len == 0) break;      // parse failure at this offset
+            size_t consumed = child.header_len + child.value.size();
+            if (consumed == 0) break;              // no progress -> avoid infinite loop
+            node.children.push_back(std::move(child));
+            child_pos += consumed;
         }
     }
 
