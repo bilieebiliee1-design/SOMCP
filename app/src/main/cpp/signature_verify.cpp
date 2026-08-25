@@ -416,20 +416,24 @@ struct DerNode {
 
 static DerNode parse_der(const uint8_t* data, size_t offset, size_t end) {
     DerNode node;
-    if (offset + 2 > end) return node;
+    // Need at least a tag octet and a length octet before any element access.
+    if (offset >= end || end - offset < 2) return node;
 
     node.tag = data[offset];
     node.constructed = (node.tag & 0x20) != 0;
     size_t pos = offset + 1;
 
     // Length: short form when the high bit is clear, long form otherwise.
+    if (pos >= end) return node; // need the length octet itself
     size_t length = 0;
     size_t header_len = 1; // the tag byte
     if (data[pos] & 0x80) {
         int num_bytes = data[pos] & 0x7f;
         if (num_bytes == 0 || num_bytes > 4) return node; // indefinite or too long
+        // num_bytes value-octets follow the length octet at pos; guard the
+        // long-form read so a truncated/malformed DER cannot read past `end`.
+        if (num_bytes > end - pos - 1) return node;
         pos++;
-        if (pos + num_bytes > end) return node;
         for (int i = 0; i < num_bytes; i++) {
             length = (length << 8) | data[pos++];
         }
