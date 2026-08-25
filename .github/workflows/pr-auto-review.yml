@@ -509,7 +509,8 @@ jobs:
                   }
                 }
                 console.log(`PR #${pull_number} (author ${author}) has ${active.length} warnings in the last 7 days.`);
-                if (active.length >= 5) {
+                // 触发限制的条件：连续 7 天内累计恰好 5 次警告（非 5 次及以上）。
+                if (active.length === 5) {
                   // 触发 7 天限制：为作者打上带时间戳的限制标签。限制期内其
                   // 推送的 PR 将被自动关闭并删除分支；标签 7 天后过期自动解除。
                   try {
