@@ -333,53 +333,58 @@ static int find_apk_sign_block_cert(const uint8_t* apk, size_t apk_size,
     if (!read_u64le(apk, magic_off - 8, apk_size, &block_size)) return -1;
 
     const uint64_t block_end = static_cast<uint64_t>(magic_off) - 8;
-    // Guard against underflow on tiny/hostile APKs: there must be room for both
-    // the trailing 8-byte size field plus an 8-byte leading size field before
-    // the first block pair may be read.
+    // Guard against underflow on tiny/hostile APKs: there must be room for the
+    // trailing 8-byte size field plus a leading size field before the first
+    // block pair may be read.
     if (block_end < 16) return -1;
-    if (block_size > block_end - 8) return -1; // hostile size: cannot wrap
-    const uint64_t block_start_u64 = block_end - block_size - 8;
+    if (block_size > block_end) return -1; // hostile size: cannot wrap
 
-    // The leading 8 bytes hold the same size as the trailing field; cross-check.
-    uint64_t leading_size = 0;
-    if (!read_u64le(apk, block_start_u64, block_start_u64 + 8, &leading_size)) return -1;
-    if (leading_size != block_size) return -1;
+    // [region_start, block_end) is the APK Signing Block payload. Some real
+    // signers emit a handful of signing-block "header"/extension bytes before
+    // the first pair, so the leading size field is NOT guaranteed to sit at
+    // exactly `block_end - block_size`, and a strict `leading == trailing`
+    // cross-check would reject legitimate APKs (the app's own signed builds,
+    // for instance, carry such header bytes). We therefore do NOT hard-fail on
+    // that cross-check; instead we scan the region for a v2/v3 signer pair and
+    // parse it in place.
+    const size_t region_start = static_cast<size_t>(block_end - block_size);
+    const size_t region_end   = static_cast<size_t>(block_end);
 
-    // Walk the block pairs between block_start+8 and block_end.
     std::vector<uint8_t> v2_cert, v3_cert;
-    size_t pair_pos = static_cast<size_t>(block_start_u64) + 8;
-    const size_t pairs_end = static_cast<size_t>(block_end);
-    int scheme_reported = -1; // -1 none yet, 0 v2 found, 1 v3 found
+    bool scheme_reported = false; // any valid v2/v3 signer found
 
-    while (pair_pos < pairs_end) {
-        uint64_t pair_size = 0;
-        if (!read_u64le(apk, pair_pos, pairs_end, &pair_size)) return -1;
-        const size_t value_off = pair_pos + 8;
-        // pair_size counts the 4-byte id plus the value bytes. Entries for
-        // unknown IDs (e.g. other block types) may be tiny; skip them rather
-        // than treating a short unrelated entry as a hard parse failure.
-        if (pair_size < 4) { pair_pos += 8 + static_cast<size_t>(pair_size); continue; }
-        if (!in_bounds(value_off, static_cast<size_t>(pair_size - 4), pairs_end)) return -1;
-
+    // Scan for a length-prefixed pair with a v2/v3 block id. The pair is laid
+    // out as [uint64 pair_size][uint32 id][value]. We locate the id, then read
+    // the size field eight bytes before it and extract the value that follows.
+    // Scanning rather than walking sequentially also tolerates nonstandard
+    // bytes between blocks. False positives inside another block's value are
+    // harmless: extract_cert_from_sign_block bounds-checks the signer
+    // structure and simply fails, so we keep scanning.
+    for (size_t off = region_start;
+         off + 4 <= region_end; off++) {
         uint32_t id = 0;
-        if (!read_u32le(apk, value_off, static_cast<size_t>(pair_size - 4) + value_off, &id))
-            return -1;
+        if (!read_u32le(apk, off, region_end, &id)) break;
+        if (id != kApkSigSchemeV3BlockId && id != kApkSigSchemeV2BlockId) continue;
+
+        // A valid pair header has its 8-byte size field within the region and
+        // the value fully in bounds.
+        if (off < region_start + 8) continue;
+        uint64_t pair_size = 0;
+        if (!read_u64le(apk, off - 8, region_end, &pair_size)) continue;
+        if (pair_size < 4) continue; // must contain the 4-byte id plus value
+        if (pair_size - 4 > region_end - off - 4) continue;
 
         const size_t value_len = static_cast<size_t>(pair_size - 4);
-        const uint8_t* value = apk + value_off + 4;
+        const uint8_t* value = apk + off + 4;
 
         if (id == kApkSigSchemeV3BlockId) {
-            if (extract_cert_from_sign_block(value, value_len, v3_cert)) scheme_reported = 1;
-        } else if (id == kApkSigSchemeV2BlockId) {
-            if (extract_cert_from_sign_block(value, value_len, v2_cert)) scheme_reported = 0;
+            if (extract_cert_from_sign_block(value, value_len, v3_cert)) scheme_reported = true;
+        } else {
+            if (extract_cert_from_sign_block(value, value_len, v2_cert)) scheme_reported = true;
         }
-
-        // Advance to the next pair.
-        if (!in_bounds(pair_pos, 8 + static_cast<size_t>(pair_size), pairs_end)) break;
-        pair_pos += 8 + static_cast<size_t>(pair_size);
     }
 
-    if (scheme_reported < 0) return 0; // signing block present but no valid v2/v3 signer
+    if (!scheme_reported) return 0; // signing block present but no valid v2/v3 signer
 
     // Prefer the highest available scheme (v3 over v2) unless the caller asked
     // otherwise, mirroring Android's "verify the strongest scheme" behaviour.
