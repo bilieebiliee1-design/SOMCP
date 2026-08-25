@@ -494,19 +494,31 @@ jobs:
                 if (pr.state !== 'open') return;
                 const prefix = `llm-warning-${authorKey}-`;
                 const re = new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$');
-                const labels = (pr.labels || []).map(l => l.name);
+                // 按作者跨 PR 累计最近 7 天内的警告：遍历该作者的所有 PR 收集
+                // llm-warning-* 标签，避免每个 PR 单独计数永远达不到 5 次。
+                // 超过 7 天的警告自动移除，计数随之重新开始——即连续 7 天内
+                // 未达到累计 5 次警告，七天后重新计数。
                 const active = [];
-                for (const name of labels) {
-                  const m = re.exec(name);
-                  if (!m) continue;
-                  const t = Number(m[1]) * 1000;
-                  if (nowMs - t <= windowMs) {
-                    active.push(t);
-                  } else {
-                    try {
-                      await github.rest.issues.removeLabel({ owner, repo, issue_number: pull_number, name });
-                    } catch (e) { /* ignore */ }
+                try {
+                  const { data: issues } = await github.rest.issues.listForRepo({
+                    owner, repo, creator: author, state: 'all', per_page: 100
+                  });
+                  for (const it of issues || []) {
+                    for (const name of (it.labels || []).map(l => l.name)) {
+                      const m = re.exec(name);
+                      if (!m) continue;
+                      const t = Number(m[1]) * 1000;
+                      if (nowMs - t <= windowMs) {
+                        active.push(t);
+                      } else {
+                        try {
+                          await github.rest.issues.removeLabel({ owner, repo, issue_number: it.number, name });
+                        } catch (e) { /* ignore */ }
+                      }
+                    }
                   }
+                } catch (e) {
+                  console.log('Warning scan across PRs failed (ignored): ' + e.message);
                 }
                 console.log(`PR #${pull_number} (author ${author}) has ${active.length} warnings in the last 7 days.`);
                 // 触发限制的条件：连续 7 天内累计恰好 5 次警告（非 5 次及以上）。
