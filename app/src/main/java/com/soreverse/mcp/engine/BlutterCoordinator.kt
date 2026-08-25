@@ -1,6 +1,25 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copyright (C) 2026 bilieebiliee1-design
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 package com.soreverse.mcp.engine
 
 import android.content.Context
+import com.soreverse.mcp.core.InsufficientMemoryException
+import com.soreverse.mcp.core.MemoryGuard
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.core.str
@@ -59,6 +78,10 @@ internal class BlutterCoordinator(
             if (file.isDirectory) {
                 inspectDirectory(file, path, args.str("abi", "auto"))
             } else if (file.isFile) {
+                MemoryGuard.ensureAnalysisMemory(
+                    file.length(),
+                    "Inspecting Flutter APK ${file.name}"
+                )
                 val bytes = file.readBytes()
                 if (!file.extension.equals(
                         "apk",
@@ -91,6 +114,10 @@ internal class BlutterCoordinator(
                     ok(inventory.put("selectedAnalysis", detailed))
                 }
             } else if (workDirectory != null) {
+                MemoryGuard.ensureAnalysisMemory(
+                    workDirectory.fileSize(path) ?: ApkAnalyzer.MAX_INPUT_BYTES,
+                    "Inspecting Flutter APK $path"
+                )
                 val bytes = workDirectory.readFile(path, ApkAnalyzer.MAX_INPUT_BYTES)
                 val inventory = FlutterArtifactInspector.inspectApk(
                     bytes,
@@ -124,6 +151,13 @@ internal class BlutterCoordinator(
                     path
                 )
             }
+        } catch (error: InsufficientMemoryException) {
+            err(
+                "INSUFFICIENT_MEMORY",
+                error.message ?: "Insufficient memory to inspect Flutter artifacts",
+                "path",
+                path
+            )
         } catch (error: Exception) {
             err(
                 error.message?.substringBefore(':')?.takeIf {
@@ -145,10 +179,22 @@ internal class BlutterCoordinator(
             libs to FlutterArtifactInspector.inspectLibraries(libs)
         }
         if (resolved.isFailure) {
-            val problem = JSONObject().put("code", "INPUT_RESOLUTION_FAILED").put(
-                "message",
-                resolved.exceptionOrNull()?.message ?: "Cannot resolve Flutter libraries"
-            ).put("recoverable", false).put("stage", "resolving_input")
+            val failure = resolved.exceptionOrNull()
+            val problem = JSONObject()
+                .put(
+                    "code",
+                    if (failure is InsufficientMemoryException) {
+                        "INSUFFICIENT_MEMORY"
+                    } else {
+                        "INPUT_RESOLUTION_FAILED"
+                    }
+                )
+                .put(
+                    "message",
+                    failure?.message ?: "Cannot resolve Flutter libraries"
+                )
+                .put("recoverable", false)
+                .put("stage", "resolving_input")
             store.update(jobId, "failed", "resolving_input", problem)
             return ok(JSONObject().put("jobId", jobId).put("status", "failed").put("error", problem))
         }
@@ -290,6 +336,10 @@ internal class BlutterCoordinator(
                 file.resolve("libflutter.so").takeIf { it.isFile }
                     ?: file.resolve("Flutter").takeIf { it.isFile }
                     ?: error("FLUTTER_LIBS_NOT_FOUND")
+            MemoryGuard.ensureAnalysisMemory(
+                app.length() + flutter.length(),
+                "Analyzing Flutter libraries in ${file.name}"
+            )
             return FlutterLibraries(
                 file.name,
                 "arm64-v8a",
@@ -300,10 +350,18 @@ internal class BlutterCoordinator(
             )
         }
         val bytes = if (file.isFile) {
+            MemoryGuard.ensureAnalysisMemory(
+                file.length(),
+                "Analyzing Flutter APK ${file.name}"
+            )
             file.readBytes()
         } else {
-            workDirectory?.readFile(path, ApkAnalyzer.MAX_INPUT_BYTES)
-                ?: error("INPUT_NOT_FOUND")
+            val dir = workDirectory ?: error("INPUT_NOT_FOUND")
+            MemoryGuard.ensureAnalysisMemory(
+                dir.fileSize(path) ?: ApkAnalyzer.MAX_INPUT_BYTES,
+                "Analyzing Flutter APK $path"
+            )
+            dir.readFile(path, ApkAnalyzer.MAX_INPUT_BYTES)
         }
         return FlutterArtifactInspector.extractLibraries(bytes, path, args.str("abi", "arm64-v8a"))
     }
@@ -325,6 +383,10 @@ internal class BlutterCoordinator(
             )
         }
         val abi = if (requestedAbi == "auto") "arm64-v8a" else requestedAbi
+        MemoryGuard.ensureAnalysisMemory(
+            app.length() + flutter.length(),
+            "Inspecting Flutter libraries in ${dir.name}"
+        )
         return ok(
             FlutterArtifactInspector.inspectLibraries(
                 FlutterLibraries(
