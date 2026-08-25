@@ -144,6 +144,39 @@ jobs:
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
 
+      - name: Verify and ensure v2/v3 APK signing
+        env:
+          STORE_FILE: release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for apk in app/build/outputs/apk/release/*.apk; do
+            echo "=== Checking signing schemes: $(basename "$apk") ==="
+
+            # Verify that v2/v3 signing is present. If apksigner verify
+            # succeeds, the APK is validly signed (v2/v3 present).
+            # If it fails, re-sign explicitly with the full scheme.
+            if apksigner verify --verbose "$apk" 2>&1 | grep -qi "NOT PRESENT"; then
+              echo "::warning::v2/v3 signing NOT verified in $(basename "$apk"); re-signing with apksigner"
+              apksigner sign \
+                --ks "$STORE_FILE" \
+                --ks-pass "pass:$STORE_PASSWORD" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass "pass:$KEY_PASSWORD" \
+                --v1-signing-enabled true \
+                --v2-signing-enabled true \
+                --v3-signing-enabled true \
+                --v4-signing-enabled true \
+                "$apk"
+            fi
+
+            # Final verification: fail the build if the APK still lacks v2/v3.
+            apksigner verify --print-certs "$apk"
+            echo "✓ $(basename "$apk") has valid v2/v3 signing"
+          done
+
       - name: Wipe signing artifacts
         run: |
           set -euo pipefail

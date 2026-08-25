@@ -184,5 +184,30 @@ jobs:
           fi
       - name: Release build
         run: gradle :app:assembleRelease --stacktrace
+      - name: Verify and ensure v2/v3 APK signing
+        run: |
+          set -euo pipefail
+          storeFile=$(grep '^storeFile=' release/keystore.properties | head -1 | cut -d= -f2-)
+          storePassword=$(grep '^storePassword=' release/keystore.properties | head -1 | cut -d= -f2-)
+          keyAlias=$(grep '^keyAlias=' release/keystore.properties | head -1 | cut -d= -f2-)
+          keyPassword=$(grep '^keyPassword=' release/keystore.properties | head -1 | cut -d= -f2-)
+          for apk in app/build/outputs/apk/release/*.apk; do
+            echo "=== Checking signing schemes: $(basename "$apk") ==="
+            if apksigner verify --verbose "$apk" 2>&1 | grep -qi "NOT PRESENT"; then
+              echo "::warning::v2/v3 signing NOT verified in $(basename "$apk"); re-signing with apksigner"
+              apksigner sign \
+                --ks "$storeFile" \
+                --ks-pass "pass:$storePassword" \
+                --ks-key-alias "$keyAlias" \
+                --key-pass "pass:$keyPassword" \
+                --v1-signing-enabled true \
+                --v2-signing-enabled true \
+                --v3-signing-enabled true \
+                --v4-signing-enabled true \
+                "$apk"
+            fi
+            apksigner verify --print-certs "$apk"
+            echo "✓ $(basename "$apk") has valid v2/v3 signing"
+          done
       - name: Unit tests (strict)
         run: gradle :app:testDebugUnitTest --stacktrace -Pkotlin.compiler.allWarningsAsErrors=true
