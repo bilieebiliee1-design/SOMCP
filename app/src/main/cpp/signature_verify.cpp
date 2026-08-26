@@ -260,15 +260,31 @@ static bool extract_cert_from_sign_block(const uint8_t* block, size_t block_len,
     out_cert.clear();
     if (!block || block_len == 0) return false;
 
-    // Block layout (AOSP apksig): a sequence of length-prefixed Signer
-    // structures. Each length prefix is a uint32 LE.
+    // Block layout (AOSP apksig): the scheme-block value is
+    //   LengthPrefixed( sequence of LengthPrefixed(signer) )
+    // i.e. an outer 4-byte length wraps the whole signers sequence, and each
+    // signer inside it carries its own length prefix. A previous version of
+    // this parser skipped the outer length prefix, which shifted every field
+    // one level up: it treated the signers-sequence length as the signer
+    // length, then read signedData/digests lengths from the next level's
+    // length fields. The "certificate" it returned was actually read from the
+    // middle of the signatures blob (a wrong-size chunk whose digest can never
+    // match the pin) - that is why the v2/v3 check failed on the release APKs
+    // and killed the app at startup (issues #56 / #59).
     size_t pos = 0;
 
-    // --- signer ---
+    // --- signers : length-prefixed sequence ---
+    uint32_t seq_len = 0;
+    if (!read_u32le(block, pos, block_len, &seq_len)) return false;
+    if (!in_bounds(pos + 4, seq_len, block_len)) return false;
+    const size_t seq = pos + 4;
+    const size_t seq_end = seq + seq_len;
+
+    // --- signer : length-prefixed ---
     uint32_t signer_len = 0;
-    if (!read_u32le(block, pos, block_len, &signer_len)) return false;
-    if (!in_bounds(pos + 4, signer_len, block_len)) return false;
-    const size_t signer = pos + 4;
+    if (!read_u32le(block, seq, seq_end, &signer_len)) return false;
+    if (!in_bounds(seq + 4, signer_len, seq_end)) return false;
+    const size_t signer = seq + 4;
     const size_t signer_end = signer + signer_len;
 
     // --- signer.signedData : length-prefixed ---
