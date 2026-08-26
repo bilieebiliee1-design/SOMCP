@@ -42,9 +42,15 @@ class CloudflareTunnelManager(private val context: Context, private val settings
     enum class BinaryState { UNKNOWN, NOT_FOUND, DOWNLOADING, READY }
 
     companion object {
-        /** GitHub release URL for the cloudflared Android arm64 binary. */
+        /**
+         * GitHub release URL for the cloudflared arm64 binary. Cloudflare no
+         * longer publishes a `cloudflared-android-arm64` asset (that URL
+         * returns HTTP 404); the `cloudflared-linux-arm64` asset is a
+         * statically-linked Go binary with no libc dependencies, so it runs
+         * unmodified on Android arm64 (bionic).
+         */
         const val CLOUDFLARED_DOWNLOAD_URL =
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-android-arm64"
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
         const val CLOUDFLARED_DIR = "cloudflared"
         const val CLOUDFLARED_FILE = "cloudflared"
 
