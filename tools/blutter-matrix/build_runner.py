@@ -1,14 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Copyright (C) 2026 bilieebiliee1-design
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
 import argparse
 import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
 
 
 UPSTREAM_COMMIT = "528acbe83ba35a3a53fb97b231cb5f968c7068d1"
+
+
+def package_version(value):
+    # CMake package names / `-D<var>` identifiers cannot contain spaces or
+    # parentheses. Beta/other-channel Dart SDK versions look like
+    # "3.13.0 (build 3.13.0-282.3.beta)", so normalize to a CMake-safe slug
+    # (same convention as the runnerId in prepare_build_plan.py). This is only
+    # used for the transient dartvm CMake package identity; the friendly
+    # runner["dartVersion"] is still kept for curated matching and the manifest.
+    return re.sub(r"[^A-Za-z0-9]+", "_", value or "unknown").strip("_").lower()
 
 
 def run(command, cwd, log):
@@ -39,7 +67,7 @@ def prepare_dart_project(dart, blutter, runner, log):
     marker = content.find("-std=c++")
     cpp_standard = "17" if marker < 0 else content[marker + 8:marker + 10]
     template = (blutter / "scripts" / "CMakeLists.txt").read_text(encoding="utf-8")
-    generated = template.replace("VERSION_PLACE_HOLDER", runner["dartVersion"]).replace("CXX_STD_PLACE_HOLDER", cpp_standard)
+    generated = template.replace("VERSION_PLACE_HOLDER", package_version(runner["dartVersion"])).replace("CXX_STD_PLACE_HOLDER", cpp_standard)
     generated = generated.replace('set(CMAKE_INSTALL_PREFIX "${PROJECT_SOURCE_DIR}/../../packages" CACHE PATH "" FORCE)\n', "")
     generated = generated.replace(" PUBLIC dl pthread ${ICU_LIBRARIES}", " PUBLIC dl ${ICU_LIBRARIES} ${ICU_DATA_LIBRARY}")
     (dart / "CMakeLists.txt").write_text(generated, encoding="utf-8")
@@ -125,8 +153,9 @@ def main():
             icu_lib = icu_root / "lib"
             run([args.cmake, "-S", str(dart), "-B", str(dart_build), "-G", "Ninja", f"-DCMAKE_TOOLCHAIN_FILE={toolchain}", "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-26", "-DTARGET_OS=android", "-DTARGET_ARCH=arm64", f"-DCOMPRESSED_PTRS={int(runner['compressedPointers'])}", f"-DICU_ROOT={icu_root}", f"-DCMAKE_PREFIX_PATH={icu_root}", f"-DICU_INCLUDE_DIR={icu_include}", f"-DICU_INCLUDE_DIRS={icu_include}", f"-DICU_LIBRARY={icu_lib / 'libicuuc.a'}", f"-DICU_LIBRARIES={icu_lib / 'libicuuc.a'}", f"-DICU_UC_LIBRARY={icu_lib / 'libicuuc.a'}", f"-DICU_DATA_LIBRARY={icu_lib / 'libicudata.a'}", f"-DCMAKE_INSTALL_PREFIX={packages}", "-DCMAKE_BUILD_TYPE=Release"], dart, log)
             run([args.cmake, "--build", str(dart_build), "--target", "install", "--parallel"], dart, log)
-            dart_package = packages / "lib" / "cmake" / f"dartvm{runner['dartVersion']}_android_arm64"
-            dart_package_name = f"dartvm{runner['dartVersion']}_android_arm64"
+            package = package_version(runner["dartVersion"])
+            dart_package = packages / "lib" / "cmake" / f"dartvm{package}_android_arm64"
+            dart_package_name = f"dartvm{package}_android_arm64"
             compatibility = [f"-D{item}=ON" for item in dart_compatibility_definitions(dart)]
             run([args.cmake, "-S", str(overlay), "-B", str(runner_build), "-G", "Ninja", f"-DBLUTTER_SOURCE={blutter / 'blutter'}", f"-DDARTLIB={dart_package_name}", f"-D{dart_package_name}_DIR={dart_package}", f"-DCMAKE_PREFIX_PATH={packages}", f"-DCAPSTONE_ROOT={args.capstone_root}", f"-DRUNNER_LIBRARY={runner['libraryName']}", f"-DRUNNER_ID={runner['runnerId']}", f"-DBLUTTER_COMMIT={runner['blutterCommit']}", f"-DCOMPRESSED_POINTERS={int(runner['compressedPointers'])}", f"-DCMAKE_TOOLCHAIN_FILE={toolchain}", "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-26", "-DCMAKE_BUILD_TYPE=Release", *compatibility], overlay, log)
             run([args.cmake, "--build", str(runner_build), "--parallel"], overlay, log)
