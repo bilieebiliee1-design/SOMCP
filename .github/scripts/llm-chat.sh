@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# SOMCP - llm-chat.sh
-# Copyright (C) 2026 SOMCP authors
-# Upstream: https://github.com/bilieebiliee1-design/SOMCP
+# Copyright (C) 2026 bilieebiliee1-design
 #
-# This program is free software: you can redistribute it and/or modify it
-# under the terms of the GNU Affero General Public License version 3 as published
-# by the Free Software Foundation.
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
-# for more details.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
 #
-# You should have received a copy of the GNU Affero General Public License along
-# with this program. If not, see <https://www.gnu.org/licenses/>.
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # Shared LLM helper for the auto-reply/auto-review workflows.
 #
@@ -72,7 +71,9 @@ USER_INPUT="$(cat)"
 sys_file="$(mktemp)"
 user_file="$(mktemp)"
 payload_file="$(mktemp)"
-trap 'rm -f "$sys_file" "$user_file" "$payload_file"' EXIT
+body_file="$(mktemp)"
+http_file="$(mktemp)"
+trap 'rm -f "$sys_file" "$user_file" "$payload_file" "$body_file" "$http_file"' EXIT
 printf '%s' "${LLM_SYSTEM_PROMPT:-}" > "$sys_file"
 printf '%s' "$USER_INPUT" > "$user_file"
 
@@ -85,9 +86,44 @@ jq -n \
      {role: "user", content: $user}
    ], temperature: 0.3}' > "$payload_file"
 
-curl -sS -f -m 240 -X POST \
-  -H "Authorization: Bearer $LLM_KEY" \
-  -H "Content-Type: application/json" \
-  "${CURL_EXTRA_ARGS[@]}" \
-  -d "@$payload_file" "$ENDPOINT" \
-  | jq -r '.choices[0].message.content // empty'
+# M6: call the LLM API with a per-attempt timeout (240s) and retry with
+# exponential backoff on transient failures (network/transport errors, HTTP 429,
+# 5xx). Without this, an upstream hang would pin the job until its default
+# 360-minute timeout. Non-retryable errors exit non-zero so callers fall back.
+attempt=0
+max_attempts=4
+backoff=5
+while [ "$attempt" -lt "$max_attempts" ]; do
+  attempt=$((attempt + 1))
+  if curl -sS --max-time 240 -w '%{http_code}' -o "$body_file" -X POST \
+      -H "Authorization: Bearer $LLM_KEY" \
+      -H "Content-Type: application/json" \
+      "${CURL_EXTRA_ARGS[@]}" \
+      -d "@$payload_file" "$ENDPOINT" > "$http_file" 2>/dev/null; then
+    http_code=$(cat "$http_file")
+  else
+    http_code="000"
+  fi
+  if [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
+    # Transport error (connection refused, DNS, timeout, TLS, ...)
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      echo "::error::LLM API unreachable after $max_attempts attempts" >&2
+      exit 22
+    fi
+    echo "::warning::LLM API transport error (attempt $attempt/$max_attempts); retrying in ${backoff}s" >&2
+    sleep "$backoff"; backoff=$((backoff * 2)); continue
+  fi
+  if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+    # Success: extract the model answer.
+    jq -r '.choices[0].message.content // empty' "$body_file"
+    exit 0
+  fi
+  # HTTP 429 (rate limited) and 5xx (server error) are retryable.
+  if { [ "$http_code" -eq 429 ] || [ "$http_code" -ge 500 ]; } && [ "$attempt" -lt "$max_attempts" ]; then
+    echo "::warning::LLM API returned HTTP $http_code (attempt $attempt/$max_attempts); retrying in ${backoff}s" >&2
+    sleep "$backoff"; backoff=$((backoff * 2)); continue
+  fi
+  echo "::error::LLM API returned HTTP $http_code" >&2
+  exit 22
+done
+exit 22

@@ -1,0 +1,70 @@
+name: Cleanup Stale LLM Labels
+
+# M4.2: Daily cleanup of stale llm-warning-* / llm-restricted-* labels.
+#
+# These 7-day-expiring labels are normally removed inside pr-auto-review.yml
+# when the same author triggers the workflow again. Authors who stop submitting
+# PRs would otherwise leave stale labels on their issues/PRs forever; this
+# nightly sweep removes expired ones so they don't accumulate and the
+# warning/restriction counts stay accurate.
+on:
+  schedule:
+    - cron: '17 4 * * *'   # 04:17 UTC every day (= 12:17 北京时间)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove stale llm-warning / llm-restricted labels
+        id: cleanup
+        uses: actions/github-script@v7
+        env:
+          WINDOW_DAYS: '7'
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const windowMs = Number(process.env.WINDOW_DAYS || '7') * 24 * 60 * 60 * 1000;
+            const nowMs = Date.now();
+            // llm-warning-<authorKey>-<epochSeconds> /
+            // llm-restricted-<authorKey>-<epochSeconds>; authorKey may itself
+            // contain hyphens, so anchor on the trailing timestamp instead.
+            const re = /^(llm-warning-|llm-restricted-).+-(\d+)$/;
+            let scanned = 0;
+            let removed = 0;
+            try {
+              // Paginate over all issues/PRs so labels on closed items (which
+              // the pr-auto-review warning scan still reads via state:all) are
+              // covered too.
+              const items = await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, state: 'all', per_page: 100
+              });
+              for (const it of items || []) {
+                for (const name of (it.labels || []).map(l => l.name)) {
+                  const m = re.exec(name);
+                  if (!m) continue;
+                  scanned++;
+                  const ts = Number(m[2]) * 1000;
+                  if (nowMs - ts > windowMs) {
+                    try {
+                      await github.rest.issues.removeLabel({
+                        owner, repo, issue_number: it.number, name
+                      });
+                      removed++;
+                      console.log(`Removed stale label ${name} from #${it.number}`);
+                    } catch (e) {
+                      console.log(`removeLabel ${name} on #${it.number} failed (ignored): ` + e.message);
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.log('Cleanup scan failed (ignored): ' + e.message);
+            }
+            console.log(`Scanned ${scanned} llm-* label(s); removed ${removed} stale.`);
+            core.setOutput('removed', String(removed));
