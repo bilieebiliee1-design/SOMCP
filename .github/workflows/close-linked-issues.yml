@@ -11,6 +11,13 @@ name: Close Linked Issues on Merge
 on:
   pull_request_target:
     types: [closed]
+  # L4: 手动补跑——LLM 失败兜底文案发出后可重新生成关闭说明并关闭关联 issue。
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: '已合并的 PR 编号（重新生成其关联 issue 的关闭说明）'
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -20,9 +27,11 @@ permissions:
 jobs:
   close-linked:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true
+    if: >-
+      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true) ||
+      github.event_name == 'workflow_dispatch'
     concurrency:
-      group: llm-close-issues-${{ github.event.pull_request.number }}
+      group: llm-close-issues-${{ inputs.pr_number || github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -30,12 +39,28 @@ jobs:
       - name: Collect issues linked by the merged PR
         id: collect
         uses: actions/github-script@v7
+        env:
+          # L4: workflow_dispatch 手动补跑时从 API 按编号取 PR。
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
         with:
           script: |
             const fs = require('fs');
             const { owner, repo } = context.repo;
-            const pull_number = context.issue.number;
-            const pr = context.payload.pull_request;
+            const pull_number = Number(process.env.PR_NUMBER || context.issue.number);
+            const isManual = github.event_name === 'workflow_dispatch';
+            let pr;
+            if (isManual) {
+              pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+            } else {
+              pr = context.payload.pull_request;
+            }
+            // 供后续 bash 步骤（Generate）读取，兼容手动补跑（dispatch 事件里
+            // 没有 pull_request 字段）。
+            fs.writeFileSync('/tmp/pr-meta.json', JSON.stringify({
+              number: pull_number,
+              title: pr.title || '',
+              body: pr.body || ''
+            }));
             const texts = [pr.title || '', pr.body || ''];
             try {
               const { data: commits } = await github.rest.pulls.listCommits({
@@ -77,9 +102,11 @@ jobs:
           LLM_MODEL: ${{ secrets.LLM }}
           LLM_KEY: ${{ secrets.KEY }}
           LLM_API: ${{ secrets.API }}
+          # L1: 与 pr-auto-review 内联版保持一致的语言自适应（此前为固定简体中文，
+          # 两处同一功能的 prompt 已漂移）。
           SYSTEM_PROMPT: |
             你是开源 Android 应用 SOMCP（SoReverse MCP，so 逆向分析工具）的维护/发布助手。一个与该 issue 相关的 Pull Request 已合并。
-            请基于该 issue 的原始内容和已合并 PR 的描述，用简体中文撰写一条关闭说明评论：
+            请先根据该 issue 的作者撰写的内容判断其使用的语言，并使用**相同的语言**撰写一条关闭说明评论（例如对方用中文就用中文，用英文就用英文，其他语言同理）：
             1) 说明该 issue 已被处理；
             2) 概括本次修复/实现的主要内容；
             3) 感谢作者的反馈；
@@ -88,12 +115,21 @@ jobs:
             直接输出评论正文（GitHub Markdown），不要任何前后缀。
         run: |
           set -euo pipefail
-          EVENT_PATH="${GITHUB_EVENT_PATH}"
-          REPO=$(jq -r '.repository.full_name' "$EVENT_PATH")
-          PR_NUMBER=$(jq -r '.pull_request.number' "$EVENT_PATH")
-          PR_TITLE=$(jq -r '.pull_request.title' "$EVENT_PATH")
-          PR_BODY=$(jq -r '.pull_request.body // ""' "$EVENT_PATH")
-          ISSUES=$(cat /tmp/linked_issues.txt)
+          # L4: 手动补跑时从 collect 步骤写入的 pr-meta.json 取 PR 信息
+          # （dispatch 事件里没有 pull_request 字段）。
+          if [ -f /tmp/pr-meta.json ]; then
+            PR_NUMBER=$(jq -r '.number' /tmp/pr-meta.json)
+            PR_TITLE=$(jq -r '.title' /tmp/pr-meta.json)
+            PR_BODY=$(jq -r '.body // ""' /tmp/pr-meta.json)
+          else
+            EVENT_PATH="${GITHUB_EVENT_PATH}"
+            PR_NUMBER=$(jq -r '.pull_request.number' "$EVENT_PATH")
+            PR_TITLE=$(jq -r '.pull_request.title' "$EVENT_PATH")
+            PR_BODY=$(jq -r '.pull_request.body // ""' "$EVENT_PATH")
+          fi
+          # L5: collect 步骤异常时避免 set -e 直接 fail job。
+          ISSUES=$(cat /tmp/linked_issues.txt 2>/dev/null || true)
+          REPO="${GITHUB_REPOSITORY}"
           if [ -z "${ISSUES// /}" ]; then
             echo "No linked issues found; nothing to do."
             echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_OUTPUT"
@@ -162,6 +198,12 @@ jobs:
               try { body = fs.readFileSync(`/tmp/close-${num}.md`, 'utf8').trim() || body; } catch (e) {}
               try {
                 const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: num });
+                // H3: 编号可能指向另一个 PR（issues API 兼容），评论/关闭 PR 会
+                // 误伤其他 PR，这里跳过 PR。
+                if (issue.pull_request) {
+                  console.log(`#${num} is a PR, not an issue; skipping.`);
+                  continue;
+                }
                 await github.rest.issues.createComment({ owner, repo, issue_number: num, body });
                 if (issue.state === 'open') {
                   await github.rest.issues.update({ owner, repo, issue_number: num, state: 'closed' });
