@@ -1,19 +1,12 @@
 name: Release
 
 on:
-  release:
-    types:
-      - published
   push:
     tags:
       - 'v*'
-  # Manual entry point: lets you verify the workflow is enabled/valid from
-  # the Actions tab without waiting for a release event. Note that a manual
-  # run has no release tag, so RELEASE_TAG falls back to the branch name.
-  workflow_dispatch:
 
-# A tag push and a GitHub Release created on the same tag both fire this
-# workflow; serialize by tag so we never build the same release twice.
+# Concurrent tag pushes to the same tag would build the same release twice;
+# serialize by tag so we never build the same release more than once.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
