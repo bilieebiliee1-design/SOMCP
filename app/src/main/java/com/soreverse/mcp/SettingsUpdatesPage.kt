@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.GitHubRelease
 import com.soreverse.mcp.core.GitHubUpdateManager
 import com.soreverse.mcp.core.SettingsStore
+import com.soreverse.mcp.core.UpdateChannel
 import com.soreverse.mcp.core.UpdateCheckResult
 import com.soreverse.mcp.core.UpdateDownloadEvent
 import java.io.File
@@ -111,13 +112,14 @@ internal fun SettingsUpdatesPage(
         }
     }
 
-    fun checkUpdates() {
+    fun checkUpdates(target: String = channel) {
         if (checking) return
         checking = true
         error = ""
         status = if (t.zh) "正在检查 GitHub Releases…" else "Checking GitHub Releases…"
+        val updateChannel = if (target == "beta") UpdateChannel.BETA else UpdateChannel.STABLE
         scope.launch {
-            manager.check()
+            manager.check(updateChannel)
                 .onSuccess { result ->
                     when (result) {
                         is UpdateCheckResult.Available -> {
@@ -131,7 +133,7 @@ internal fun SettingsUpdatesPage(
                             release = null
                             onRelease(null)
                             status =
-                                if (t.zh) "当前已是最新正式发行版" else "You are using the latest stable release"
+                                if (t.zh) "当前已是最新${if (updateChannel == UpdateChannel.BETA) "测试版" else "正式发行版"}" else if (updateChannel == UpdateChannel.BETA) "You are on the latest beta build" else "You are using the latest stable release"
                         }
                     }
                 }
@@ -224,19 +226,23 @@ internal fun SettingsUpdatesPage(
     }
     val headline = when {
         checking -> if (t.zh) "正在检查更新…" else "Checking for updates…"
-        available -> if (t.zh) "发现新版本" else "New update available"
-        isBeta -> if (t.zh) "测试版通道" else "Beta channel"
+        available -> if (isBeta) (if (t.zh) "发现新测试版" else "New beta available") else (if (t.zh) "发现新版本" else "New update available")
+        isBeta -> if (t.zh) "已是最新测试版" else "You're on the latest beta"
         else -> if (t.zh) "已是最新版本" else "You're up to date"
     }
     val subtitle = when {
         checking -> if (t.zh) "正在查询 GitHub Releases…" else "Querying GitHub Releases…"
         available -> release?.name?.ifBlank {
-            if (t.zh) "体验最新的实验性功能与架构优化" else "Experience the latest experimental features"
+            if (isBeta) {
+                if (t.zh) "体验最新的实验性测试构建" else "Experience the latest experimental beta build"
+            } else {
+                if (t.zh) "体验最新的实验性功能与架构优化" else "Experience the latest experimental features"
+            }
         } ?: ""
         isBeta -> if (t.zh) {
-            "测试版通道暂未开放，请切换到正式版通道检查发行版。"
+            "您正在使用最新测试版构建，无需进行更新操作。"
         } else {
-            "The beta channel is not available yet; switch to the stable channel."
+            "You are on the latest beta build; no update is needed."
         }
         else -> if (t.zh) {
             "您的 SOMCP 客户端当前已更新至最新稳定版，无需进行更新操作。"
@@ -256,7 +262,18 @@ internal fun SettingsUpdatesPage(
         // Channel pill (正式版 / 测试版)
         ChannelSegmentsPill(
             selected = channel,
-            onSelect = { channel = it },
+            onSelect = { newChannel ->
+                if (newChannel == channel) return@ChannelSegmentsPill
+                downloadJob?.cancel()
+                downloadJob = null
+                downloading = false
+                downloadPhase = ""
+                verifyNote = ""
+                downloadedFile = null
+                status = ""
+                channel = newChannel
+                checkUpdates(newChannel)
+            },
             zh = t.zh
         )
         // Hero: glowing app icon + dynamic state headline
