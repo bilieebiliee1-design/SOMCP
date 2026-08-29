@@ -375,6 +375,12 @@ jobs:
               printf '（未获取到 CI 检查结果）\n'
             fi
           } > /tmp/llm-input.txt
+          # 在系统提示词中注入当前时间（北京时间，UTC+8），让 LLM 基于"现在"的
+          # 实际时间进行审查（如依赖版本新旧、废弃/过期策略、时间戳类判断），
+          # 避免模型按过时的训练期"当前时间"推理。
+          SYSTEM_PROMPT="$SYSTEM_PROMPT
+          
+          当前时间（北京时间，UTC+8）：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
           # Endpoint policy: Tencent Copilot uses /v2/chat/completions and
           # needs a User-Agent header; DeepSeek serves /chat/completions
           # directly; other platforms use /v1/chat/completions.
