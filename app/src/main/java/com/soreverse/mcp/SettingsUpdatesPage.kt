@@ -132,8 +132,11 @@ internal fun SettingsUpdatesPage(
                         UpdateCheckResult.Current -> {
                             release = null
                             onRelease(null)
-                            status =
-                                if (t.zh) "当前已是最新${if (updateChannel == UpdateChannel.BETA) "测试版" else "正式发行版"}" else if (updateChannel == UpdateChannel.BETA) "You are on the latest beta build" else "You are using the latest stable release"
+                            status = if (updateChannel == UpdateChannel.BETA) {
+                                if (t.zh) "当前已是最新测试版" else "You are on the latest beta build"
+                            } else {
+                                if (t.zh) "当前已是最新正式发行版" else "You are using the latest stable release"
+                            }
                         }
                     }
                 }
