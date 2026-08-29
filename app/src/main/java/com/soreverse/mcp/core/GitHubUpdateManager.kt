@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copyright (C) 2026 bilieebiliee1-design
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 package com.soreverse.mcp.core
 
 import android.content.Context
@@ -24,6 +41,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class GitHubRelease(
@@ -41,6 +59,9 @@ sealed interface UpdateCheckResult {
     data class Available(val release: GitHubRelease) : UpdateCheckResult
     data object Current : UpdateCheckResult
 }
+
+/** Update channel: stable official releases, or pre-release (beta) builds. */
+enum class UpdateChannel { STABLE, BETA }
 
 sealed interface UpdateDownloadEvent {
     data class Probing(val total: Int) : UpdateDownloadEvent
@@ -81,47 +102,11 @@ class GitHubUpdateManager(private val context: Context) {
     // one has fully unwound.
     private val downloadMutex = Mutex()
 
-    suspend fun check(): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
+    suspend fun check(channel: UpdateChannel = UpdateChannel.STABLE): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         try {
-            val request = Request.Builder()
-                .url(LATEST_RELEASE_URL)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
-                .build()
-            val result = client.newCall(request).await().use { response ->
-                if (response.code == 404) return@use UpdateCheckResult.Current
-                if (!response.isSuccessful) {
-                    error(
-                        "GitHub HTTP ${response.code} ${response.message}"
-                    )
-                }
-                val root = JSONObject(response.body.string())
-                val tag = root.optString("tag_name")
-                if (!isNewer(tag, BuildConfig.VERSION_NAME)) return@use UpdateCheckResult.Current
-                val assets = root.optJSONArray("assets") ?: error("Release has no assets")
-                val apk = selectApk((0 until assets.length()).map { assets.getJSONObject(it) })
-                    ?: error("Release has no APK for ${Build.SUPPORTED_ABIS.joinToString()}")
-                val checksum = (0 until assets.length())
-                    .map { assets.getJSONObject(it) }
-                    .firstOrNull {
-                        val name = it.optString("name")
-                        name == "${apk.optString("name")}.sha256" || name == "SHA256SUMS"
-                    }
-                UpdateCheckResult.Available(
-                    GitHubRelease(
-                        tag = tag,
-                        name = root.optString("name").ifBlank { tag },
-                        notes = root.optString("body"),
-                        pageUrl = root.optString("html_url"),
-                        apkName = apk.getString("name"),
-                        apkUrl = apk.getString("browser_download_url"),
-                        apkSize = apk.optLong("size"),
-                        checksumUrl = checksum?.optString(
-                            "browser_download_url"
-                        )?.takeIf(String::isNotBlank)
-                    )
-                )
+            val result = when (channel) {
+                UpdateChannel.STABLE -> checkStable()
+                UpdateChannel.BETA -> checkBeta()
             }
             Result.success(result)
         } catch (error: CancellationException) {
@@ -129,6 +114,73 @@ class GitHubUpdateManager(private val context: Context) {
         } catch (error: Throwable) {
             Result.failure(error)
         }
+    }
+
+    private suspend fun checkStable(): UpdateCheckResult {
+        val request = Request.Builder()
+            .url(LATEST_RELEASE_URL)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
+            .build()
+        return client.newCall(request).await().use { response ->
+            if (response.code == 404) return@use UpdateCheckResult.Current
+            if (!response.isSuccessful) {
+                error(
+                    "GitHub HTTP ${response.code} ${response.message}"
+                )
+            }
+            buildRelease(JSONObject(response.body.string()), required = true)
+        }
+    }
+
+    private suspend fun checkBeta(): UpdateCheckResult {
+        val request = Request.Builder()
+            .url("${RELEASES_URL}?per_page=30")
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
+            .build()
+        return client.newCall(request).await().use { response ->
+            if (!response.isSuccessful) {
+                error(
+                    "GitHub HTTP ${response.code} ${response.message}"
+                )
+            }
+            val array = JSONArray(response.body.string())
+            val candidate = (0 until array.length())
+                .map { array.getJSONObject(it) }
+                .firstOrNull { it.optBoolean("prerelease") && !it.optBoolean("draft") }
+            candidate?.let { buildRelease(it, required = false) } ?: UpdateCheckResult.Current
+        }
+    }
+
+    private fun buildRelease(root: JSONObject, required: Boolean): UpdateCheckResult {
+        val tag = root.optString("tag_name")
+        if (!isNewer(tag, BuildConfig.VERSION_NAME)) return UpdateCheckResult.Current
+        val assets = root.optJSONArray("assets")
+        val apk = assets?.let { selectApk((0 until it.length()).map { index -> it.getJSONObject(index) }) }
+            ?: return if (required) error("Release has no APK for ${Build.SUPPORTED_ABIS.joinToString()}") else UpdateCheckResult.Current
+        val checksum = (0 until assets.length())
+            .map { assets.getJSONObject(it) }
+            .firstOrNull {
+                val name = it.optString("name")
+                name == "${apk.optString("name")}.sha256" || name == "SHA256SUMS"
+            }
+        return UpdateCheckResult.Available(
+            GitHubRelease(
+                tag = tag,
+                name = root.optString("name").ifBlank { tag },
+                notes = root.optString("body"),
+                pageUrl = root.optString("html_url"),
+                apkName = apk.getString("name"),
+                apkUrl = apk.getString("browser_download_url"),
+                apkSize = apk.optLong("size"),
+                checksumUrl = checksum?.optString(
+                    "browser_download_url"
+                )?.takeIf(String::isNotBlank)
+            )
+        )
     }
 
     suspend fun download(release: GitHubRelease, forcedSource: String? = null, onEvent: (UpdateDownloadEvent) -> Unit): Result<File> =
@@ -476,6 +528,7 @@ class GitHubUpdateManager(private val context: Context) {
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
         private const val LATEST_RELEASE_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases/latest"
+        private const val RELEASES_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases"
         private const val CHECKSUM_MIRROR_ATTEMPTS = 4
     }
 }
