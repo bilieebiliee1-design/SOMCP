@@ -16,7 +16,6 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
-
 package com.soreverse.mcp
 
 import android.Manifest
@@ -336,7 +335,10 @@ private fun SoReverseApp() {
     }
     LaunchedEffect(Unit) {
         if (settings.autoCheckUpdates) {
-            updateManager.check()
+            val channel = com.soreverse.mcp.core.UpdateChannel.valueOf(
+                settings.updateChannel.uppercase()
+            )
+            updateManager.check(channel)
                 .onSuccess { result ->
                     if (result is com.soreverse.mcp.core.UpdateCheckResult.Available) {
                         availableRelease = result.release

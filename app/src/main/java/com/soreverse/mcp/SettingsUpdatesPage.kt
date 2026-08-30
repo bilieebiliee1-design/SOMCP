@@ -97,7 +97,7 @@ internal fun SettingsUpdatesPage(
     var verifyNote by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
-    var channel by remember { mutableStateOf("stable") }
+    var channel by remember { mutableStateOf(settings.updateChannel) }
 
     LaunchedEffect(release?.tag) {
         downloadedFile = release?.let(manager::cachedDownload)
@@ -275,6 +275,7 @@ internal fun SettingsUpdatesPage(
                 downloadedFile = null
                 status = ""
                 channel = newChannel
+                settings.updateChannel = newChannel
                 checkUpdates(newChannel)
             },
             zh = t.zh
@@ -297,15 +298,25 @@ internal fun SettingsUpdatesPage(
         GlassGroup {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    if (t.zh) "GitHub 正式发行版" else "Official GitHub releases",
+                    when {
+                        isBeta -> if (t.zh) "GitHub 测试发行版" else "Official GitHub pre-releases"
+                        else -> if (t.zh) "GitHub 正式发行版" else "Official GitHub releases"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                 )
                 Text(
-                    if (t.zh) {
-                        "只检查 bilieebiliee1-design/SOMCP 的正式 Release。普通构建、提交、分支和标签均不会被视为更新。"
-                    } else {
-                        "Only stable releases from bilieebiliee1-design/SOMCP are checked. Builds, commits, branches and tags do not count as updates."
+                    when {
+                        isBeta -> if (t.zh) {
+                            "只检查 bilieebiliee1-design/SOMCP 的测试 Release。普通构建、提交、分支和标签均不会被视为更新。"
+                        } else {
+                            "Only beta releases from bilieebiliee1-design/SOMCP are checked. Builds, commits, branches and tags do not count as updates."
+                        }
+                        else -> if (t.zh) {
+                            "只检查 bilieebiliee1-design/SOMCP 的正式 Release。普通构建、提交、分支和标签均不会被视为更新。"
+                        } else {
+                            "Only stable releases from bilieebiliee1-design/SOMCP are checked. Builds, commits, branches and tags do not count as updates."
+                        }
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -449,11 +460,12 @@ private fun IconSmall(imageVector: ImageVector, tint: Color) {
 
 @Composable
 private fun ChannelSegmentsPill(selected: String, onSelect: (String) -> Unit, zh: Boolean) {
-    val options = listOf(
-        "stable" to (if (zh) "正式版" else "Stable"),
-        "beta" to (if (zh) "测试版" else "Beta")
-    )
     val shape = RoundedCornerShape(999.dp)
+    data class Opt(val key: String, val icon: ImageVector, val label: String)
+    val options = listOf(
+        Opt("stable", Icons.Default.Verified, if (zh) "正式版" else "Stable"),
+        Opt("beta", Icons.Default.Science, if (zh) "测试版" else "Beta")
+    )
     Row(
         Modifier
             .fillMaxWidth()
@@ -462,25 +474,47 @@ private fun ChannelSegmentsPill(selected: String, onSelect: (String) -> Unit, zh
             .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.14f)), shape)
             .padding(3.dp)
     ) {
-        options.forEach { (key, label) ->
-            val active = selected == key
-            Text(
-                label,
+        options.forEach { opt ->
+            val active = selected == opt.key
+            val tint = when (opt.key) {
+                "beta" -> MaterialTheme.colorScheme.tertiary
+                else -> MaterialTheme.colorScheme.primary
+            }
+            val bgAlpha = if (active) 0.22f else 0f
+            val borderAlpha = if (active) 0.55f else 0f
+            val contentColor = if (active) {
+                tint
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.68f)
+            }
+            Row(
                 Modifier
                     .weight(1f)
                     .clip(shape)
-                    .background(if (active) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-                    .clickable { onSelect(key) }
-                    .padding(vertical = 9.dp),
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (active) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium
-            )
+                    .background(tint.copy(alpha = bgAlpha))
+                    .border(
+                        BorderStroke(1.dp, tint.copy(alpha = borderAlpha)),
+                        shape
+                    )
+                    .clickable { if (!active) onSelect(opt.key) }
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.Icon(
+                    opt.icon,
+                    null,
+                    tint = contentColor,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.size(5.dp))
+                Text(
+                    opt.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = contentColor,
+                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
+                )
+            }
         }
     }
 }
