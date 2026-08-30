@@ -46,6 +46,7 @@
 package com.soreverse.mcp.engine
 
 import android.content.Context
+import android.util.Base64
 import com.soreverse.mcp.core.AppLog
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -55,7 +56,6 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.charset.Charset
-import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -188,8 +188,12 @@ internal object FridaTransport {
     private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     private val utf8: Charset = Charsets.UTF_8
 
-    private val secretKey: String =
-        Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
+    /** Random per-process WebSocket handshake key (RFC 6455 §4.1 recommends a
+     *  fresh random value; the daemon echoes its SHA-1 + GUID digest). */
+    private val secretKey: String = Base64.encodeToString(
+        ByteArray(16) { (0..255).random().toByte() },
+        Base64.NO_WRAP
+    )
 
     /** WebSocket handshake state (upgrade + pending frame bytes). */
     private class WsState {
