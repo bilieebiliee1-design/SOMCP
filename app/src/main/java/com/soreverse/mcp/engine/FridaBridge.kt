@@ -75,12 +75,7 @@ internal data class FridaTarget(
  * can use `use {}` and so that closing the session releases every underlying
  * I/O resource (streams and socket) in one place.
  */
-internal class FridaConnection(
-    val target: FridaTarget,
-    val socket: Socket,
-    val input: BufferedInputStream,
-    val output: BufferedOutputStream
-) : AutoCloseable {
+internal class FridaConnection(val target: FridaTarget, val socket: Socket, val input: BufferedInputStream, val output: BufferedOutputStream) : AutoCloseable {
     /**
      * Per-connection side-channel used by [FridaTransport] to carry the
      * WebSocket handshake/frame state across [readMessage] calls without
@@ -134,16 +129,19 @@ internal object Gvariant {
         }
 
         fun u32(v: Int) {
-            pad(4); le32(v)
+            pad(4)
+            le32(v)
         }
 
         fun i32(v: Int) {
-            pad(4); le32(v)
+            pad(4)
+            le32(v)
         }
 
         fun str(s: String) {
             val d = s.toByteArray(utf8)
-            pad(4); le32(d.size)
+            pad(4)
+            le32(d.size)
             b.write(d)
             b.write(0)
         }
@@ -156,11 +154,10 @@ internal object Gvariant {
         }
     }
 
-    fun le4(bytes: ByteArray, o: Int): Int =
-        (bytes[o].toInt() and 0xff) or
-            ((bytes[o + 1].toInt() and 0xff) shl 8) or
-            ((bytes[o + 2].toInt() and 0xff) shl 16) or
-            ((bytes[o + 3].toInt() and 0xff) shl 24)
+    fun le4(bytes: ByteArray, o: Int): Int = (bytes[o].toInt() and 0xff) or
+        ((bytes[o + 1].toInt() and 0xff) shl 8) or
+        ((bytes[o + 2].toInt() and 0xff) shl 16) or
+        ((bytes[o + 3].toInt() and 0xff) shl 24)
 
     fun le8(bytes: ByteArray, o: Int): Long {
         var v = 0L
@@ -177,13 +174,7 @@ internal class DBusField(val code: Int, val sig: String, val value: String)
  * 3=ERROR, 4=SIGNAL. Field codes follow the D-Bus spec: 1=path(o), 2=iface(s),
  * 3=member(s), 4=error(s), 5=reply_serial(u), 8=signature(g).
  */
-internal class DBusMessage(
-    val mtype: Int,
-    val flags: Int,
-    val serial: Int,
-    val fields: Map<Int, String>,
-    val body: ByteArray
-) {
+internal class DBusMessage(val mtype: Int, val flags: Int, val serial: Int, val fields: Map<Int, String>, val body: ByteArray) {
     val path: String? get() = fields[1]
     val hasError: Boolean get() = mtype == 3
     val errorName: String? get() = fields[4]
@@ -304,28 +295,36 @@ internal object FridaTransport {
         while (p + 2 <= fieldsBytes.size) {
             p = Gvariant.align(p, 8)
             if (p + 2 > fieldsBytes.size) break
-            val code = fieldsBytes[p].toInt() and 0xff; p++
-            val sigLen = fieldsBytes[p].toInt() and 0xff; p++
+            val code = fieldsBytes[p].toInt() and 0xff
+            p++
+            val sigLen = fieldsBytes[p].toInt() and 0xff
+            p++
             if (p + sigLen + 1 > fieldsBytes.size) break
-            val sig = String(fieldsBytes, p, sigLen, utf8); p += sigLen + 1
+            val sig = String(fieldsBytes, p, sigLen, utf8)
+            p += sigLen + 1
             when (sig) {
                 "o", "s" -> {
                     p = Gvariant.align(p, 4)
                     if (p + 4 > fieldsBytes.size) break
-                    val len = Gvariant.le4(fieldsBytes, p); p += 4
+                    val len = Gvariant.le4(fieldsBytes, p)
+                    p += 4
                     if (p + len + 1 > fieldsBytes.size) break
-                    fields[code] = String(fieldsBytes, p, len, utf8); p += len + 1
+                    fields[code] = String(fieldsBytes, p, len, utf8)
+                    p += len + 1
                 }
                 "u" -> {
                     p = Gvariant.align(p, 4)
                     if (p + 4 > fieldsBytes.size) break
-                    fields[code] = Gvariant.le4(fieldsBytes, p).toString(); p += 4
+                    fields[code] = Gvariant.le4(fieldsBytes, p).toString()
+                    p += 4
                 }
                 "g" -> {
                     if (p + 1 > fieldsBytes.size) break
-                    val l = fieldsBytes[p].toInt() and 0xff; p++
+                    val l = fieldsBytes[p].toInt() and 0xff
+                    p++
                     if (p + l + 1 > fieldsBytes.size) break
-                    fields[code] = String(fieldsBytes, p, l, utf8); p += l + 1
+                    fields[code] = String(fieldsBytes, p, l, utf8)
+                    p += l + 1
                 }
                 else -> {
                     // Skip unknown field type conservatively.
@@ -337,34 +336,24 @@ internal object FridaTransport {
     }
 
     // ── D-Bus message encoder ──
-    fun callMessage(
-        serial: Int,
-        path: String,
-        iface: String,
-        member: String,
-        sig: String,
-        body: ByteArray,
-        flags: Int = 0
-    ): ByteArray {
-        return dbusMessageBytes(
-            DBusMessage(
-                1, flags, serial,
-                mapOf(
-                    1 to path,
-                    2 to iface,
-                    8 to sig,
-                    3 to member
-                ),
-                body
-            )
+    fun callMessage(serial: Int, path: String, iface: String, member: String, sig: String, body: ByteArray, flags: Int = 0): ByteArray = dbusMessageBytes(
+        DBusMessage(
+            1,
+            flags,
+            serial,
+            mapOf(
+                1 to path,
+                2 to iface,
+                8 to sig,
+                3 to member
+            ),
+            body
         )
-    }
+    )
 
-    fun replyMessage(newSerial: Int, replyTo: Int, sig: String, body: ByteArray): ByteArray {
-        return dbusMessageBytes(
-            DBusMessage(2, 0, newSerial, mapOf(5 to replyTo.toString()), body)
-        )
-    }
+    fun replyMessage(newSerial: Int, replyTo: Int, sig: String, body: ByteArray): ByteArray = dbusMessageBytes(
+        DBusMessage(2, 0, newSerial, mapOf(5 to replyTo.toString()), body)
+    )
 
     fun dbusMessageBytes(msg: DBusMessage): ByteArray {
         val w = Gvariant.W()
@@ -372,13 +361,18 @@ internal object FridaTransport {
         w.raw(msg.mtype)
         w.raw(msg.flags)
         w.raw(1) // protocol version
-        w.raw(0); w.raw(0); w.raw(0); w.raw(0) // bodylen placeholder @4
-        w.u32(msg.serial)                       // @8
+        w.raw(0)
+        w.raw(0)
+        w.raw(0)
+        w.raw(0) // bodylen placeholder @4
+        w.u32(msg.serial) // @8
         // fields a(yv)
         val fe = Gvariant.W()
         msg.fields.entries.sortedBy { it.key }.forEach { (code, value) ->
             val sig = fieldSignature(code, value)
-            fe.pad(8); fe.raw(code); fe.g(sig)
+            fe.pad(8)
+            fe.raw(code)
+            fe.g(sig)
             when (sig) {
                 "o", "s" -> fe.str(value)
                 "g" -> fe.g(value)
@@ -386,7 +380,7 @@ internal object FridaTransport {
                 else -> throw FridaConnectionException("Unsupported field signature $sig")
             }
         }
-        w.u32(fe.b.size())                      // fieldslen @12
+        w.u32(fe.b.size()) // fieldslen @12
         w.b.write(fe.b.toByteArray())
         // body 8-aligned
         w.pad(8)
@@ -402,10 +396,10 @@ internal object FridaTransport {
     }
 
     private fun fieldSignature(code: Int, value: String): String = when (code) {
-        1 -> "o"      // path
+        1 -> "o" // path
         2, 4, 3 -> "s" // iface / error-name / member
-        5 -> "u"      // reply_serial
-        8 -> "g"      // signature
+        5 -> "u" // reply_serial
+        8 -> "g" // signature
         else -> "s"
     }
 
@@ -465,11 +459,18 @@ internal object FridaTransport {
             val payload = readStream(input, frameLen.toInt())
             val p = if (mask != null) {
                 ByteArray(payload.size) { i -> (payload[i].toInt() xor (mask!![i % 4].toInt() and 0xff)).toByte() }
-            } else payload
+            } else {
+                payload
+            }
             when (opcode) {
-                8 -> { state.closed = true; return null }   // close
+                8 -> {
+                    state.closed = true
+                    return null
+                } // close
                 9 -> { /* ping -> pong (ignored; frida stays quiet) */ }
-                0, 2 -> { state.pending.write(p, 0, p.size) } // continuation / binary data
+                0, 2 -> {
+                    state.pending.write(p, 0, p.size)
+                } // continuation / binary data
             }
         }
         val all = state.pending.toByteArray()
@@ -496,13 +497,7 @@ internal object FridaTransport {
  * Holds the negotiated agent-session/script handles and lets the parent engine
  * call rpc.exports on the injected agent.
  */
-internal class FridaSession(
-    val id: String,
-    val target: FridaTarget,
-    val connection: FridaConnection,
-    val mode: String,
-    val targetIdentifier: String
-) {
+internal class FridaSession(val id: String, val target: FridaTarget, val connection: FridaConnection, val mode: String, val targetIdentifier: String) {
     var processId: Int = -1
     var scriptLoaded: Boolean = false
     val collectedMessages = ConcurrentHashMap<String, JSONArray>()
@@ -549,9 +544,12 @@ internal class FridaBridge(private val context: Context) {
                     FridaTransport.writeMessage(
                         session.connection,
                         FridaTransport.callMessage(
-                            session.nextSerial.getAndIncrement(), session.agentPath,
-                            "re.frida.AgentSession${session.agentIfcVersion}", "DestroyScript",
-                            "(u)", body
+                            session.nextSerial.getAndIncrement(),
+                            session.agentPath,
+                            "re.frida.AgentSession${session.agentIfcVersion}",
+                            "DestroyScript",
+                            "(u)",
+                            body
                         )
                     )
                 }
@@ -559,9 +557,12 @@ internal class FridaBridge(private val context: Context) {
                     FridaTransport.writeMessage(
                         session.connection,
                         FridaTransport.callMessage(
-                            session.nextSerial.getAndIncrement(), session.agentPath,
-                            "re.frida.AgentSession${session.agentIfcVersion}", "Close",
-                            "()", ByteArray(0)
+                            session.nextSerial.getAndIncrement(),
+                            session.agentPath,
+                            "re.frida.AgentSession${session.agentIfcVersion}",
+                            "Close",
+                            "()",
+                            ByteArray(0)
                         )
                     )
                 }
@@ -723,8 +724,13 @@ internal class FridaBridge(private val context: Context) {
         FridaTransport.writeMessage(
             session.connection,
             FridaTransport.callMessage(
-                serial, "/re/frida/HostSession",
-                "re.frida.HostSession${session.agentIfcVersion}", "Ping", "u", body, flags = 1
+                serial,
+                "/re/frida/HostSession",
+                "re.frida.HostSession${session.agentIfcVersion}",
+                "Ping",
+                "u",
+                body,
+                flags = 1
             )
         )
     }
@@ -747,22 +753,27 @@ internal class FridaBridge(private val context: Context) {
         val out = ArrayList<Pair<Int, String>>()
         if (b.size < 8) return out
         var p = 0
-        val arrLen = Gvariant.le4(b, p); p += 4
+        val arrLen = Gvariant.le4(b, p)
+        p += 4
         p = Gvariant.align(p, 8)
         val end = p + arrLen
         while (p < end && p + 8 <= b.size) {
             p = Gvariant.align(p, 8) // struct align 8
             if (p + 8 > b.size) break
-            val pid = Gvariant.le4(b, p); p += 4 // u
+            val pid = Gvariant.le4(b, p)
+            p += 4 // u
             p = Gvariant.align(p, 4)
             if (p + 4 > b.size) break
-            val sl = Gvariant.le4(b, p); p += 4
+            val sl = Gvariant.le4(b, p)
+            p += 4
             if (p + sl + 1 > b.size) break
-            val name = String(b, p, sl, Charsets.UTF_8); p += sl + 1 // s
+            val name = String(b, p, sl, Charsets.UTF_8)
+            p += sl + 1 // s
             // args a{sv}: array header (u32) then skip to end
             p = Gvariant.align(p, 4)
             if (p + 4 > b.size) break
-            val dl = Gvariant.le4(b, p); p += 4 + dl
+            val dl = Gvariant.le4(b, p)
+            p += 4 + dl
             out.add(pid to name)
         }
         return out
@@ -826,9 +837,13 @@ internal class FridaBridge(private val context: Context) {
         FridaTransport.writeMessage(
             session.connection,
             FridaTransport.callMessage(
-                serial, session.agentPath,
+                serial,
+                session.agentPath,
                 "re.frida.AgentSession${session.agentIfcVersion}",
-                "PostMessages", "a(i(u)sbay)u", body, flags = 1
+                "PostMessages",
+                "a(i(u)sbay)u",
+                body,
+                flags = 1
             )
         )
     }
@@ -852,7 +867,10 @@ internal class FridaBridge(private val context: Context) {
                         FridaTransport.writeMessage(
                             session.connection,
                             FridaTransport.replyMessage(
-                                session.nextSerial.getAndIncrement(), msg.serial, "", ByteArray(0)
+                                session.nextSerial.getAndIncrement(),
+                                msg.serial,
+                                "",
+                                ByteArray(0)
                             )
                         )
                         val texts = parseSinkTexts(msg.body)
@@ -910,14 +928,7 @@ internal class FridaBridge(private val context: Context) {
 
     // ── Reply plumbing ──
 
-    private fun callForReply(
-        session: FridaSession,
-        path: String,
-        iface: String,
-        member: String,
-        sig: String,
-        body: ByteArray
-    ): DBusMessage {
+    private fun callForReply(session: FridaSession, path: String, iface: String, member: String, sig: String, body: ByteArray): DBusMessage {
         val serial = session.nextSerial.getAndIncrement()
         FridaTransport.writeMessage(
             session.connection,
@@ -986,14 +997,19 @@ internal class FridaBridge(private val context: Context) {
     private fun postBody(scriptId: Int, text: String, batch: Int): ByteArray {
         val elem = Gvariant.W()
         elem.i32(1)
-        elem.pad(8); elem.u32(scriptId)
+        elem.pad(8)
+        elem.u32(scriptId)
         elem.str(text)
         elem.raw(0) // b has_data=false
-        elem.pad(4); elem.u32(0) // ay empty (header align 4)
+        elem.pad(4)
+        elem.u32(0) // ay empty (header align 4)
         val elemBytes = elem.b.toByteArray()
         val aligned = (elemBytes.size + 7) and 7.inv()
         val arr = Gvariant.W()
-        arr.pad(4); arr.u32(aligned); arr.pad(8); arr.b.write(elemBytes)
+        arr.pad(4)
+        arr.u32(aligned)
+        arr.pad(8)
+        arr.b.write(elemBytes)
         repeat(aligned - elemBytes.size) { arr.b.write(0) }
         arr.u32(batch)
         return arr.b.toByteArray()
@@ -1014,13 +1030,16 @@ internal class FridaBridge(private val context: Context) {
             p += 8 + 4
             p = Gvariant.align(p, 4)
             if (p + 4 > b.size) break
-            val textLen = Gvariant.le4(b, p); p += 4
+            val textLen = Gvariant.le4(b, p)
+            p += 4
             if (p + textLen + 1 > b.size) break
-            val text = String(b, p, textLen, Charsets.UTF_8); p += textLen + 1
+            val text = String(b, p, textLen, Charsets.UTF_8)
+            p += textLen + 1
             p += 1 // b has_data
             p = Gvariant.align(p, 4)
             if (p + 4 > b.size) break
-            val dataLen = Gvariant.le4(b, p); p += 4 + dataLen
+            val dataLen = Gvariant.le4(b, p)
+            p += 4 + dataLen
             texts.add(text)
         }
         return texts
