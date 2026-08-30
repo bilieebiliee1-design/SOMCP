@@ -1,22 +1,54 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Copyright (C) 2026 bilieebiliee1-design
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 package com.soreverse.mcp
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -28,14 +60,23 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.soreverse.mcp.core.BackupCrypto
 import com.soreverse.mcp.core.SettingsStore
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -48,13 +89,8 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
     var includeSecrets by remember { mutableStateOf(false) }
     var encryptEnabled by remember { mutableStateOf(false) }
     var encryptPassword by remember { mutableStateOf("") }
-    var encryptConfirm by remember { mutableStateOf("") }
     var resultMessage by remember { mutableStateOf<String?>(null) }
     var resultOk by remember { mutableStateOf(false) }
-
-    // Warning dialog state
-    var showEncryptWarning by remember { mutableStateOf(false) }
-    var pendingEncryptEnable by remember { mutableStateOf(false) }
 
     // Decrypt dialog state (for import)
     var decryptDialogVisible by remember { mutableStateOf(false) }
@@ -62,53 +98,16 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
     var decryptError by remember { mutableStateOf<String?>(null) }
     var pendingEncryptedBytes by remember { mutableStateOf<ByteArray?>(null) }
 
-    // ----- export password dialog state (REMOTE) -----
-    var showExportPasswordDialog by remember { mutableStateOf(false) }
-    var exportPassword by remember { mutableStateOf("") }
-    var exportPasswordConfirm by remember { mutableStateOf("") }
-    var exportPasswordError by remember { mutableStateOf<String?>(null) }
-
     // ----- import password dialog state (REMOTE) -----
     var showImportPasswordDialog by remember { mutableStateOf(false) }
     var importPassword by remember { mutableStateOf("") }
     var importPasswordError by remember { mutableStateOf<String?>(null) }
     var pendingImportContent by remember { mutableStateOf<String?>(null) }
 
-    // ----- export state (REMOTE) -----
-    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
+    // ----- recent backup history -----
+    var history by remember { mutableStateOf(settings.backupHistory()) }
 
-    // ----- export: encrypted file launcher (REMOTE) -----
-    val encryptedExportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? ->
-        val password = pendingExportPassword ?: return@rememberLauncherForActivityResult
-        if (uri == null) {
-            pendingExportPassword = null
-            return@rememberLauncherForActivityResult
-        }
-        scope.launch {
-            runCatching {
-                val json = settings.toJsonString(maskSecrets = !includeSecrets)
-                val encrypted = withContext(Dispatchers.Default) {
-                    BackupCrypto.encrypt(json.toByteArray(Charsets.UTF_8), password)
-                }
-                withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri)?.use { output ->
-                        output.write(encrypted.toString(2).toByteArray(Charsets.UTF_8))
-                    } ?: error("Cannot open output file")
-                }
-            }.onSuccess {
-                resultOk = true
-                resultMessage = t.backupExportSuccess
-            }.onFailure { error ->
-                resultOk = false
-                resultMessage = error.message ?: t.backupImportError
-            }
-        }
-        pendingExportPassword = null
-    }
-
-    // ----- export: plain file launcher (REMOTE, no encryption) -----
+    // ----- export: file launcher -----
     val plainExportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
@@ -116,21 +115,29 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         scope.launch {
             runCatching {
                 val json = settings.toJsonString(maskSecrets = !includeSecrets)
-                val bytes = if (includeSecrets && encryptPassword.isBlank()) {
-                    // Never write a plaintext backup that includes secrets.
-                    throw IllegalStateException(t.backupPasswordRequired)
-                } else if ((encryptEnabled || includeSecrets) && encryptPassword.isNotBlank()) {
-                    withContext(Dispatchers.IO) {
-                        BackupCrypto.encrypt(json, encryptPassword)
+                val bytes = when {
+                    encryptEnabled -> {
+                        if (encryptPassword.isBlank()) {
+                            // Never write an encrypted backup without a password.
+                            throw IllegalStateException(t.backupPasswordRequired)
+                        }
+                        withContext(Dispatchers.Default) {
+                            BackupCrypto.encrypt(json, encryptPassword)
+                        }
                     }
-                } else {
-                    json.toByteArray(Charsets.UTF_8)
+                    includeSecrets -> {
+                        // Never write a plaintext backup that includes secrets.
+                        throw IllegalStateException(t.backupSecretsRequireEncryption)
+                    }
+                    else -> json.toByteArray(Charsets.UTF_8)
                 }
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openOutputStream(uri)?.use { output ->
                         output.write(bytes)
                     } ?: error("Cannot open output file")
                 }
+                settings.recordBackup(System.currentTimeMillis(), bytes.size.toLong())
+                history = settings.backupHistory()
             }.onSuccess {
                 resultOk = true
                 resultMessage = t.backupExportSuccess
@@ -284,101 +291,6 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         )
     }
 
-    // Encryption warning dialog (HEAD)
-    if (showEncryptWarning) {
-        AlertDialog(
-            onDismissRequest = {
-                showEncryptWarning = false
-                pendingEncryptEnable = false
-            },
-            title = { Text(t.backupEncryptWarningTitle) },
-            text = {
-                Text(
-                    t.backupEncryptWarning,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    showEncryptWarning = false
-                    encryptEnabled = true
-                }) {
-                    Text(if (t.zh) "我已知晓" else "I understand")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showEncryptWarning = false
-                    pendingEncryptEnable = false
-                }) { Text(if (t.zh) "取消" else "Cancel") }
-            }
-        )
-    }
-
-    // --- export password dialog (REMOTE) ---
-    if (showExportPasswordDialog) {
-        AlertDialog(
-            onDismissRequest = { showExportPasswordDialog = false },
-            title = { Text(t.backupPasswordPrompt) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = exportPassword,
-                        onValueChange = {
-                            exportPassword = it
-                            exportPasswordError = null
-                        },
-                        label = { Text(t.backupPasswordLabel) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = exportPasswordConfirm,
-                        onValueChange = {
-                            exportPasswordConfirm = it
-                            exportPasswordError = null
-                        },
-                        label = { Text(t.backupPasswordConfirm) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    exportPasswordError?.let {
-                        Text(
-                            it,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (exportPassword.length < 4) {
-                        exportPasswordError = t.backupPasswordPrompt
-                    } else if (exportPassword != exportPasswordConfirm) {
-                        exportPasswordError = t.backupPasswordMismatch
-                    } else {
-                        showExportPasswordDialog = false
-                        pendingExportPassword = exportPassword
-                        encryptedExportLauncher.launch("somcp_settings_backup_encrypted.json")
-                    }
-                }) {
-                    Text(t.confirm)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showExportPasswordDialog = false }) {
-                    Text(t.cancel)
-                }
-            }
-        )
-    }
-
     // --- import password dialog (REMOTE) ---
     if (showImportPasswordDialog) {
         AlertDialog(
@@ -472,122 +384,139 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         verticalArrangement = Arrangement.spacedBy(LocalUiMetrics.current.sectionGap)
     ) {
         GlassGroup(title = t.backupLocal) {
-            ToggleRow(t.backupIncludeSecrets, includeSecrets) { enabled ->
+            BackupToggleRow(
+                text = t.backupIncludeSecrets,
+                subtitle = t.backupIncludeSecretsSubtitle,
+                checked = includeSecrets
+            ) { enabled ->
                 includeSecrets = enabled
-                // Including secrets exports them in clear text, so password
-                // encryption becomes mandatory and is forced on.
-                if (enabled) encryptEnabled = true
             }
             GroupDivider()
-            Text(
-                t.backupSecretsMasked,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            GroupDivider()
-            ToggleRow(t.backupEncryptToggle, encryptEnabled) { enabled ->
-                if (includeSecrets) {
-                    // Password encryption is mandatory when secrets are included
-                    // in the backup; the toggle cannot be turned off.
-                    encryptEnabled = true
-                } else if (enabled) {
+            BackupToggleRow(
+                text = t.backupEncryptToggle,
+                subtitle = t.backupEncryptToggleSubtitle,
+                checked = encryptEnabled
+            ) { enabled ->
+                if (enabled) {
                     showEncryptWarning = true
-                    pendingEncryptEnable = true
                 } else {
                     encryptEnabled = false
                     encryptPassword = ""
-                    encryptConfirm = ""
                 }
             }
-            if (encryptEnabled) {
-                GroupDivider()
-                OutlinedTextField(
-                    value = encryptPassword,
-                    onValueChange = { encryptPassword = it },
-                    label = { Text(t.backupEncryptPassword) },
-                    placeholder = { Text(t.backupEncryptPasswordHint) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
-                            alpha = 0.35f
+            AnimatedVisibility(visible = encryptEnabled) {
+                Column {
+                    GroupDivider()
+                    OutlinedTextField(
+                        value = encryptPassword,
+                        onValueChange = { encryptPassword = it },
+                        label = { Text(t.backupEncryptPassword) },
+                        placeholder = { Text(t.backupPasswordPlaceholder) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
+                                alpha = 0.35f
+                            ),
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                                alpha = 0.35f
+                            )
                         ),
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
-                            alpha = 0.35f
-                        )
-                    ),
-                    modifier = Modifier.fillMaxWidth().padding(
-                        start = 14.dp,
-                        end = 14.dp,
-                        top = 8.dp
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
                     )
-                )
-                OutlinedTextField(
-                    value = encryptConfirm,
-                    onValueChange = { encryptConfirm = it },
-                    label = { Text(t.backupEncryptConfirm) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    isError = encryptConfirm.isNotEmpty() && encryptPassword != encryptConfirm,
-                    supportingText = if (encryptConfirm.isNotEmpty() &&
-                        encryptPassword != encryptConfirm
-                    ) {
-                        { Text(t.backupPasswordMismatch, color = MaterialTheme.colorScheme.error) }
-                    } else {
-                        null
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(
-                            alpha = 0.35f
-                        ),
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
-                            alpha = 0.35f
-                        )
-                    ),
-                    modifier = Modifier.fillMaxWidth().padding(
-                        start = 14.dp,
-                        end = 14.dp,
-                        top = 8.dp
+                    Text(
+                        t.backupEncryptWarning,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
                     )
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    t.backupEncryptWarning,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
+                }
             }
-            GroupDivider()
-            Row(
-                Modifier.fillMaxWidth().padding(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                PrimaryActionButton(
-                    text = t.backupExport,
-                    onClick = {
-                        if (encryptEnabled && encryptPassword.isBlank()) {
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            BackupActionCard(
+                label = t.backupExport,
+                icon = Icons.Default.Upload,
+                onClick = {
+                    when {
+                        encryptEnabled && encryptPassword.isBlank() -> {
                             resultOk = false
                             resultMessage = t.backupPasswordRequired
-                        } else if (encryptEnabled && encryptPassword != encryptConfirm) {
-                            resultOk = false
-                            resultMessage = t.backupPasswordMismatch
-                        } else {
-                            plainExportLauncher.launch("somcp_settings_backup.json")
                         }
-                    },
-                    modifier = Modifier.weight(1f)
+                        includeSecrets && !encryptEnabled -> {
+                            resultOk = false
+                            resultMessage = t.backupSecretsRequireEncryption
+                        }
+                        else -> plainExportLauncher.launch("somcp_settings_backup.json")
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
+            BackupActionCard(
+                label = t.backupImport,
+                icon = Icons.Default.Download,
+                onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        GlassGroup(title = t.backupHistory) {
+            if (history.isEmpty()) {
+                Text(
+                    t.backupHistoryEmpty,
+                    modifier = Modifier.padding(14.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                SecondaryActionButton(
-                    text = t.backupImport,
-                    onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
-                    modifier = Modifier.weight(1f)
-                )
+            } else {
+                history.forEachIndexed { index, entry ->
+                    if (index > 0) {
+                        GroupDivider()
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                formatBackupTime(entry.timestamp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                formatBackupSize(entry.sizeBytes),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            t.backupRestore,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    importLauncher.launch(arrayOf("application/json", "*/*"))
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
         }
 
@@ -602,6 +531,153 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
             }
         }
     }
+}
+
+@Composable
+private fun BackupToggleRow(
+    text: String,
+    subtitle: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    val metrics = LocalUiMetrics.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = metrics.rowPadV - 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                subtitle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        BackupSwitch(
+            checked = checked,
+            onCheckedChange = onChange
+        )
+    }
+}
+
+/**
+ * Custom switch matching the design spec: a soft gray track that turns
+ * Primary Blue when toggled on, with a pure white circular thumb. The thumb
+ * animates to the right when ON (LTR), unlike the design's HTML reference
+ * where the thumb incorrectly stayed pinned to the left.
+ */
+@Composable
+private fun BackupSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val trackWidth = 48.dp
+    val trackHeight = 28.dp
+    val thumbSize = 24.dp
+    val thumbInset = 2.dp
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) trackWidth - thumbSize - thumbInset else thumbInset,
+        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+        label = "backupSwitchThumb"
+    )
+    Box(
+        modifier = modifier
+            .size(width = trackWidth, height = trackHeight)
+            .clip(RoundedCornerShape(trackHeight / 2))
+            .background(
+                if (checked) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                }
+            )
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onCheckedChange
+            ),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(x = thumbOffset)
+                .size(thumbSize)
+                .clip(CircleShape)
+                .background(Color.White)
+        )
+    }
+}
+
+@Composable
+private fun BackupActionCard(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(LocalUiMetrics.current.cardRadius)
+    Column(
+        modifier
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
+            .border(
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)),
+                shape
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                icon,
+                null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+private val backupTimeFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+private fun formatBackupTime(timestamp: Long): String = runCatching {
+    Instant.ofEpochMilli(timestamp)
+        .atZone(ZoneId.systemDefault())
+        .format(backupTimeFormatter)
+}.getOrDefault("")
+
+private fun formatBackupSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024 * 1024 ->
+        String.format(Locale.US, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
+    bytes >= 1024L * 1024 ->
+        String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024))
+    bytes >= 1024L ->
+        String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 private fun applyImport(content: String, t: UiText, settings: SettingsStore, includeSecrets: Boolean, onResult: (Boolean, String) -> Unit) {
