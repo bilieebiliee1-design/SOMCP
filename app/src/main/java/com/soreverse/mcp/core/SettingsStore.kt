@@ -1296,6 +1296,38 @@ class SettingsStore(context: Context) {
             )
     }
 
+    /** Most recent successful backup exports, newest first. */
+    fun backupHistory(): List<BackupHistoryEntry> {
+        val raw = prefs.getString("backupHistory", "") ?: ""
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    add(
+                        BackupHistoryEntry(
+                            timestamp = obj.optLong("t", 0L),
+                            sizeBytes = obj.optLong("s", 0L)
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** Prepend a successful backup export record, keeping at most [MAX_BACKUP_HISTORY]. */
+    fun recordBackup(timestamp: Long, sizeBytes: Long) {
+        val current = backupHistory()
+        val next = buildList {
+            add(BackupHistoryEntry(timestamp, sizeBytes))
+            addAll(current.take(MAX_BACKUP_HISTORY - 1))
+        }
+        val arr = org.json.JSONArray()
+        next.forEach { arr.put(org.json.JSONObject().put("t", it.timestamp).put("s", it.sizeBytes)) }
+        prefs.edit().putString("backupHistory", arr.toString()).apply()
+    }
+
     /** Export all settings as a formatted JSON string. */
     fun toJsonString(maskSecrets: Boolean = true): String = snapshot(maskSecrets).toString(2)
 
@@ -1322,5 +1354,11 @@ Rules:
   Overview, Security, Key Functions, Crypto/Network, Attack Surface, Feasibility, Next Steps.
 - Use Chinese if the user message is Chinese, otherwise English.
 - If a tool fails, explain the failure and continue with alternative tools when possible."""
+
+        /** Maximum number of backup export records kept in the history list. */
+        const val MAX_BACKUP_HISTORY = 10
     }
 }
+
+/** A single successful backup export record shown in the "recent backups" list. */
+data class BackupHistoryEntry(val timestamp: Long, val sizeBytes: Long)
