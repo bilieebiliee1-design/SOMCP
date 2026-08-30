@@ -504,7 +504,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                             )
                         }
                         Text(
-                            t.backupRestore,
+                            t.backupRestoreAction,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable {
