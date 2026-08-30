@@ -67,6 +67,7 @@ jobs:
       # "重复提 issue" 而非"审查警告"。仓库所有者始终豁免。
       - name: Check duplicate-issue author restriction
         id: restrict
+        uses: actions/github-script@v7
         # 仅在新 issue 打开时执行；评论与手动补跑不触发重复检测。
         if: github.event_name == 'issues'
         env:
