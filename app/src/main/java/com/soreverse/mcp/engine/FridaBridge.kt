@@ -432,7 +432,7 @@ internal object FridaTransport {
             }
         }
         out.write(mask)
-        for (i in payload.indices) out.write(payload[i] xor mask[i % 4])
+        for (i in payload.indices) out.write((payload[i].toInt() xor mask[i % 4].toInt()) and 0xff)
         return out.toByteArray()
     }
 
@@ -451,7 +451,7 @@ internal object FridaTransport {
             var frameLen = (b1 and 0x7f).toLong()
             if (frameLen == 126L) {
                 val h = readStream(input, 2)
-                frameLen = ((h[0].toInt() and 0xff) shl 8) or (h[1].toInt() and 0xff)
+                frameLen = ((((h[0].toInt() and 0xff) shl 8) or (h[1].toInt() and 0xff)).toLong())
             } else if (frameLen == 127L) {
                 val h = readStream(input, 8)
                 var v = 0L
