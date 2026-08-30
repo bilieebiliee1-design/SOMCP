@@ -70,7 +70,7 @@
     <string name="backup_password_placeholder">Set a password</string>
     <string name="backup_history">Recent backups</string>
     <string name="backup_history_empty">No backup records yet</string>
-    <string name="backup_restore">Restore</string>
+    <string name="backup_restore_action">Restore</string>
     <string name="backup_secrets_require_encryption">Encryption is required when including secrets</string>
     <string name="confirm">Confirm</string>
     <string name="cancel">Cancel</string>

@@ -279,7 +279,7 @@ private fun textFor(mode: String, context: Context): UiText {
         backupPasswordPlaceholder = s(R.string.backup_password_placeholder),
         backupHistory = s(R.string.backup_history),
         backupHistoryEmpty = s(R.string.backup_history_empty),
-        backupRestore = s(R.string.backup_restore),
+        backupRestoreAction = s(R.string.backup_restore_action),
         backupSecretsRequireEncryption = s(R.string.backup_secrets_require_encryption),
         confirm = s(R.string.confirm),
         cancel = s(R.string.cancel)

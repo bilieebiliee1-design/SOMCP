@@ -196,7 +196,7 @@ internal data class UiText(
     val backupPasswordPlaceholder: String,
     val backupHistory: String,
     val backupHistoryEmpty: String,
-    val backupRestore: String,
+    val backupRestoreAction: String,
     val backupSecretsRequireEncryption: String,
     val confirm: String,
     val cancel: String
