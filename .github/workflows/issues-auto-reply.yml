@@ -60,6 +60,176 @@ jobs:
             -o /tmp/manual-issue.json
           echo "issue_number=${{ inputs.issue_number }}" >> "$GITHUB_OUTPUT"
 
+      # 重复 issue 作者限制检查：检测提交者是否重复提交相同/相似内容的 issue，
+      # 每发现一次重复计 1 次警告（打 作者-时间戳 标签以跨运行持久化计数）；
+      # 连续 7 天内累计 5 次警告则将该作者限制 7 天，限制期内其新提交的 issue
+      # 会被自动警告并关闭。机制与 pr-auto-review.yml 的作者限制一致，此处针对
+      # "重复提 issue" 而非"审查警告"。仓库所有者始终豁免。
+      - name: Check duplicate-issue author restriction
+        id: restrict
+        uses: actions/github-script@v7
+        # 仅在新 issue 打开时执行；评论与手动补跑不触发重复检测。
+        if: github.event_name == 'issues'
+        env:
+          # Comma-separated exempt usernames whose duplicate-issue warning
+          # auto-close is bypassed. The repo owner is always exempt. Configure
+          # via the repo variable LLM_ISSUE_EXEMPT_USERS.
+          EXEMPT_USERS: ${{ vars.LLM_ISSUE_EXEMPT_USERS }}
+          # Kill switch (repo variable, default on): set LLM_ISSUE_AUTO_CLOSE to
+          # "false" to disable the destructive duplicate close / restriction
+          # enforcement (duplicate issues then only get a warning comment).
+          AUTO_CLOSE: ${{ vars.LLM_ISSUE_AUTO_CLOSE }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.ISSUE_NUMBER || context.issue.number);
+            const issue = context.payload.issue || {};
+            const author = (issue.user || {}).login || '';
+            const title = String(issue.title || '');
+            const body = String(issue.body || '');
+            if (!author) { console.log('No author on issue; skip.'); return; }
+
+            const authorKey = author.toLowerCase();
+            const exemptRaw = (process.env.EXEMPT_USERS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey);
+            const autoClose = process.env.AUTO_CLOSE !== 'false';
+            const nowMs = Date.now();
+            const windowMs = 7 * 24 * 60 * 60 * 1000;
+
+            // 标签前缀按 作者-时间戳 持久化，跨运行累计该作者最近 7 天的警告。
+            const warnPrefix = `llm-issue-warning-${authorKey}-`;
+            const warnRe = new RegExp('^' + warnPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$');
+            const restrictPrefix = `llm-issue-restricted-${authorKey}-`;
+            const restrictRe = new RegExp('^' + restrictPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$');
+
+            const warned = new Set();   // 有生效警告的 issue 编号（按 issue 去重）
+            const priorIssues = [];      // 作者的历史 issues，供重复比对
+            let alreadyRestricted = false;
+            try {
+              // Paginate so authors with >100 issues are scanned fully.
+              const items = await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, creator: author, state: 'all', per_page: 100
+              });
+              for (const it of items || []) {
+                if (it.pull_request) continue;  // 只比对 issue，不比对 PR
+                let activeRestrict = false;
+                for (const name of (it.labels || []).map(l => l.name)) {
+                  let m = warnRe.exec(name);
+                  if (m) {
+                    const t = Number(m[1]) * 1000;
+                    if (nowMs - t <= windowMs) {
+                      warned.add(it.number);
+                    } else {
+                      try { await github.rest.issues.removeLabel({ owner, repo, issue_number: it.number, name }); } catch (e) {}
+                    }
+                    continue;
+                  }
+                  m = restrictRe.exec(name);
+                  if (m) {
+                    const t = Number(m[1]) * 1000;
+                    if (nowMs - t <= windowMs) activeRestrict = true;
+                  }
+                }
+                if (activeRestrict) alreadyRestricted = true;
+                priorIssues.push(it);
+              }
+            } catch (e) {
+              console.log('Author issue scan failed (ignored): ' + e.message);
+            }
+
+            // 1) 作者已在限制期内 -> 本次 issue 直接警告 + 关闭，跳过后续。
+            if (alreadyRestricted && !isExempt) {
+              const msg = '## Issue 已因作者处于重复提 issue 限制期被自动关闭\n\n作者 @' + author +
+                ' 因在连续 7 天内累计 **5 次重复 issue 警告** 已被限制 **7 天**。限制期内新提交的 issue 将自动警告并关闭，限制将于 7 天后自动解除。如有异议，请@维护者人工复核。';
+              try { await github.rest.issues.createComment({ owner, repo, issue_number, body: msg }); } catch (e) {}
+              if (autoClose) {
+                try {
+                  const cur = (await github.rest.issues.get({ owner, repo, issue_number })).data;
+                  if (cur.state === 'open' && !cur.pull_request) {
+                    await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
+                    console.log('Closed issue #' + issue_number + ' (author ' + author + ' is in restriction).');
+                  }
+                } catch (e) {}
+              }
+              core.setOutput('restricted', 'true');
+              core.setOutput('duplicate', 'false');
+              return;
+            }
+
+            // 2) 在该作者自己的历史 issues 中比对重复。归一化后标题完全一致即为
+            //    强重复；否则按标题+正文的 token 集合 Jaccard 相似度估算，数值越
+            //    高越可能是重复（避免误伤内容不同的 issue）。
+            const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ');
+            const curNT = norm(title);
+            const curTokens = new Set((curNT + ' ' + norm(body)).split(' ').filter(Boolean));
+            const jaccard = (a, b) => {
+              if (!a.size || !b.size) return 0;
+              let inter = 0;
+              for (const t of a) if (b.has(t)) inter++;
+              return inter / (a.size + b.size - inter);
+            };
+            let dup = null, bestScore = 0;
+            for (const it of priorIssues) {
+              if (it.number === issue_number) continue;
+              const t = norm(it.title || '');
+              if (t && t === curNT) { dup = it; bestScore = 1; break; }
+              const tok = new Set((t + ' ' + norm(it.body || '')).split(' ').filter(Boolean));
+              const sc = jaccard(curTokens, tok);
+              if (sc > bestScore) { bestScore = sc; dup = it; }
+            }
+            const isDuplicate = !!dup && bestScore >= 0.5 && curTokens.size >= 2;
+            if (!isDuplicate) {
+              core.setOutput('restricted', 'false');
+              core.setOutput('duplicate', 'false');
+              return;
+            }
+
+            // 3) 判定为重复 -> 记录 1 次警告 + 评论提示，并关闭该重复 issue。
+            const soonWarn = warned.size + 1;
+            const cntPart = soonWarn >= 5
+              ? '你已经被限制，无法再提交 issue。'
+              : '当前连续 7 天内已累计 **' + soonWarn + '/5 次重复警告**，达到 5 次将被限制 7 天。';
+            const dupMsg = '## 重复 Issue 自动关闭\n\n本 issue 与已存在的 #' + dup.number +
+              '（标题：' + (dup.title || '') + '）内容重复。为保证工单质量，请勿重复提交相同问题，请到原 issue 下继续讨论或补充信息。' + cntPart;
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number,
+                labels: ['llm-issue-warning-' + authorKey + '-' + Math.floor(nowMs / 1000)]
+              });
+              warned.add(issue_number);
+              console.log('Recorded duplicate-issue warning for #' + issue_number + ' (author ' + author + ').');
+            } catch (e) {
+              console.log('addWarningLabel failed (ignored): ' + e.message);
+            }
+            try { await github.rest.issues.createComment({ owner, repo, issue_number, body: dupMsg }); } catch (e) {}
+            if (autoClose) {
+              try {
+                const cur = (await github.rest.issues.get({ owner, repo, issue_number })).data;
+                if (cur.state === 'open' && !cur.pull_request) {
+                  await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
+                  console.log('Closed duplicate issue #' + issue_number + '.');
+                }
+              } catch (e) {}
+            }
+
+            // 4) 连续 7 天内累计 >=5 次警告 -> 触发 7 天限制（自动警告并关闭后续 issue）。
+            if (warned.size >= 5 && !isExempt && autoClose) {
+              if (!alreadyRestricted) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner, repo, issue_number,
+                    labels: ['llm-issue-restricted-' + authorKey + '-' + Math.floor(nowMs / 1000)]
+                  });
+                  console.log('Author ' + author + ' is now restricted for 7 days (' + warned.size + ' duplicate warnings in 7 days).');
+                } catch (e) {}
+              }
+              core.setOutput('restricted', 'true');
+            } else {
+              core.setOutput('restricted', 'false');
+            }
+            core.setOutput('duplicate', 'true');
+
       # 将仓库代码作为上下文提供给 LLM，让其基于真实代码回答问题（仅作
       # 上下文，不是对模型的指令）。M2: 先从标题/正文提取关键词，用 grep 命中
       # 相关源码文件，只把这些文件 + README + 文件结构清单入 prompt（提质同时
@@ -350,6 +520,10 @@ jobs:
 
       - name: Generate LLM reply
         id: llm
+        # 重复 issue 或作者已受限制时跳过 LLM 回复（该 issue 已被关闭）。
+        # issue_comment / workflow_dispatch 时 restrict 步骤未运行，这些输出为空，
+        # 条件成立（空 != "true"），LLM 回复仍会正常执行。
+        if: steps.restrict.outputs.restricted != 'true' && steps.restrict.outputs.duplicate != 'true'
         env:
           USER_AGENT: ${{ secrets.USER_AGENT }}
           LLM_MODEL: ${{ secrets.LLM }}
@@ -456,7 +630,9 @@ jobs:
           fi
 
       - name: Post LLM reply comment
-        if: steps.llm.outputs.skip == 'false'
+        if: steps.llm.outputs.skip == 'false' &&
+            steps.restrict.outputs.restricted != 'true' &&
+            steps.restrict.outputs.duplicate != 'true'
         uses: actions/github-script@v7
         with:
           script: |
