@@ -65,6 +65,13 @@
     <string name="backup_decrypt_prompt">请输入密码解密备份</string>
     <string name="backup_wrong_password">密码错误或数据已损坏</string>
     <string name="backup_decrypting">正在解密…</string>
+    <string name="backup_include_secrets_subtitle">开启后将导出未脱敏的密钥信息</string>
+    <string name="backup_encrypt_toggle_subtitle">对备份文件进行强加密保护</string>
+    <string name="backup_password_placeholder">设置密码</string>
+    <string name="backup_history">最近备份记录</string>
+    <string name="backup_history_empty">暂无备份记录</string>
+    <string name="backup_restore">恢复</string>
+    <string name="backup_secrets_require_encryption">包含密钥时必须启用密码加密</string>
     <string name="confirm">确认</string>
     <string name="cancel">取消</string>
 </resources>

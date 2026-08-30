@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
+// Copyright (C) 2026 bilieebiliee1-design
+//
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
@@ -189,6 +191,13 @@ internal data class UiText(
     val backupDecryptPrompt: String,
     val backupWrongPassword: String,
     val backupDecrypting: String,
+    val backupIncludeSecretsSubtitle: String,
+    val backupEncryptToggleSubtitle: String,
+    val backupPasswordPlaceholder: String,
+    val backupHistory: String,
+    val backupHistoryEmpty: String,
+    val backupRestore: String,
+    val backupSecretsRequireEncryption: String,
     val confirm: String,
     val cancel: String
 )
