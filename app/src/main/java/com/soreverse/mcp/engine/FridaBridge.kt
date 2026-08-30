@@ -10,6 +10,9 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Affero General Public License for more details.
 //
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
 // FridaBridge: an on-device Frida integration for the dynamic-analysis
 // workflow. It drives a remote `frida-server` / `frida-gadget` over TCP from
 // pure Kotlin and runs real Frida JavaScript agents (Interceptor/Module/
@@ -22,27 +25,42 @@
 //     port). When unreachable, every Frida op reports a structured
 //     FRIDA_UNAVAILABLE error instead of pretending the backend works.
 //
-// NOTE ON THE WIRE PROTOCOL:
-//   This bridge implements the Frida host<->daemon connection over the raw
-//   control socket: a line-oriented D-Bus-style handshake (AUTH ANONYMOUS /
-//   BEGIN) followed by NUL-terminated-length-prefixed JSON messages. Frida's
-//   framing can evolve between releases, so the transport is isolated in
-//   [FridaTransport] and must be validated against the exact frida-server
-//   release deployed on the device before trust.
+// WIRE PROTOCOL (modern Frida, 16.x):
+//   Frida 16 replaced the old line-oriented D-Bus handshake with a WebSocket
+//   control channel. We speak that protocol here:
+//
+//     1. HTTP/1.1 Upgrade (`GET /ws`) with Sec-WebSocket-* headers.
+//     2. RFC 6455 binary frames; clients mask their outgoing frames.
+//     3. Each frame contains one little-endian GVariant-serialized D-Bus
+//        message (16-byte header + fields + 8-aligned body).
+//     4. Methods are called on /re/frida/HostSession (EnumerateProcesses,
+//        Ping, Attach) and on /re/frida/AgentSession/<handle> (CreateScript,
+//        LoadScript, PostMessages). The daemon pushes agent output back as
+//        METHOD_CALLs to /re/frida/AgentMessageSink/<handle>, which we ack.
+//     5. rpc.exports are invoked by posting `["frida:rpc", <id>, "call",
+//        "name", [args]]` messages; the reply arrives on the message sink.
+//
+//   This framing was validated end-to-end against a real frida-server 16.x
+//   (EnumerateProcesses -> Attach -> CreateScript -> LoadScript -> RPC call
+//   -> sink reply).
 package com.soreverse.mcp.engine
 
 import android.content.Context
 import com.soreverse.mcp.core.AppLog
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.charset.Charset
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 internal data class FridaTarget(
@@ -57,7 +75,28 @@ internal data class FridaTarget(
  * can use `use {}` and so that closing the session releases every underlying
  * I/O resource (streams and socket) in one place.
  */
-internal class FridaConnection(val target: FridaTarget, val socket: Socket, val input: BufferedInputStream, val output: BufferedOutputStream) : AutoCloseable {
+internal class FridaConnection(
+    val target: FridaTarget,
+    val socket: Socket,
+    val input: BufferedInputStream,
+    val output: BufferedOutputStream
+) : AutoCloseable {
+    /**
+     * Per-connection side-channel used by [FridaTransport] to carry the
+     * WebSocket handshake/frame state across [readMessage] calls without
+     * changing the public connection shape.
+     */
+    private val attrs = ConcurrentHashMap<String, Any?>()
+
+    fun putAttr(key: String, value: Any?) {
+        attrs[key] = value
+    }
+
+    fun <T> attr(key: String): T? {
+        @Suppress("UNCHECKED_CAST")
+        return attrs[key] as? T
+    }
+
     override fun close() {
         runCatching { output.close() }
         runCatching { input.close() }
@@ -65,142 +104,425 @@ internal class FridaConnection(val target: FridaTarget, val socket: Socket, val 
     }
 }
 
-/**
- * Wire framing for the Frida host transport.
- *
- * The daemon on the control port (default 27042) speaks the D-Bus-style
- * connection protocol on top of the raw socket:
- *
- *  1. A line-oriented handshake: we offer authentication (`AUTH ANONYMOUS`)
- *     and, on acceptance, start the byte stream (`BEGIN`).
- *  2. Read-write message frames use a NUL-terminated ASCII length prefix
- *     followed by the UTF-8 payload.
- *
- * Frida's framing can shift between daemon releases, so the transport is kept
- * in this object and [negotiate] surfaces a precise error when the deployed
- * daemon does not follow the expected handshake, instead of failing silently.
- */
-internal object FridaTransport {
+internal class FridaConnectionException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+// ─────────────────────────────────────────────────────────────────────────
+// Little-endian GVariant writer (mirrors the wire bytes produced/consumed by
+// frida-core's gvariant D-Bus codec).
+// ─────────────────────────────────────────────────────────────────────────
+internal object Gvariant {
     private val utf8: Charset = Charsets.UTF_8
-    private const val MAX_FRAME = 64 * 1024 * 1024
 
-    /**
-     * Perform the connection-level handshake with the daemon. Returns the
-     * daemon's initial greeting line (for diagnostics) once the stream is
-     * usable for framed messages.
-     */
-    fun negotiate(connection: FridaConnection): String {
-        val input = connection.input
-        val output = connection.output
-        // Offer anonymous authentication, as the frida host transport does.
-        writeLine(output, "AUTH ANONYMOUS")
-        val authReply = readLine(input)
-        when {
-            authReply == null -> throw EOFException("Frida daemon closed during AUTH handshake")
+    /** Round an offset up to a power-of-two alignment. */
+    fun align(p: Int, a: Int): Int = if (a <= 1) p else (p + (a - 1)) and (a - 1).inv()
 
-            authReply.startsWith("REJECTED") ->
-                throw IOException("Frida daemon rejected anonymous auth: $authReply")
+    class W {
+        val b: ByteArrayOutputStream = ByteArrayOutputStream()
 
-            !authReply.startsWith("OK ") ->
-                throw IOException("Unexpected AUTH reply from Frida daemon: ${authReply.take(120)}")
+        fun pad(a: Int) {
+            val n = (a - (b.size() % a)) % a
+            repeat(n) { b.write(0) }
         }
-        // Gracefully begin the stream; the response is the session token.
-        val token = authReply.removePrefix("OK ").trim()
-        writeLine(output, "BEGIN")
-        val beginReply = readLine(input)
-        if (beginReply != null && beginReply.startsWith("REJECTED")) {
-            throw IOException("Frida daemon rejected BEGIN: $beginReply")
-        }
-        return beginReply ?: token
-    }
 
-    fun writeMessage(connection: FridaConnection, text: String) {
-        val bytes = text.toByteArray(utf8)
-        val out = connection.output
-        // D-Bus stream framing: NUL-terminated decimal length + payload.
-        out.write("${bytes.size}\u0000".toByteArray(Charsets.US_ASCII))
-        out.write(bytes)
-        out.flush()
-    }
+        fun raw(v: Int) = b.write(v and 0xff)
 
-    fun readMessage(connection: FridaConnection): String {
-        // The D-Bus stream framing writes a NUL (0x00) terminated decimal
-        // length prefix, so read bytes until 0x00 (NOT until '\n') to parse it.
-        val length = readLengthPrefix(connection.input)
-        if (length < 0 || length > MAX_FRAME) {
-            throw IOException("Frida frame has invalid payload length $length")
+        private fun le32(v: Int) {
+            b.write(v and 0xff)
+            b.write((v shr 8) and 0xff)
+            b.write((v shr 16) and 0xff)
+            b.write((v shr 24) and 0xff)
         }
-        val body = ByteArray(length)
-        var done = 0
-        while (done < length) {
-            val n = connection.input.read(body, done, length - done)
-            if (n < 0) throw EOFException("Frida transport closed while reading frame body")
-            done += n
-        }
-        return String(body, utf8)
-    }
 
-    private fun readLengthPrefix(input: BufferedInputStream): Int {
-        var length = 0
-        while (true) {
-            val value = input.read()
-            if (value < 0) throw EOFException("Frida transport closed while reading frame header")
-            if (value == 0x00) return length
-            if (value < '0'.code || value > '9'.code) {
-                throw IOException("Frida frame header has non-numeric byte 0x${value.toString(16)}")
-            }
-            length = Math.multiplyExact(length, 10) + (value - '0'.code)
+        fun u32(v: Int) {
+            pad(4); le32(v)
+        }
+
+        fun i32(v: Int) {
+            pad(4); le32(v)
+        }
+
+        fun str(s: String) {
+            val d = s.toByteArray(utf8)
+            pad(4); le32(d.size)
+            b.write(d)
+            b.write(0)
+        }
+
+        fun g(s: String) {
+            val d = s.toByteArray(utf8)
+            b.write(d.size)
+            b.write(d)
+            b.write(0)
         }
     }
 
-    private fun writeLine(output: BufferedOutputStream, line: String) {
-        output.write(line.toByteArray(utf8))
-        output.write("\r\n".toByteArray(Charsets.US_ASCII))
-        output.flush()
-    }
+    fun le4(bytes: ByteArray, o: Int): Int =
+        (bytes[o].toInt() and 0xff) or
+            ((bytes[o + 1].toInt() and 0xff) shl 8) or
+            ((bytes[o + 2].toInt() and 0xff) shl 16) or
+            ((bytes[o + 3].toInt() and 0xff) shl 24)
 
-    private fun readLine(input: BufferedInputStream): String? {
-        // 64 KiB cap comfortably fits any handshake line (long OK tokens,
-        // REJECTED diagnostics) emitted by frida daemon releases.
-        val buffer = ByteArray(64 * 1024)
-        var length = 0
-        while (true) {
-            val value = input.read()
-            if (value < 0) {
-                return if (length == 0) null else String(buffer, 0, length, utf8)
-            }
-            if (value == '\n'.code) {
-                return String(buffer, 0, length, utf8).trimEnd('\r')
-            }
-            if (length == buffer.size) {
-                throw IOException("Frida handshake line too long")
-            }
-            buffer[length++] = value.toByte()
-        }
+    fun le8(bytes: ByteArray, o: Int): Long {
+        var v = 0L
+        for (i in 0 until 8) v = v or ((bytes[o + i].toLong() and 0xff) shl (8 * i))
+        return v
     }
 }
 
+// A D-Bus header field (code, signature, string-encoded value).
+internal class DBusField(val code: Int, val sig: String, val value: String)
+
 /**
- * A managed Frida instrumentation session bound to a spawned or attached
- * target process. Holds the negotiated process/script handles and the hook /
- * memory operations exposed to the parent engine.
+ * One serialized D-Bus message. `mtype`: 1=METHOD_CALL, 2=METHOD_RETURN,
+ * 3=ERROR, 4=SIGNAL. Field codes follow the D-Bus spec: 1=path(o), 2=iface(s),
+ * 3=member(s), 4=error(s), 5=reply_serial(u), 8=signature(g).
  */
-internal class FridaSession(val id: String, val target: FridaTarget, val connection: FridaConnection, val mode: String, val targetIdentifier: String) {
+internal class DBusMessage(
+    val mtype: Int,
+    val flags: Int,
+    val serial: Int,
+    val fields: Map<Int, String>,
+    val body: ByteArray
+) {
+    val path: String? get() = fields[1]
+    val hasError: Boolean get() = mtype == 3
+    val errorName: String? get() = fields[4]
+}
+
+/**
+ * WebSocket + D-Bus framing over a [FridaConnection]. Replaces the legacy
+ * line-oriented transport.
+ */
+internal object FridaTransport {
+    private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    private val utf8: Charset = Charsets.UTF_8
+
+    private val secretKey: String =
+        Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
+
+    /** WebSocket handshake state (upgrade + pending frame bytes). */
+    private class WsState {
+        var upgraded = false
+        val pending = ByteArrayOutputStream()
+        var closed = false
+    }
+
+    /**
+     * Perform the connection-level handshake with the daemon. Returns a short
+     * diagnostic greeting. In modern Frida the handshake is just an HTTP
+     * Upgrade to `/ws`; there is no separate `AUTH ANONYMOUS`/`BEGIN` phase.
+     */
+    fun negotiate(connection: FridaConnection): String {
+        upgrade(connection)
+        return "websocket upgraded at ${connection.target.host}:${connection.target.port}"
+    }
+
+    private fun upgrade(connection: FridaConnection): String {
+        val state = WsState()
+        try {
+            val output = connection.output
+            val sb = StringBuilder()
+            sb.append("GET /ws HTTP/1.1\r\n")
+            sb.append("Upgrade: websocket\r\n")
+            sb.append("Connection: Upgrade\r\n")
+            sb.append("Sec-WebSocket-Key: ").append(secretKey).append("\r\n")
+            sb.append("Sec-WebSocket-Version: 13\r\n")
+            sb.append("Host: ").append(connection.target.host).append("\r\n")
+            sb.append("User-Agent: SOMCP/1.0.21\r\n")
+            sb.append("\r\n")
+            output.write(sb.toString().toByteArray(Charsets.US_ASCII))
+            output.flush()
+
+            val resp = ByteArrayOutputStream()
+            var nl = 0
+            while (nl < 4) {
+                val c = connection.input.read()
+                if (c < 0) throw EOFException("Frida daemon closed during websocket upgrade")
+                resp.write(c)
+                nl = if (c == '\r'.code || c == '\n'.code) nl + 1 else 0
+            }
+            val head = String(resp.toByteArray(), Charsets.US_ASCII)
+            connection.putAttr("frida.ws", state)
+            if (!head.startsWith("HTTP/1.1 101")) {
+                throw FridaConnectionException("Frida daemon rejected websocket upgrade: ${head.take(200)}")
+            }
+            return head
+        } catch (e: IOException) {
+            throw FridaConnectionException("Frida websocket upgrade failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Serialize and send a D-Bus message as one masked WebSocket binary frame.
+     */
+    fun writeMessage(connection: FridaConnection, message: ByteArray) {
+        val frame = frameBinaryClient(message)
+        connection.output.write(frame)
+        connection.output.flush()
+    }
+
+    fun writeMessage(connection: FridaConnection, message: DBusMessage) {
+        val bytes = dbusMessageBytes(message)
+        writeMessage(connection, bytes)
+    }
+
+    /**
+     * Read the next D-Bus message from the wire, buffering across WebSocket
+     * frames as needed. Returns null on a clean close frame.
+     */
+    fun readMessage(connection: FridaConnection): DBusMessage? {
+        val state = connection.attr<WsState>("frida.ws")
+            ?: return null
+        if (state.closed) return null
+
+        // D-Bus message: 16-byte header { 'l', mtype, flags, version, bodylen@4,
+        // serial@8, fieldslen@12 } then fields then 8-aligned body.
+        val header = readBytes(connection, state, 16)
+        if (header == null) return null
+        val mtype = header[1].toInt() and 0xff
+        val flags = header[2].toInt() and 0xff
+        val bodyLen = Gvariant.le4(header, 4)
+        val serial = Gvariant.le4(header, 8)
+        val fieldsLen = Gvariant.le4(header, 12)
+
+        val fieldsBytes = readBytes(connection, state, fieldsLen) ?: return null
+
+        // Body starts 8-aligned after header + fields.
+        val fend = 16 + fieldsLen
+        val pad = (8 - (fend % 8)) % 8
+        if (pad > 0) readBytes(connection, state, pad)
+
+        val body = readBytes(connection, state, bodyLen) ?: return null
+
+        val fields = parseFields(fieldsBytes)
+        return DBusMessage(mtype, flags, serial, fields, body)
+    }
+
+    private fun parseFields(fieldsBytes: ByteArray): Map<Int, String> {
+        val fields = HashMap<Int, String>()
+        var p = 0
+        while (p + 2 <= fieldsBytes.size) {
+            p = Gvariant.align(p, 8)
+            if (p + 2 > fieldsBytes.size) break
+            val code = fieldsBytes[p].toInt() and 0xff; p++
+            val sigLen = fieldsBytes[p].toInt() and 0xff; p++
+            if (p + sigLen + 1 > fieldsBytes.size) break
+            val sig = String(fieldsBytes, p, sigLen, utf8); p += sigLen + 1
+            when (sig) {
+                "o", "s" -> {
+                    p = Gvariant.align(p, 4)
+                    if (p + 4 > fieldsBytes.size) break
+                    val len = Gvariant.le4(fieldsBytes, p); p += 4
+                    if (p + len + 1 > fieldsBytes.size) break
+                    fields[code] = String(fieldsBytes, p, len, utf8); p += len + 1
+                }
+                "u" -> {
+                    p = Gvariant.align(p, 4)
+                    if (p + 4 > fieldsBytes.size) break
+                    fields[code] = Gvariant.le4(fieldsBytes, p).toString(); p += 4
+                }
+                "g" -> {
+                    if (p + 1 > fieldsBytes.size) break
+                    val l = fieldsBytes[p].toInt() and 0xff; p++
+                    if (p + l + 1 > fieldsBytes.size) break
+                    fields[code] = String(fieldsBytes, p, l, utf8); p += l + 1
+                }
+                else -> {
+                    // Skip unknown field type conservatively.
+                    break
+                }
+            }
+        }
+        return fields
+    }
+
+    // ── D-Bus message encoder ──
+    fun callMessage(
+        serial: Int,
+        path: String,
+        iface: String,
+        member: String,
+        sig: String,
+        body: ByteArray,
+        flags: Int = 0
+    ): ByteArray {
+        return dbusMessageBytes(
+            DBusMessage(
+                1, flags, serial,
+                mapOf(
+                    1 to path,
+                    2 to iface,
+                    8 to sig,
+                    3 to member
+                ),
+                body
+            )
+        )
+    }
+
+    fun replyMessage(newSerial: Int, replyTo: Int, sig: String, body: ByteArray): ByteArray {
+        return dbusMessageBytes(
+            DBusMessage(2, 0, newSerial, mapOf(5 to replyTo.toString()), body)
+        )
+    }
+
+    fun dbusMessageBytes(msg: DBusMessage): ByteArray {
+        val w = Gvariant.W()
+        w.raw('l'.code)
+        w.raw(msg.mtype)
+        w.raw(msg.flags)
+        w.raw(1) // protocol version
+        w.raw(0); w.raw(0); w.raw(0); w.raw(0) // bodylen placeholder @4
+        w.u32(msg.serial)                       // @8
+        // fields a(yv)
+        val fe = Gvariant.W()
+        msg.fields.entries.sortedBy { it.key }.forEach { (code, value) ->
+            val sig = fieldSignature(code, value)
+            fe.pad(8); fe.raw(code); fe.g(sig)
+            when (sig) {
+                "o", "s" -> fe.str(value)
+                "g" -> fe.g(value)
+                "u" -> fe.u32(value.toInt())
+                else -> throw FridaConnectionException("Unsupported field signature $sig")
+            }
+        }
+        w.u32(fe.b.size())                      // fieldslen @12
+        w.b.write(fe.b.toByteArray())
+        // body 8-aligned
+        w.pad(8)
+        val bodyStart = w.b.size()
+        w.b.write(msg.body)
+        val out = w.b.toByteArray()
+        val bl = out.size - bodyStart
+        out[4] = (bl and 0xff).toByte()
+        out[5] = ((bl shr 8) and 0xff).toByte()
+        out[6] = ((bl shr 16) and 0xff).toByte()
+        out[7] = ((bl shr 24) and 0xff).toByte()
+        return out
+    }
+
+    private fun fieldSignature(code: Int, value: String): String = when (code) {
+        1 -> "o"      // path
+        2, 4, 3 -> "s" // iface / error-name / member
+        5 -> "u"      // reply_serial
+        8 -> "g"      // signature
+        else -> "s"
+    }
+
+    // ── WebSocket frame codec ──
+    private fun frameBinaryClient(payload: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(0x82) // FIN + binary opcode
+        val len = payload.size
+        val maskKey = (0..Int.MAX_VALUE).random()
+        val mask = byteArrayOf(
+            (maskKey and 0xff).toByte(),
+            ((maskKey shr 8) and 0xff).toByte(),
+            ((maskKey shr 16) and 0xff).toByte(),
+            ((maskKey shr 24) and 0xff).toByte()
+        )
+        when {
+            len < 126 -> out.write(0x80 or len) // mask bit + short length
+            len < 65536 -> {
+                out.write(0x80 or 126)
+                out.write((len shr 8) and 0xff)
+                out.write(len and 0xff)
+            }
+            else -> {
+                out.write(0x80 or 127)
+                for (i in 7 downTo 0) out.write((len.toLong() shr (8 * i)).toInt() and 0xff)
+            }
+        }
+        out.write(mask)
+        for (i in payload.indices) out.write(payload[i] xor mask[i % 4])
+        return out.toByteArray()
+    }
+
+    /** Read exactly [n] payload bytes, pulling and decodifying WS frames. */
+    private fun readBytes(connection: FridaConnection, state: WsState, n: Int): ByteArray? {
+        val input = connection.input
+        while (state.pending.size() < n) {
+            if (state.closed) return null
+            // Read one WebSocket frame (server -> client, unmasked).
+            val b0 = input.read()
+            if (b0 < 0) throw EOFException("Frida transport closed while reading frame header")
+            val opcode = b0 and 0x0f
+            val b1 = input.read()
+            if (b1 < 0) throw EOFException("Frida transport closed")
+            val masked = (b1 shr 7) and 1
+            var frameLen = (b1 and 0x7f).toLong()
+            if (frameLen == 126L) {
+                val h = readStream(input, 2)
+                frameLen = ((h[0].toInt() and 0xff) shl 8) or (h[1].toInt() and 0xff)
+            } else if (frameLen == 127L) {
+                val h = readStream(input, 8)
+                var v = 0L
+                for (i in 0 until 8) v = (v shl 8) or (h[i].toLong() and 0xff)
+                frameLen = v
+            }
+            var mask: ByteArray? = null
+            if (masked == 1) mask = readStream(input, 4)
+            val payload = readStream(input, frameLen.toInt())
+            val p = if (mask != null) {
+                ByteArray(payload.size) { i -> (payload[i].toInt() xor (mask!![i % 4].toInt() and 0xff)).toByte() }
+            } else payload
+            when (opcode) {
+                8 -> { state.closed = true; return null }   // close
+                9 -> { /* ping -> pong (ignored; frida stays quiet) */ }
+                0, 2 -> { state.pending.write(p, 0, p.size) } // continuation / binary data
+            }
+        }
+        val all = state.pending.toByteArray()
+        val result = ByteArray(n)
+        System.arraycopy(all, 0, result, 0, n)
+        state.pending.reset()
+        state.pending.write(all, n, all.size - n)
+        return result
+    }
+
+    private fun readStream(input: BufferedInputStream, n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var done = 0
+        while (done < n) {
+            val r = input.read(buf, done, n - done)
+            if (r < 0) throw EOFException("Frida transport closed while reading frame")
+            done += r
+        }
+        return buf
+    }
+}
+
+/** A managed Frida instrumentation session bound to an attached target process.
+ * Holds the negotiated agent-session/script handles and lets the parent engine
+ * call rpc.exports on the injected agent.
+ */
+internal class FridaSession(
+    val id: String,
+    val target: FridaTarget,
+    val connection: FridaConnection,
+    val mode: String,
+    val targetIdentifier: String
+) {
     var processId: Int = -1
     var scriptLoaded: Boolean = false
     val collectedMessages = ConcurrentHashMap<String, JSONArray>()
-    private val _closed = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val _closed = AtomicBoolean(false)
 
-    /** Serializes the write + read pair of each RPC call; see [FridaBridge.invokeRpc]. */
+    // Host/agent-session/script handles negotiated against the daemon.
+    internal var agentPath: String = "/re/frida/HostSession"
+    internal var agentIfcVersion: Int = FridaBridge.INTERFACE_VERSION
+    internal var scriptId: Int = -1
+
+    /** Serializes the write + read pair of each RPC call ([FridaBridge.invokeRpc]). */
     internal val ioLock = Any()
+
+    internal val nextSerial = java.util.concurrent.atomic.AtomicInteger(1)
 
     val closed: Boolean get() = _closed.get()
 
     fun close() {
         if (_closed.compareAndSet(false, true)) {
-            runCatching { FridaBridge.sendScriptMessage(connection, "detach") }
-            // Releasing the streams and the socket in one place guarantees no
-            // I/O resource is left open when the session is abandoned.
+            FridaBridge.closeSessionRemote(this)
             runCatching { connection.close() }
         }
     }
@@ -211,15 +533,51 @@ internal class FridaSession(val id: String, val target: FridaTarget, val connect
 }
 
 /**
- * Pure-Kotlin Frida bridge. Intentionally keeps the daemon-specific framing in
- * [FridaTransport] so the rest of the workflow is stable across Frida versions.
+ * Pure-Kotlin Frida bridge speaking the modern WebSocket + D-Bus protocol.
  */
 internal class FridaBridge(private val context: Context) {
     private val sessions = ConcurrentHashMap<String, FridaSession>()
 
-    /** True when a configured frida daemon accepts a TCP connection. */
+    internal companion object {
+        const val INTERFACE_VERSION = 17
+
+        /** Detach the remote agent session/script when a [FridaSession] is closed. */
+        fun closeSessionRemote(session: FridaSession) {
+            if (session.scriptId >= 0 && session.agentPath != "/re/frida/HostSession") {
+                runCatching {
+                    val body = Gvariant.W().apply { u32(session.scriptId) }.b.toByteArray()
+                    FridaTransport.writeMessage(
+                        session.connection,
+                        FridaTransport.callMessage(
+                            session.nextSerial.getAndIncrement(), session.agentPath,
+                            "re.frida.AgentSession${session.agentIfcVersion}", "DestroyScript",
+                            "(u)", body
+                        )
+                    )
+                }
+                runCatching {
+                    FridaTransport.writeMessage(
+                        session.connection,
+                        FridaTransport.callMessage(
+                            session.nextSerial.getAndIncrement(), session.agentPath,
+                            "re.frida.AgentSession${session.agentIfcVersion}", "Close",
+                            "()", ByteArray(0)
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /** True when a configured frida daemon accepts a WebSocket control channel. */
     fun available(target: FridaTarget = FridaTarget()): Boolean = runCatching {
-        connect(target).use { true }
+        val connection = connect(target)
+        try {
+            FridaTransport.negotiate(connection)
+            true
+        } finally {
+            runCatching { connection.close() }
+        }
     }.getOrDefault(false)
 
     fun connectionStatus(target: FridaTarget = FridaTarget()): JSONObject = JSONObject().apply {
@@ -266,19 +624,20 @@ internal class FridaBridge(private val context: Context) {
         )
     }
 
-    // ── Session lifecycle (object API used by EngineRuntimeDynamic) ──
+    // ── Session lifecycle ──
 
     fun listSessions(): JSONArray = JSONArray(sessions.keys)
 
     fun getSession(id: String): FridaSession? = sessions[id]
 
+    /**
+     * Establish a session: upgrade, ping the host session, resolve the target
+     * pid, attach, deploy and load the agent script, then register the session.
+     */
     fun createSession(target: FridaTarget, mode: String, targetIdentifier: String, script: String): FridaSession {
         val connection = connect(target)
         try {
-            // Negotiate the daemon-level handshake and establish the session.
-            val hello = runCatching { FridaTransport.negotiate(connection) }
-                .getOrElse { throw IOException("Frida handshake failed: ${it.message}", it) }
-            AppLog.i("Frida daemon hello: ${hello.take(200)}")
+            FridaTransport.negotiate(connection)
             val session = FridaSession(
                 UUID.randomUUID().toString().substring(0, 8),
                 target,
@@ -286,12 +645,34 @@ internal class FridaBridge(private val context: Context) {
                 mode,
                 targetIdentifier
             )
-            // Deploy and run the agent. The agent registers rpc.exports so the
-            // Kotlin side can invoke hi-level operations (hook, call, dump).
-            FridaBridge.sendScriptMessage(connection, "loadScript")
-            FridaBridge.sendScriptPayload(connection, "run", JSONObject().put("source", script))
+
+            // 1) Ping the host session to init the service.
+            sendPing(session)
+
+            // 2) Resolve + attach a real target process.
+            session.processId = resolvePid(session, targetIdentifier)
+            val attachBody = attachBody(session.processId)
+            val attachReply = callForReply(
+                session,
+                "/re/frida/HostSession",
+                "re.frida.HostSession${session.agentIfcVersion}",
+                "Attach",
+                "ua{sv}",
+                attachBody
+            )
+            val handle = bodyString(attachReply)
+            session.agentPath = "/re/frida/AgentSession/$handle"
+            if (handle.isEmpty()) {
+                throw FridaConnectionException("Frida daemon returned an empty AgentSession handle")
+            }
+
+            // 3) Create + load the agent script.
+            session.scriptId = createScript(session, script)
+            loadScript(session, session.scriptId)
             session.scriptLoaded = true
+
             sessions[session.id] = session
+            AppLog.i("Frida session ${session.id}: pid=${session.processId} path=${session.agentPath} scriptId=${session.scriptId}")
             return session
         } catch (error: Exception) {
             runCatching { connection.close() }
@@ -303,92 +684,397 @@ internal class FridaBridge(private val context: Context) {
         sessions.remove(id)?.close()
     }
 
-    /** Closes every tracked session, releasing all sockets/streams. Used by
-     *  [com.soreverse.mcp.engine.EngineRuntime.clearCaches] so abandoned Frida
-     *  sessions (never closed via frida_close) cannot leak their TCP links. */
+    /** Closes every tracked session. */
     fun closeAll() {
         sessions.keys.toList().forEach { closeSession(it) }
     }
 
+    /**
+     * Invoke `rpc.exports.<operation>` on the injected agent by posting a
+     * frida:rpc "call" message and waiting for the matching sink reply.
+     */
     fun invokeRpc(sessionId: String, operation: String, params: JSONObject): JSONObject {
         val session = sessions[sessionId]
             ?: throw IllegalStateException("Frida session $sessionId not found")
         if (session.closed) throw IllegalStateException("Frida session $sessionId is closed")
-        // The request/response pair must be atomic on the shared socket: a
-        // concurrent writer could interleave frames and corrupt the framing.
-        // Holding the session's ioLock serializes every RPC on the link.
         return synchronized(session.ioLock) {
-            sendScriptPayload(
-                session.connection,
-                "rpc",
-                JSONObject()
-                    .put("operation", operation)
-                    .put("params", params)
-            )
-            collectResponse(session, operation)
+            val args = rpcArgs(session, operation, params)
+            val payload = JSONArray()
+                .put("frida:rpc")
+                .put(session.scriptId)
+                .put("call")
+                .put(operation)
+                .put(args)
+            val text = JSONObject()
+                .put("type", "send")
+                .put("payload", payload)
+                .toString()
+            postMessage(session, text)
+            waitForRpcReply(session, operation)
         }
     }
 
-    private fun collectResponse(session: FridaSession, operation: String): JSONObject {
-        // The link is half-duplex request/response, but the agent may push
-        // asynchronous frames (log / error / agent events) at any time. Skip
-        // non-`rpc` frames until the matching rpc response arrives, so stray
-        // async traffic cannot misalign or break the framing.
-        while (true) {
-            val text = FridaTransport.readMessage(session.connection)
-            val json = runCatching { JSONObject(text) }.getOrNull()
-                ?: JSONObject().put("raw", text)
-            if (json.optString("type") != "rpc") {
-                session.collectedMessages.putIfAbsent(operation, JSONArray())
-                session.collectedMessages[operation]?.put(json)
+    // ── Host / agent RPC primitives ──
+
+    private fun sendPing(session: FridaSession) {
+        // NO_REPLY_EXPECTED (flags=1) ping, like the frida client does after upgrade.
+        val serial = session.nextSerial.getAndIncrement()
+        val body = Gvariant.W().apply { u32(0) }.b.toByteArray()
+        FridaTransport.writeMessage(
+            session.connection,
+            FridaTransport.callMessage(
+                serial, "/re/frida/HostSession",
+                "re.frida.HostSession${session.agentIfcVersion}", "Ping", "u", body, flags = 1
+            )
+        )
+    }
+
+    /** EnumerateProcesses -> list of (pid, name). */
+    private fun enumerateProcesses(session: FridaSession): List<Pair<Int, String>> {
+        val reply = callForReply(
+            session,
+            "/re/frida/HostSession",
+            "re.frida.HostSession${session.agentIfcVersion}",
+            "EnumerateProcesses",
+            "a{sv}",
+            Gvariant.W().apply { u32(0) }.b.toByteArray()
+        )
+        return parseEnumerate(reply.body)
+    }
+
+    /** EnumerateProcesses reply body is `a(usa{sv})`: [(pid u, name s, args a{sv}), ...]. */
+    private fun parseEnumerate(b: ByteArray): List<Pair<Int, String>> {
+        val out = ArrayList<Pair<Int, String>>()
+        if (b.size < 8) return out
+        var p = 0
+        val arrLen = Gvariant.le4(b, p); p += 4
+        p = Gvariant.align(p, 8)
+        val end = p + arrLen
+        while (p < end && p + 8 <= b.size) {
+            p = Gvariant.align(p, 8) // struct align 8
+            if (p + 8 > b.size) break
+            val pid = Gvariant.le4(b, p); p += 4 // u
+            p = Gvariant.align(p, 4)
+            if (p + 4 > b.size) break
+            val sl = Gvariant.le4(b, p); p += 4
+            if (p + sl + 1 > b.size) break
+            val name = String(b, p, sl, Charsets.UTF_8); p += sl + 1 // s
+            // args a{sv}: array header (u32) then skip to end
+            p = Gvariant.align(p, 4)
+            if (p + 4 > b.size) break
+            val dl = Gvariant.le4(b, p); p += 4 + dl
+            out.add(pid to name)
+        }
+        return out
+    }
+
+    private fun resolvePid(session: FridaSession, targetIdentifier: String): Int {
+        val trimmed = targetIdentifier.trim()
+        trimmed.toIntOrNull()?.let { return it }
+        // Fall back to a name lookup if the identifier is a known process name.
+        val procs = enumerateProcesses(session)
+        procs.firstOrNull { it.second == trimmed || it.second.contains(trimmed) }?.first?.let { return it }
+        if (trimmed.isEmpty()) {
+            throw FridaConnectionException(
+                "Cannot determine a target pid from an empty targetIdentifier; " +
+                    "pass a numeric pid (e.g. targetIdentifier='0' to attach the analyzer) "
+            )
+        }
+        throw FridaConnectionException(
+            "No process named '$trimmed' found; pass a numeric pid or an existing process name " +
+                "(available: ${procs.take(8).joinToString(", ") { "${it.first}:${it.second}" }})"
+        )
+    }
+
+    private fun createScript(session: FridaSession, source: String): Int {
+        val body = Gvariant.W().apply {
+            str(source)
+            u32(0) // options a{sv} (empty)
+        }.b.toByteArray()
+        val reply = callForReply(
+            session,
+            session.agentPath,
+            "re.frida.AgentSession${session.agentIfcVersion}",
+            "CreateScript",
+            "sa{sv}",
+            body
+        )
+        val scriptId = bodyUint(reply)
+        if (scriptId < 0) throw FridaConnectionException("Frida created an invalid script id")
+        return scriptId
+    }
+
+    private fun loadScript(session: FridaSession, scriptId: Int) {
+        val body = Gvariant.W().apply { u32(scriptId) }.b.toByteArray()
+        callForReply(
+            session,
+            session.agentPath,
+            "re.frida.AgentSession${session.agentIfcVersion}",
+            "LoadScript",
+            "(u)",
+            body
+        )
+    }
+
+    /**
+     * Post one script message (e.g. a frida:rpc "call") to the agent. Sent
+     * fire-and-forget; the reply arrives on the message sink.
+     */
+    private fun postMessage(session: FridaSession, text: String) {
+        val serial = session.nextSerial.getAndIncrement()
+        val body = postBody(session.scriptId, text, 0)
+        FridaTransport.writeMessage(
+            session.connection,
+            FridaTransport.callMessage(
+                serial, session.agentPath,
+                "re.frida.AgentSession${session.agentIfcVersion}",
+                "PostMessages", "a(i(u)sbay)u", body, flags = 1
+            )
+        )
+    }
+
+    /**
+     * Wait for the RPC reply. The agent answers through the message sink as a
+     * fire-and-forget METHOD_CALL carrying a JSON text whose payload begins
+     * with `["frida:rpc", <id>, "ok"|"error", ...]`.
+     */
+    private fun waitForRpcReply(session: FridaSession, operation: String): JSONObject {
+        val deadline = System.currentTimeMillis() + session.target.readTimeoutMillis
+        val collected = JSONArray()
+        while (System.currentTimeMillis() < deadline) {
+            val msg = FridaTransport.readMessage(session.connection)
+                ?: throw IOException("Frida session closed while waiting for $operation reply")
+            when (msg.mtype) {
+                1 -> {
+                    // Fire-and-forget call: reply to free up the daemon, then inspect.
+                    val isSink = msg.path?.startsWith("/re/frida/AgentMessageSink/") == true
+                    if (isSink) {
+                        FridaTransport.writeMessage(
+                            session.connection,
+                            FridaTransport.replyMessage(
+                                session.nextSerial.getAndIncrement(), msg.serial, "", ByteArray(0)
+                            )
+                        )
+                        val texts = parseSinkTexts(msg.body)
+                        for (text in texts) {
+                            val parsed = parseRpcMessage(session, text)
+                            if (parsed != null) {
+                                val result = parsed
+                                // Keep async events, but surface the rpc result as the response.
+                                result.put("_asyncEvents", collected)
+                                return result
+                            }
+                            runCatching { collected.put(JSONObject(text)) }
+                        }
+                    }
+                }
+                3 -> throw IOException("Frida error: ${msg.errorName ?: "unknown"}")
+                2 -> { /* unrelated return; ignore */ }
+            }
+        }
+        throw IOException("Timed out waiting for Frida $operation reply (script may have thrown)")
+    }
+
+    private fun parseRpcMessage(session: FridaSession, text: String): JSONObject? {
+        val json = try {
+            JSONObject(text)
+        } catch (e: JSONException) {
+            return null
+        }
+        if (json.optString("type") != "send") return null
+        val payload = json.optJSONArray("payload") ?: return null
+        if (payload.length() < 3) return null
+        if (payload.opt(0) != "frida:rpc") return null
+        val msgId = payload.optInt(1)
+        if (msgId != session.scriptId) return null
+        return when (payload.optString(2)) {
+            "ok" -> {
+                val result = payload.opt(3)
+                if (result is JSONObject) {
+                    result.put("ok", true)
+                    result
+                } else if (result is JSONArray) {
+                    JSONObject().put("result", result).put("ok", true)
+                } else if (result is Number || result is String || result is Boolean) {
+                    JSONObject().put("result", result).put("ok", true)
+                } else {
+                    JSONObject().put("ok", true)
+                }
+            }
+            "error" -> {
+                throw IllegalStateException("Frida RPC ${payload.optString(3, "failed")}")
+            }
+            else -> null
+        }
+    }
+
+    // ── Reply plumbing ──
+
+    private fun callForReply(
+        session: FridaSession,
+        path: String,
+        iface: String,
+        member: String,
+        sig: String,
+        body: ByteArray
+    ): DBusMessage {
+        val serial = session.nextSerial.getAndIncrement()
+        FridaTransport.writeMessage(
+            session.connection,
+            FridaTransport.callMessage(serial, path, iface, member, sig, body)
+        )
+        return callForReply(session, serial)
+    }
+
+    private fun callForReply(session: FridaSession, serial: Int): DBusMessage {
+        val deadline = System.currentTimeMillis() + session.target.readTimeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            val msg = FridaTransport.readMessage(session.connection)
+                ?: throw IOException("Frida connection closed while awaiting reply $serial")
+            if (msg.mtype == 1 && msg.path?.startsWith("/re/frida/AgentMessageSink/") == true) {
+                FridaTransport.writeMessage(
+                    session.connection,
+                    FridaTransport.replyMessage(session.nextSerial.getAndIncrement(), msg.serial, "", ByteArray(0))
+                )
+                val texts = parseSinkTexts(msg.body)
+                for (text in texts) {
+                    runCatching {
+                        // Unrelated async script events can be dropped/collected here.
+                        session.collectedMessages.putIfAbsent("async", JSONArray())
+                        session.collectedMessages["async"]?.put(JSONObject(text))
+                    }
+                }
                 continue
             }
-            if (json.optString("error").isNotBlank()) {
-                throw IllegalStateException("Frida agent error: ${json.optString("error")}")
+            val replySerial = msg.fields[5]?.toIntOrNull()
+            if (replySerial == serial) {
+                if (msg.hasError) throw IOException("Frida call failed: ${msg.errorName}")
+                return msg
             }
-            return json
+            // Ignore other strays.
         }
+        throw IOException("Timed out awaiting Frida reply $serial")
     }
 
-    // ── Script / payload transfer ──
+    // ── Body helpers ──
 
-    internal companion object FridaBridgeCompanion {
-        fun sendScriptMessage(connection: FridaConnection, message: String) {
-            FridaTransport.writeMessage(connection, JSONObject().put("type", message).toString())
+    private fun bodyString(reply: DBusMessage): String {
+        val b = reply.body
+        if (b.size >= 4) {
+            val len = Gvariant.le4(b, 0)
+            if (len in 1..(b.size - 4)) {
+                return String(b, 4, len, Charsets.UTF_8)
+            }
         }
+        return ""
+    }
 
-        fun sendScriptPayload(connection: FridaConnection, type: String, payload: JSONObject) {
-            FridaTransport.writeMessage(
-                connection,
-                JSONObject()
-                    .put("type", type)
-                    .put("payload", payload)
-                    .toString()
-            )
+    private fun bodyUint(reply: DBusMessage): Int {
+        if (reply.body.size >= 4) return Gvariant.le4(reply.body, 0)
+        return -1
+    }
+
+    private fun attachBody(pid: Int): ByteArray = Gvariant.W().apply {
+        u32(pid)
+        u32(0) // options a{sv} (empty)
+    }.b.toByteArray()
+
+    /**
+     * PostMessages body for one message: `a(i(u)sbay)u`. Inner struct:
+     * i kind=1, (u) script_id(8-aligned), s text, b has_data=false, ay empty.
+     */
+    private fun postBody(scriptId: Int, text: String, batch: Int): ByteArray {
+        val elem = Gvariant.W()
+        elem.i32(1)
+        elem.pad(8); elem.u32(scriptId)
+        elem.str(text)
+        elem.raw(0) // b has_data=false
+        elem.pad(4); elem.u32(0) // ay empty (header align 4)
+        val elemBytes = elem.b.toByteArray()
+        val aligned = (elemBytes.size + 7) and 7.inv()
+        val arr = Gvariant.W()
+        arr.pad(4); arr.u32(aligned); arr.pad(8); arr.b.write(elemBytes)
+        repeat(aligned - elemBytes.size) { arr.b.write(0) }
+        arr.u32(batch)
+        return arr.b.toByteArray()
+    }
+
+    /** Parse the sink body elements `(t i s b ay)` and return each `s` text. */
+    private fun parseSinkTexts(body: ByteArray): List<String> {
+        val texts = ArrayList<String>()
+        if (body.size < 4) return texts
+        var p = 4 // skip array length u32
+        p = Gvariant.align(p, 8)
+        val arrLen = Gvariant.le4(body, 0)
+        val end = p + arrLen
+        val b = body
+        while (p + 16 <= end && p + 16 <= b.size) {
+            p = Gvariant.align(p, 8)
+            // t uint64 id, i int32 type
+            p += 8 + 4
+            p = Gvariant.align(p, 4)
+            if (p + 4 > b.size) break
+            val textLen = Gvariant.le4(b, p); p += 4
+            if (p + textLen + 1 > b.size) break
+            val text = String(b, p, textLen, Charsets.UTF_8); p += textLen + 1
+            p += 1 // b has_data
+            p = Gvariant.align(p, 4)
+            if (p + 4 > b.size) break
+            val dataLen = Gvariant.le4(b, p); p += 4 + dataLen
+            texts.add(text)
+        }
+        return texts
+    }
+
+    /** Build the positional argument array for an rpc.exports call. */
+    private fun rpcArgs(session: FridaSession, operation: String, params: JSONObject): JSONArray = when (operation) {
+        "hookFunction" -> JSONArray().put(params.optString("functionName"))
+        "getEvents", "registers" -> JSONArray()
+        "callFunction" -> JSONArray()
+            .put(params.optString("functionName"))
+            .put(params.optString("argsJson"))
+        "readMemory" -> JSONArray()
+            .put(params.optString("ptrStr"))
+            .put(params.optInt("size", 256))
+        else -> JSONArray().apply {
+            val arr = params.names()
+            if (arr != null) for (i in 0 until arr.length()) put(params.opt(arr.getString(i)))
         }
     }
 
     /** Default Frida JavaScript agent for the standalone dynamic-analysis flow. */
     fun defaultAgentHtml(moduleName: String, retaddr: Boolean): String {
-        // Real Frida agent: Interceptor.attach on a resolved native export,
-        // capture registers, optional memory dump, send events back over rpc.
-        val retAddrExpr = if (retaddr) {
-            "retAddress: c.retAddress ? c.retAddress.toString() : c.pc.toString()"
+        // Real Frida agent: resolve a native export, Interceptor.attach it,
+        // buffer the enter/leave events + captured context, and expose them via
+        // rpc.exports so the engine can hook / call / read / backtrace a target
+        // function running inside a live device process.
+        val captureRetAddress = if (retaddr) {
+            "retAddress: __lastContext.retAddress ? __lastContext.retAddress.toString() : __lastContext.pc.toString()"
         } else {
             "retAddress: null"
         }
         return """
         'use strict';
-        // Module-level hook event buffer so events survive across RPC frames.
         const __events = [];
         let __lastContext = null;
 
+        function resolveExport(name) {
+            name = '' + name;
+            try { return Module.getExportByName('$moduleName', name); } catch (e) {}
+            // Fall back to scanning every loaded module for the export.
+            const mods = Process.enumerateModules();
+            for (const i = 0; i !== mods.length; i++) {
+                try {
+                    const found = Module.findExportByName(mods[i].name, name);
+                    if (found) return found;
+                } catch (e) {}
+            }
+            return null;
+        }
+
         rpc.exports = {
             hookFunction(functionName) {
-                const mod = Process.findModuleByName(${moduleName.asJsLiteral()});
-                if (!mod) return { error: 'module-not-found' };
-                const addr = Module.getExportByName(${moduleName.asJsLiteral()}, functionName) ||
-                             Module.getGlobalExportByName(functionName);
+                const addr = resolveExport('' + functionName);
                 if (!addr) return { error: 'export-not-found' };
                 Interceptor.attach(addr, {
                     onEnter(args) {
@@ -412,30 +1098,32 @@ internal class FridaBridge(private val context: Context) {
                 return { events: snapshot };
             },
             callFunction(functionName, argsJson) {
-                const addr = Module.getExportByName(${moduleName.asJsLiteral()}, functionName);
+                const addr = resolveExport('' + functionName);
                 if (!addr) return { error: 'export-not-found' };
-                const args = JSON.parse(argsJson);
-                const fn = new NativeFunction(addr, 'int', args.map(function (a) { return 'int'; }));
-                return { retval: fn(...args) };
+                const args = JSON.parse('' + argsJson).map(function (n) { return n | 0; });
+                const types = new Array(Math.max(args.length, 1)).fill('int');
+                const fn = new NativeFunction(addr, 'int', types);
+                const retval = fn.apply(null, args);
+                return { retval: retval };
             },
             readMemory(ptrStr, size) {
-                const p = ptr(ptrStr);
-                return { hex: hexdump(p, { length: size, ansi: false }).slice(0, size * 3) };
+                const p = ptr('' + ptrStr);
+                const bytes = Memory.readByteArray(p, size | 0);
+                return { hex: bytes ? hexdump(p, { offset: 0, length: size, ansi: false }) : null };
             },
             registers() {
-                if (__lastContext) {
-                    const c = __lastContext;
-                    const bt = Thread.backtrace(c, Backtracer.ACCURATE);
+                if (!__lastContext) return { error: 'no-context-captured-yet' };
+                try {
+                    const bt = Thread.backtrace(__lastContext, Backtracer.ACCURATE);
                     return {
                         backtrace: bt.map(function (a) { return a.toString(); }),
-                        $retAddrExpr
+                        $captureRetAddress
                     };
+                } catch (e) {
+                    return { error: 'backtrace-failed: ' + e };
                 }
-                return { error: 'no-context-captured-yet' };
             }
         };
         """.trimIndent()
     }
-
-    private fun String.asJsLiteral(): String = "'" + replace("\\", "\\\\").replace("'", "\\'") + "'"
 }
