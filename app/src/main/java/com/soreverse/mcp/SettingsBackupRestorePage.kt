@@ -388,6 +388,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
             confirmButton = {
                 Button(onClick = {
                     showEncryptWarning = false
+                    encryptEnabled = true
                 }) { Text(if (t.zh) "知道了" else "OK") }
             }
         )
@@ -409,6 +410,11 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 checked = includeSecrets
             ) { enabled ->
                 includeSecrets = enabled
+                if (enabled && !encryptEnabled) {
+                    // 包含密钥时强制启用密码加密
+                    encryptEnabled = true
+                    showEncryptWarning = true
+                }
             }
             GroupDivider()
             BackupToggleRow(
@@ -432,6 +438,8 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                         label = { Text(t.backupEncryptPassword) },
                         placeholder = { Text(t.backupPasswordPlaceholder) },
                         singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
