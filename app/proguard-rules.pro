@@ -22,6 +22,16 @@
     *;
 }
 
+# scijava-native-lib-loader is transitively pulled in by zhkl0228:unicorn:1.0.15.
+# Unicorn2Factory's static init block calls NativeLoader.loadLibrary("unicorn"),
+# and the call site only catches IOException. If R8 strips NativeLoader, the
+# class load fails with NoClassDefFoundError (a LinkageError, NOT an IOException)
+# and Unicorn2Factory can never be initialized — Unidbg degrades completely.
+# Keep all scijava.nativelib classes so NativeLoader remains on the classpath.
+-keep class org.scijava.nativelib.** {
+    *;
+}
+
 -keep class unicorn.** {
     *;
 }
