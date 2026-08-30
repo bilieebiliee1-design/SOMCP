@@ -30,15 +30,15 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -534,12 +534,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
 }
 
 @Composable
-private fun BackupToggleRow(
-    text: String,
-    subtitle: String,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit
-) {
+private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     val metrics = LocalUiMetrics.current
     Row(
         Modifier
@@ -575,11 +570,7 @@ private fun BackupToggleRow(
  * where the thumb incorrectly stayed pinned to the left.
  */
 @Composable
-private fun BackupSwitch(
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
-) {
+private fun BackupSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val trackWidth = 48.dp
     val trackHeight = 28.dp
     val thumbSize = 24.dp
@@ -618,12 +609,7 @@ private fun BackupSwitch(
 }
 
 @Composable
-private fun BackupActionCard(
-    label: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+private fun BackupActionCard(label: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(LocalUiMetrics.current.cardRadius)
     Column(
         modifier
