@@ -46,6 +46,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -89,6 +90,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
     var includeSecrets by remember { mutableStateOf(false) }
     var encryptEnabled by remember { mutableStateOf(false) }
     var encryptPassword by remember { mutableStateOf("") }
+    var showEncryptWarning by remember { mutableStateOf(false) }
     var resultMessage by remember { mutableStateOf<String?>(null) }
     var resultOk by remember { mutableStateOf(false) }
 
@@ -370,6 +372,23 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                 }) {
                     Text(t.cancel)
                 }
+            }
+        )
+    }
+
+    // --- encryption password warning dialog ---
+    if (showEncryptWarning) {
+        AlertDialog(
+            onDismissRequest = {
+                showEncryptWarning = false
+            },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null) },
+            title = { Text(t.backupEncryptWarningTitle) },
+            text = { Text(t.backupEncryptWarning) },
+            confirmButton = {
+                Button(onClick = {
+                    showEncryptWarning = false
+                }) { Text(if (t.zh) "知道了" else "OK") }
             }
         )
     }
