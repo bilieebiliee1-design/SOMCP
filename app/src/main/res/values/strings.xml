@@ -65,6 +65,13 @@
     <string name="backup_decrypt_prompt">Enter password to decrypt backup</string>
     <string name="backup_wrong_password">Wrong password or corrupted data</string>
     <string name="backup_decrypting">Decrypting…</string>
+    <string name="backup_include_secrets_subtitle">Export unmasked secret keys when enabled</string>
+    <string name="backup_encrypt_toggle_subtitle">Protect backup files with strong encryption</string>
+    <string name="backup_password_placeholder">Set a password</string>
+    <string name="backup_history">Recent backups</string>
+    <string name="backup_history_empty">No backup records yet</string>
+    <string name="backup_restore">Restore</string>
+    <string name="backup_secrets_require_encryption">Encryption is required when including secrets</string>
     <string name="confirm">Confirm</string>
     <string name="cancel">Cancel</string>
 </resources>
