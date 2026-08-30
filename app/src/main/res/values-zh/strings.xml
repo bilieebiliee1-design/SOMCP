@@ -70,7 +70,7 @@
     <string name="backup_password_placeholder">设置密码</string>
     <string name="backup_history">最近备份记录</string>
     <string name="backup_history_empty">暂无备份记录</string>
-    <string name="backup_restore">恢复</string>
+    <string name="backup_restore_action">恢复</string>
     <string name="backup_secrets_require_encryption">包含密钥时必须启用密码加密</string>
     <string name="confirm">确认</string>
     <string name="cancel">取消</string>

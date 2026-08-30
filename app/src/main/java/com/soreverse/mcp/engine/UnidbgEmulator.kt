@@ -1,3 +1,21 @@
+/*
+SPDX-License-Identifier: AGPL-3.0-or-later
+
+Copyright (C) 2026 bilieebiliee1-design
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+*/
 package com.soreverse.mcp.engine
 
 import android.content.Context
@@ -47,6 +65,16 @@ class UnidbgEmulator(private val context: Context) {
 
         @Volatile private var nativeLoaded = false
 
+        /**
+         * True iff [libunicorn.so] was successfully loaded. unicorn is the CPU
+         * emulator that backs Unidbg's Unicorn2Factory — on 32-bit Android
+         * targets (armeabi-v7a, x86) it is intentionally absent because
+         * QEMU's __uint128_t requirement cannot be satisfied by the NDK,
+         * so the field will remain false there even though the rest of the
+         * native stack (capstone/keystone/jnidispatch) loads fine.
+         */
+        @Volatile private var unicornLoaded = false
+
         @Volatile private var optionalNativeMissing = false
 
         @Volatile private var capstoneSelfTest = false
@@ -60,6 +88,18 @@ class UnidbgEmulator(private val context: Context) {
         fun ensureNativeLibraries(): Boolean = synchronized(this) {
             if (nativeLoaded) return@synchronized true
             if (nativeLoadError != null) return@synchronized false
+            // Detect whether this runtime is 32-bit. unicorn (the QEMU-based CPU
+            // emulator that Unicorn2Factory depends on) cannot compile for 32-bit
+            // Android — QEMU needs __uint128_t which the NDK does not expose on
+            // armeabi-v7a/x86. On those ABIs libunicorn.so is never bundled
+            // (see build-unidbg-native.sh), so we must skip the load attempt.
+            val abi64Bit = runCatching {
+                val supported = android.os.Build.SUPPORTED_ABIS
+                val primary = supported.firstOrNull()
+                primary?.endsWith("64") ?: false
+            }.getOrDefault(
+                System.getProperty("os.arch")?.endsWith("64") ?: false
+            )
             runCatching {
                 val nativeDir = appNativeLibraryDir ?: ""
                 if (nativeDir.isNotEmpty()) {
@@ -76,12 +116,31 @@ class UnidbgEmulator(private val context: Context) {
                         NativeLibrary.addSearchPath(it, nativeDir)
                     }
                 }
-                // 核心后端库（capstone/keystone/unicorn/jnidispatch）是 Unidbg
-                // 执行路径的硬依赖，缺失则整体不可用。disassembler/demumble 只
-                // 服务部分诊断路径且没有 Android prebuilt 来源，缺失时降级为
-                // 警告，不再让整个 Unidbg 后端因为它们而不可用。
-                listOf("capstone", "keystone", "unicorn", "jnidispatch").forEach {
+                // 核心后端库：capstone / keystone / jnidispatch 所有 ABI 都有，
+                // unicorn 仅 64 位（32 位 Android 上 QEMU 因 __uint128_t 不可编译）。
+                listOf("capstone", "keystone", "jnidispatch").forEach {
                     System.loadLibrary(it)
+                }
+                if (abi64Bit) {
+                    runCatching { System.loadLibrary("unicorn") }
+                        .onSuccess {
+                            unicornLoaded = true
+                            AppLog.i("Unidbg native libunicorn.so loaded for 64-bit runtime")
+                        }
+                        .onFailure {
+                            unicornLoaded = false
+                            AppLog.w(
+                                "libunicorn.so not found on this 64-bit device — " +
+                                    "Unicorn2Factory will fail. Re-run build-unidbg-native.sh " +
+                                    "or install a release APK that bundles unicorn: ${it.message}"
+                            )
+                        }
+                } else {
+                    unicornLoaded = false
+                    AppLog.i(
+                        "32-bit Android runtime detected — skipping libunicorn.so load " +
+                            "(unicorn/QEMU requires __uint128_t, unavailable on armeabi-v7a/x86)"
+                    )
                 }
                 listOf("disassembler", "demumble").forEach {
                     runCatching { System.loadLibrary(it) }
@@ -138,13 +197,19 @@ class UnidbgEmulator(private val context: Context) {
 
         /**
          * Human-readable reason for Unidbg being unavailable. Distinguishes a
-         * missing unidbg classpath (dependency not packaged) from missing
-         * native libraries (libcapstone.so / libkeystone.so / libunicorn.so /
-         * libjnidispatch.so not bundled into the APK's jniLibs) so callers and
-         * the status report stop giving the misleading "classes not on
-         * classpath" message when the real problem is native packaging.
+         * missing unidbg classpath, missing native libraries, and the
+         * unicorn-specific cases (32-bit runtime or 64-bit build without it)
+         * so callers and the status report stop giving the misleading
+         * "classes not on classpath" message when the real problem is
+         * native packaging.
          */
         fun unavailableReason(): String {
+            val abi64Bit = runCatching {
+                val primary = android.os.Build.SUPPORTED_ABIS.firstOrNull()
+                primary?.endsWith("64") ?: false
+            }.getOrDefault(
+                System.getProperty("os.arch")?.endsWith("64") ?: false
+            )
             val classesMissing = runCatching {
                 Class.forName("com.github.unidbg.AndroidEmulator")
                 Class.forName("com.github.unidbg.linux.android.AndroidEmulatorBuilder")
@@ -154,7 +219,13 @@ class UnidbgEmulator(private val context: Context) {
                     "Unidbg classes not on classpath; check dependency com.github.zhkl0228:unidbg-android"
 
                 nativeLoadError != null ->
-                    "Unidbg native libraries not bundled in this APK (${nativeLoadError?.message ?: "native load failed"}); libcapstone.so / libkeystone.so / libunicorn.so / libjnidispatch.so must be shipped in jniLibs or installed separately"
+                    "Unidbg native libraries load failed (${nativeLoadError?.message ?: "native load failed"}); libcapstone.so / libkeystone.so / libjnidispatch.so must be shipped in jniLibs or installed separately"
+
+                !abi64Bit ->
+                    "Unidbg backend (libunicorn.so) is not available on 32-bit Android targets (armeabi-v7a / x86). unicorn/QEMU requires __uint128_t which the Android NDK does not expose for 32-bit builds; install a 64-bit ABI APK."
+
+                abi64Bit && !unicornLoaded ->
+                    "libunicorn.so was not bundled into this 64-bit APK. Unicorn2Factory requires it. Rebuild with build-unidbg-native.sh or install a release APK that bundles the unicorn native library."
 
                 else -> "Unidbg unavailable on this device"
             }
@@ -206,6 +277,17 @@ class UnidbgEmulator(private val context: Context) {
     fun available(): Boolean = runCatching {
         appNativeLibraryDir = context.applicationInfo.nativeLibraryDir
         if (!ensureNativeLibraries()) return@runCatching false
+        val abi64Bit = runCatching {
+            val primary = android.os.Build.SUPPORTED_ABIS.firstOrNull()
+            primary?.endsWith("64") ?: false
+        }.getOrDefault(
+            System.getProperty("os.arch")?.endsWith("64") ?: false
+        )
+        // Unidbg's sole backend (Unicorn2Factory) needs libunicorn.so. On
+        // 32-bit Android it is never bundled (QEMU/__uint128_t constraint);
+        // on 64-bit Android we must have actually loaded it. Either way, no
+        // unicorn ⇒ no usable backend ⇒ Unidbg can't run.
+        if (!abi64Bit || !unicornLoaded) return@runCatching false
         Class.forName("com.github.unidbg.AndroidEmulator")
         Class.forName("com.github.unidbg.linux.android.AndroidEmulatorBuilder")
         true
@@ -1968,22 +2050,43 @@ class UnidbgEmulator(private val context: Context) {
     }
 
     private fun addUnicorn2Backend(builder: Any): String {
-        val factoryClass =
-            runCatching {
-                Class.forName("com.github.unidbg.arm.backend.Unicorn2Factory")
-            }.getOrNull()
-                ?: return "missing"
-        val factory =
-            factoryClass.constructors.firstOrNull {
-                it.parameterCount == 1 &&
-                    it.parameterTypes[0] == Boolean::class.javaPrimitiveType
-            }
-                ?.newInstance(true)
+        // Unicorn2Factory has a static init block that calls NativeLoader.loadLibrary("unicorn"),
+        // which only catches IOException. If scijava-native-lib-loader was stripped by R8
+        // (NoClassDefFoundError → LinkageError, NOT an IOException) or unicorn simply isn't
+        // loadable on this ABI, Class.forName fails with ExceptionInInitializerError.
+        // We also wrap the factory instantiation: Unicorn2Backend's constructor performs
+        // the actual JNI binding to libunicorn.so and throws UnsatisfiedLinkError if
+        // unicorn was never loaded. Either failure is non-fatal — it just means no
+        // backend factory is registered and Unidbg falls through to its default.
+        val result = runCatching {
+            val factoryClass = Class.forName("com.github.unidbg.arm.backend.Unicorn2Factory")
+            val factory = factoryClass.constructors.firstOrNull {
+                it.parameterCount == 1 && it.parameterTypes[0] == Boolean::class.javaPrimitiveType
+            }?.newInstance(true)
                 ?: factoryClass.getDeclaredConstructor().newInstance()
-        val builderClass = Class.forName("com.github.unidbg.EmulatorBuilder")
-        val backendFactoryClass = Class.forName("com.github.unidbg.arm.backend.BackendFactory")
-        builderClass.getMethod("addBackendFactory", backendFactoryClass).invoke(builder, factory)
-        return factoryClass.name
+            val builderClass = Class.forName("com.github.unidbg.EmulatorBuilder")
+            val backendFactoryClass = Class.forName("com.github.unidbg.arm.backend.BackendFactory")
+            builderClass.getMethod("addBackendFactory", backendFactoryClass).invoke(builder, factory)
+            factoryClass.name
+        }
+        result.onFailure { e ->
+            val root = rootCause(e)
+            when (root) {
+                is NoClassDefFoundError ->
+                    AppLog.w(
+                        "Unicorn2Factory init failed — NativeLoader or unicorn class missing: ${root.message}. " +
+                            "Check that scijava-native-lib-loader is not stripped by ProGuard/R8 (see -keep rule in proguard-rules.pro)."
+                    )
+                is UnsatisfiedLinkError ->
+                    AppLog.w(
+                        "Unicorn2Factory backend init failed — libunicorn.so could not be bound: ${root.message}. " +
+                            "Run build-unidbg-native.sh for this ABI or install a release APK."
+                    )
+                else ->
+                    AppLog.w("Unicorn2Factory backend init failed: ${root.message} (${root.javaClass.simpleName})")
+            }
+        }
+        return result.getOrNull() ?: "missing"
     }
 
     private fun rootCause(error: Throwable): Throwable {
