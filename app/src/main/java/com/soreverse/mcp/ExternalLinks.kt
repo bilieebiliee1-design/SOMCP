@@ -31,15 +31,23 @@ import com.soreverse.mcp.core.AppLog
  * Safely launches the SAF directory-tree picker ([Intent.ACTION_OPEN_DOCUMENT_TREE]).
  *
  * Some OEM builds (e.g. EMUI/HarmonyOS on Huawei) ship without any app that can
- * handle this action. Pointing a plain `ActivityResultLauncher` at it would throw
- * [ActivityNotFoundException] (and crash) when launched. This helper first checks
- * [resolveActivity]; if no handler exists it surfaces a Toast instead of crashing,
- * and still guards the launch against a race where the handler disappears.
+ * handle this action, and pointing a plain `ActivityResultLauncher` at it would then
+ * throw [ActivityNotFoundException]. This helper guards the launch in a try/catch and
+ * surfaces a Toast instead of crashing.
+ *
+ * IMPORTANT: the launch is NOT pre-gated on `intent.resolveActivity()`. On several OEM
+ * ROMs (OnePlus/ColorOS, some MIUI builds) the resolver reports no handler for
+ * `ACTION_OPEN_DOCUMENT_TREE` through `resolveActivity()` even though a working SAF
+ * document provider is installed and `startActivityForResult` succeeds. Gating the
+ * launch on that (unreliable) check produced the false "无 SAF 文件提供方 / no folder
+ * picker" error on otherwise healthy devices. We launch directly and only surface the
+ * helper message when the system genuinely throws [ActivityNotFoundException].
  */
 internal fun launchSafTreePicker(context: Context, zh: Boolean, launcher: ActivityResultLauncher<Uri?>) {
-    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-    if (intent.resolveActivity(context.packageManager) == null) {
-        AppLog.w("No activity can handle ACTION_OPEN_DOCUMENT_TREE; SAF folder picker unavailable.")
+    try {
+        launcher.launch(null)
+    } catch (_: ActivityNotFoundException) {
+        AppLog.w("ACTION_OPEN_DOCUMENT_TREE not handled; SAF folder picker unavailable.")
         Toast.makeText(
             context,
             if (zh) {
@@ -47,17 +55,6 @@ internal fun launchSafTreePicker(context: Context, zh: Boolean, launcher: Activi
             } else {
                 "No folder picker available on this device (no SAF document provider). Install or enable a file manager and retry."
             },
-            Toast.LENGTH_LONG
-        ).show()
-        return
-    }
-    try {
-        launcher.launch(null)
-    } catch (_: ActivityNotFoundException) {
-        AppLog.w("ACTION_OPEN_DOCUMENT_TREE handler vanished between resolveActivity and launch.")
-        Toast.makeText(
-            context,
-            if (zh) "无法打开文件夹选择器，请稍后重试。" else "Cannot open folder picker. Please retry.",
             Toast.LENGTH_LONG
         ).show()
     }
