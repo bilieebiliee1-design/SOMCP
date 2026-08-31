@@ -63,6 +63,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -420,11 +421,13 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
             BackupToggleRow(
                 text = t.backupEncryptToggle,
                 subtitle = t.backupEncryptToggleSubtitle,
-                checked = encryptEnabled
+                checked = encryptEnabled,
+                // 包含密钥时锁定开关，强制保持密码加密开启
+                enabled = !includeSecrets
             ) { enabled ->
                 if (enabled) {
                     showEncryptWarning = true
-                } else {
+                } else if (!includeSecrets) {
                     encryptEnabled = false
                     encryptPassword = ""
                 }
@@ -561,7 +564,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
 }
 
 @Composable
-private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     val metrics = LocalUiMetrics.current
     Row(
         Modifier
@@ -585,7 +588,8 @@ private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, on
         }
         BackupSwitch(
             checked = checked,
-            onCheckedChange = onChange
+            onCheckedChange = onChange,
+            enabled = enabled
         )
     }
 }
@@ -597,7 +601,7 @@ private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, on
  * where the thumb incorrectly stayed pinned to the left.
  */
 @Composable
-private fun BackupSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+private fun BackupSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val trackWidth = 48.dp
     val trackHeight = 28.dp
     val thumbSize = 24.dp
@@ -618,8 +622,10 @@ private fun BackupSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, m
                     MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
                 }
             )
+            .alpha(if (enabled) 1f else 0.4f)
             .toggleable(
                 value = checked,
+                enabled = enabled,
                 role = Role.Switch,
                 onValueChange = onCheckedChange
             ),
