@@ -564,7 +564,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
 }
 
 @Composable
-private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
+private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     val metrics = LocalUiMetrics.current
     Row(
         Modifier
