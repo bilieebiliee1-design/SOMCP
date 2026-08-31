@@ -564,13 +564,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
 }
 
 @Composable
-private fun BackupToggleRow(
-    text: String,
-    subtitle: String,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-    enabled: Boolean = true
-) {
+private fun BackupToggleRow(text: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
     val metrics = LocalUiMetrics.current
     Row(
         Modifier
@@ -607,12 +601,7 @@ private fun BackupToggleRow(
  * where the thumb incorrectly stayed pinned to the left.
  */
 @Composable
-private fun BackupSwitch(
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true
-) {
+private fun BackupSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val trackWidth = 48.dp
     val trackHeight = 28.dp
     val thumbSize = 24.dp
