@@ -65,8 +65,8 @@ jobs:
       #      （打 作者-时间戳 标签以跨运行持久化计数），连续 7 天内累计 5 次警告
       #      则限制该作者 7 天，限制期内其新提交的 issue 自动警告并关闭；
       #   2) 跨作者重复（与其他作者的历史 issue 重复，如都上报同一句报错文案）：
-      #      评论引导到原 issue 并自动关闭新 issue；不计警告、不触发限制
-      #      （不同用户独立提问互不惩罚，但避免同一问题产生多个工单）。
+      #      同样计 1 次作者警告并自动关闭新 issue（评论会注明原 issue 与作者），
+      #      防止借他人先例反复开重复单；累计 5 次同样触发 7 天限制。
       # 重复判定信号：归一化标题完全一致 / token 集合 Jaccard>=0.5（同作者）/
       # 共享显著长文本片段（归一化后 >=10 字符的相同 token，如整句报错文案；
       # 该信号同作者与跨作者均适用）。机制与 pr-auto-review.yml 的作者限制
@@ -189,8 +189,10 @@ jobs:
               }
               return best;
             };
-            let dup = null, bestScore = 0;   // 同作者重复（走警告/限制流程）
-            let crossDup = null;             // 跨作者重复（走引导/关闭流程）
+            // dup: 同作者重复候选（得分制）；crossDup: 跨作者重复候选（显著片段
+            // 命中）。两者命中都会计入当前作者的重复警告并关闭新 issue。
+            let dup = null, bestScore = 0;   // 同作者重复候选
+            let crossDup = null;             // 跨作者重复候选
             for (const it of priorIssues) {
               if (it.number === issue_number) continue;
               const t = norm(it.title || '');
@@ -207,47 +209,30 @@ jobs:
                 if (!crossDup || new Date(it.created_at) > new Date(crossDup.created_at)) crossDup = it;
               }
             }
-            const isDuplicate = !!dup && bestScore >= 0.5 && curTokens.size >= 2;
-            if (!isDuplicate) {
-              // 3a) 无同作者重复但存在跨作者重复：评论引导到原 issue 并自动关闭
-              //     新 issue；不计作者警告、不触发限制（不同用户独立提问互不惩罚，
-              //     只避免同一问题重复开单）。
-              if (crossDup) {
-                const cdAuthor = String((crossDup.user || {}).login || 'unknown');
-                const cdTitle = String(crossDup.title || '').slice(0, 120);
-                const willClose = autoClose && !isExempt;
-                const cdMsg = (willClose ? '## 重复 Issue 自动关闭' : '## 疑似重复 Issue') +
-                  '\n\n本 issue 与已存在的 #' + crossDup.number +
-                  '（作者：@' + cdAuthor + '，标题：' + cdTitle +
-                  '）描述的是同一个问题（检测到相同的关键内容/报错文案）。为避免重复工单并让同一问题集中讨论，请到 #' +
-                  crossDup.number + ' 下查看进展或继续补充信息；若你的场景确有差异，请重新开 issue 并明确说明不同点。' +
-                  (willClose ? '\n\n（本次不计入任何作者警告。）' : '');
-                try { await github.rest.issues.createComment({ owner, repo, issue_number, body: cdMsg }); } catch (e) {}
-                if (willClose) {
-                  try {
-                    const cur = (await github.rest.issues.get({ owner, repo, issue_number })).data;
-                    if (cur.state === 'open' && !cur.pull_request) {
-                      await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
-                      console.log('Closed duplicate issue #' + issue_number + ' (cross-author duplicate of #' + crossDup.number + ').');
-                    }
-                  } catch (e) {}
-                }
-                core.setOutput('restricted', 'false');
-                core.setOutput('duplicate', 'true');
-                return;
-              }
+            const isSameAuthorDup = !!dup && bestScore >= 0.5 && curTokens.size >= 2;
+            if (!isSameAuthorDup && !crossDup) {
               core.setOutput('restricted', 'false');
               core.setOutput('duplicate', 'false');
               return;
             }
+            // 命中（同作者或跨作者），统一走下面"记警告 + 评论 + 关闭"流程：
+            // 跨作者重复同样计作者警告（7 天 5 次触发限制），评论会注明原 issue
+            // 与作者，避免同一问题反复开重复单。
+            const dupRef = isSameAuthorDup ? dup : crossDup;
+            const isCross = !isSameAuthorDup;
 
-            // 4) 判定为同作者重复 -> 记录 1 次警告 + 评论提示，并关闭该重复 issue。
+            // 4) 记录 1 次作者警告 + 评论提示，并关闭该重复 issue（同作者/跨作者一致）。
             const soonWarn = warned.size + 1;
             const cntPart = soonWarn >= 5
               ? '你已经被限制，无法再提交 issue。'
               : '当前连续 7 天内已累计 **' + soonWarn + '/5 次重复警告**，达到 5 次将被限制 7 天。';
-            const dupMsg = '## 重复 Issue 自动关闭\n\n本 issue 与已存在的 #' + dup.number +
-              '（标题：' + (dup.title || '') + '）内容重复。为保证工单质量，请勿重复提交相同问题，请到原 issue 下继续讨论或补充信息。' + cntPart;
+            const dupRefAuthor = String((dupRef.user || {}).login || 'unknown');
+            const dupRefTitle = String(dupRef.title || '').slice(0, 120);
+            const dupMsg = '## 重复 Issue 自动关闭\n\n本 issue 与已存在的 #' + dupRef.number +
+              (isCross ? '（作者：@' + dupRefAuthor + '，标题：' + dupRefTitle + '）' : '') +
+              '内容重复' + (isCross ? '（检测到相同的关键内容/报错文案）' : '') +
+              '。为保证工单质量，请勿重复提交相同问题，请到原 issue 下继续讨论或补充信息' +
+              (isCross ? '；若你的场景确有差异，请重新开 issue 并明确说明不同点' : '') + '。' + cntPart;
             try {
               await github.rest.issues.addLabels({
                 owner, repo, issue_number,
@@ -264,7 +249,7 @@ jobs:
                 const cur = (await github.rest.issues.get({ owner, repo, issue_number })).data;
                 if (cur.state === 'open' && !cur.pull_request) {
                   await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
-                  console.log('Closed duplicate issue #' + issue_number + '.');
+                  console.log('Closed duplicate issue #' + issue_number + (isCross ? ' (cross-author duplicate of #' + dupRef.number + ').' : '.'));
                 }
               } catch (e) {}
             }
