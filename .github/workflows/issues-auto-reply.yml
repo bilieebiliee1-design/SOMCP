@@ -60,11 +60,17 @@ jobs:
             -o /tmp/manual-issue.json
           echo "issue_number=${{ inputs.issue_number }}" >> "$GITHUB_OUTPUT"
 
-      # 重复 issue 作者限制检查：检测提交者是否重复提交相同/相似内容的 issue，
-      # 每发现一次重复计 1 次警告（打 作者-时间戳 标签以跨运行持久化计数）；
-      # 连续 7 天内累计 5 次警告则将该作者限制 7 天，限制期内其新提交的 issue
-      # 会被自动警告并关闭。机制与 pr-auto-review.yml 的作者限制一致，此处针对
-      # "重复提 issue" 而非"审查警告"。仓库所有者始终豁免。
+      # 重复 issue 检查（支持跨作者）：
+      #   1) 同作者重复（当前作者自己的历史 issue 与本次内容重复）：计 1 次警告
+      #      （打 作者-时间戳 标签以跨运行持久化计数），连续 7 天内累计 5 次警告
+      #      则限制该作者 7 天，限制期内其新提交的 issue 自动警告并关闭；
+      #   2) 跨作者重复（与其他作者的历史 issue 重复，如都上报同一句报错文案）：
+      #      评论引导到原 issue 并自动关闭新 issue；不计警告、不触发限制
+      #      （不同用户独立提问互不惩罚，但避免同一问题产生多个工单）。
+      # 重复判定信号：归一化标题完全一致 / token 集合 Jaccard>=0.5（同作者）/
+      # 共享显著长文本片段（归一化后 >=10 字符的相同 token，如整句报错文案；
+      # 该信号同作者与跨作者均适用）。机制与 pr-auto-review.yml 的作者限制
+      # 一致，仓库所有者始终豁免。
       - name: Check duplicate-issue author restriction
         id: restrict
         uses: actions/github-script@v7
@@ -104,12 +110,13 @@ jobs:
             const restrictRe = new RegExp('^' + restrictPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$');
 
             const warned = new Set();   // 有生效警告的 issue 编号（按 issue 去重）
-            const priorIssues = [];      // 作者的历史 issues，供重复比对
+            const priorIssues = [];      // 候选 issue（全仓库，含其他作者），供重复比对
             let alreadyRestricted = false;
             try {
-              // Paginate so authors with >100 issues are scanned fully.
+              // 全仓库（所有作者）分页拉取，供跨作者重复比对；
+              // warned/restricted 标签带作者名前缀，下面只会统计当前作者的计数。
               const items = await github.paginate(github.rest.issues.listForRepo, {
-                owner, repo, creator: author, state: 'all', per_page: 100
+                owner, repo, state: 'all', per_page: 100
               });
               for (const it of items || []) {
                 if (it.pull_request) continue;  // 只比对 issue，不比对 PR
@@ -157,9 +164,14 @@ jobs:
               return;
             }
 
-            // 2) 在该作者自己的历史 issues 中比对重复。归一化后标题完全一致即为
-            //    强重复；否则按标题+正文的 token 集合 Jaccard 相似度估算，数值越
-            //    高越可能是重复（避免误伤内容不同的 issue）。
+            // 2) 比对全仓库 issue（含其他作者）。重复判定信号：
+            //    - 归一化标题完全一致（强重复）；
+            //    - 同作者时按标题+正文 token 集合 Jaccard>=0.5 估算，数值越高
+            //      越可能重复（避免误伤内容不同的 issue）；
+            //    - 共享显著长文本片段：双方归一化 token 中存在 >=10 字符的相同
+            //      token（如整句报错文案"当前设备没有可用的文件夹选择器…"），
+            //      同作者与跨作者都适用，可命中正文只共享一句报错文案的重复
+            //      （如 #78 与 #71 由不同作者提交但报同一句 SAF 错误提示）。
             const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ');
             const curNT = norm(title);
             const curTokens = new Set((curNT + ' ' + norm(body)).split(' ').filter(Boolean));
@@ -169,23 +181,67 @@ jobs:
               for (const t of a) if (b.has(t)) inter++;
               return inter / (a.size + b.size - inter);
             };
-            let dup = null, bestScore = 0;
+            // 与当前 issue 共享的最长显著片段长度（无则 0）。
+            const sharedSignature = (tok) => {
+              let best = 0;
+              for (const t of tok) {
+                if (t.length >= 10 && curTokens.has(t)) best = Math.max(best, t.length);
+              }
+              return best;
+            };
+            let dup = null, bestScore = 0;   // 同作者重复（走警告/限制流程）
+            let crossDup = null;             // 跨作者重复（走引导/关闭流程）
             for (const it of priorIssues) {
               if (it.number === issue_number) continue;
               const t = norm(it.title || '');
-              if (t && t === curNT) { dup = it; bestScore = 1; break; }
               const tok = new Set((t + ' ' + norm(it.body || '')).split(' ').filter(Boolean));
-              const sc = jaccard(curTokens, tok);
-              if (sc > bestScore) { bestScore = sc; dup = it; }
+              const sig = sharedSignature(tok);
+              const sameAuthor = String((it.user || {}).login || '').toLowerCase() === authorKey;
+              if (sameAuthor) {
+                let sc = 0;
+                if (t && t === curNT) sc = 1;
+                else if (curTokens.size >= 2) sc = Math.max(jaccard(curTokens, tok), sig >= 10 ? 0.8 : 0);
+                if (sc > bestScore) { bestScore = sc; dup = it; }
+              } else if (curTokens.size >= 2 && sig >= 10) {
+                // 跨作者命中：保留最近创建的一条作为主引用
+                if (!crossDup || new Date(it.created_at) > new Date(crossDup.created_at)) crossDup = it;
+              }
             }
             const isDuplicate = !!dup && bestScore >= 0.5 && curTokens.size >= 2;
             if (!isDuplicate) {
+              // 3a) 无同作者重复但存在跨作者重复：评论引导到原 issue 并自动关闭
+              //     新 issue；不计作者警告、不触发限制（不同用户独立提问互不惩罚，
+              //     只避免同一问题重复开单）。
+              if (crossDup) {
+                const cdAuthor = String((crossDup.user || {}).login || 'unknown');
+                const cdTitle = String(crossDup.title || '').slice(0, 120);
+                const willClose = autoClose && !isExempt;
+                const cdMsg = (willClose ? '## 重复 Issue 自动关闭' : '## 疑似重复 Issue') +
+                  '\n\n本 issue 与已存在的 #' + crossDup.number +
+                  '（作者：@' + cdAuthor + '，标题：' + cdTitle +
+                  '）描述的是同一个问题（检测到相同的关键内容/报错文案）。为避免重复工单并让同一问题集中讨论，请到 #' +
+                  crossDup.number + ' 下查看进展或继续补充信息；若你的场景确有差异，请重新开 issue 并明确说明不同点。' +
+                  (willClose ? '\n\n（本次不计入任何作者警告。）' : '');
+                try { await github.rest.issues.createComment({ owner, repo, issue_number, body: cdMsg }); } catch (e) {}
+                if (willClose) {
+                  try {
+                    const cur = (await github.rest.issues.get({ owner, repo, issue_number })).data;
+                    if (cur.state === 'open' && !cur.pull_request) {
+                      await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
+                      console.log('Closed duplicate issue #' + issue_number + ' (cross-author duplicate of #' + crossDup.number + ').');
+                    }
+                  } catch (e) {}
+                }
+                core.setOutput('restricted', 'false');
+                core.setOutput('duplicate', 'true');
+                return;
+              }
               core.setOutput('restricted', 'false');
               core.setOutput('duplicate', 'false');
               return;
             }
 
-            // 3) 判定为重复 -> 记录 1 次警告 + 评论提示，并关闭该重复 issue。
+            // 4) 判定为同作者重复 -> 记录 1 次警告 + 评论提示，并关闭该重复 issue。
             const soonWarn = warned.size + 1;
             const cntPart = soonWarn >= 5
               ? '你已经被限制，无法再提交 issue。'
@@ -213,7 +269,7 @@ jobs:
               } catch (e) {}
             }
 
-            // 4) 连续 7 天内累计 >=5 次警告 -> 触发 7 天限制（自动警告并关闭后续 issue）。
+            // 5) 连续 7 天内累计 >=5 次警告 -> 触发 7 天限制（自动警告并关闭后续 issue）。
             if (warned.size >= 5 && !isExempt && autoClose) {
               if (!alreadyRestricted) {
                 try {
