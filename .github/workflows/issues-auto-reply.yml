@@ -422,7 +422,10 @@ jobs:
           LINKS_ASSETS=$(printf '%s' "$CONTENT" \
             | grep -oiE 'https://github\.com/user-attachments/assets/[a-zA-Z0-9._-]+' \
             | tr -d '\r' | sort -u || true)
-          LINKS=$(printf '%s\n%s\n' "$LINKS" "$LINKS_ASSETS" | grep -v '^$' | sort -u)
+          # L3 回归: 此处漏掉 `|| true`，issue 正文无附件时 grep -v 无输出返回码 1，
+          # 在 set -euo pipefail 下会提前终止步骤，导致后续 LLM 回复全部被跳过。
+          # 与上方两个提取管道保持一致，加 `|| true` 屏蔽无附件时的非零状态。
+          LINKS=$(printf '%s\n%s\n' "$LINKS" "$LINKS_ASSETS" | grep -v '^$' | sort -u || true)
           printf '%s\n' "$LINKS" \
             | while IFS= read -r url; do
                 [ -n "$url" ] || continue
