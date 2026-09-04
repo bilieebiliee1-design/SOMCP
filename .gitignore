@@ -10,6 +10,7 @@ __pycache__/
 .trae/
 .reasonix/
 .workbuddy/
+.cyberstrike/
 
 # Local Android configuration
 local.properties
