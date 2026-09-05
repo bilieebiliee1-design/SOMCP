@@ -59,7 +59,6 @@
 #define LOG_TAG "SignatureVerify"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-
 // ---------------------------------------------------------------------------
 // Memory-mapped APK reader
 //
@@ -733,65 +732,28 @@ static bool crc32_matches_inflated(const uint8_t* compressed, size_t compressed_
 // Obfuscated expected signer digest
 //
 // The SHA-256 hex string of the official release signing certificate is
-// stored XOR-encoded so it never appears as a plain-text literal in the
-// binary. This makes it harder for crackers to find and replace the
-// expected value when re-signing the APK with a different key.
+// stored with a rotating multi-byte XOR cipher so it never appears as a
+// plain-text literal in the binary. The encoded arrays and key are defined
+// in key_generated.h (generated at build time from the TM GitHub secret).
 //
 // The expected hash below is:
 //   90FEDAC1F020C6C5D1DD1A635DB5C3B7579F5B87647E2C2C00966D3BCB0F8B6F
-// Encoded with XOR key 0xA5.
 // ---------------------------------------------------------------------------
-static const uint8_t kEncodedExpectedSha256[] = {
-    0x9C, 0x95, 0xE3, 0xE0, 0xE1, 0xE4, 0xE6, 0x94, 0xE3, 0x95,
-    0x97, 0x95, 0xE6, 0x93, 0xE6, 0x90, 0xE1, 0x94, 0xE1, 0xE1,
-    0x94, 0xE4, 0x93, 0x96, 0x90, 0xE1, 0xE7, 0x90, 0xE6, 0x96,
-    0xE7, 0x92, 0x90, 0x92, 0x9C, 0xE3, 0x90, 0xE7, 0x9D, 0x92,
-    0x93, 0x91, 0x92, 0xE0, 0x97, 0xE6, 0x97, 0xE6, 0x95, 0x95,
-    0x9C, 0x93, 0x93, 0xE1, 0x96, 0xE7, 0xE6, 0xE7, 0x95, 0xE3,
-    0x9D, 0xE7, 0x93, 0xE3
-};
-static const size_t kEncodedExpectedSha256Len = 64;
+// All encoded arrays and the XOR key are defined in key_generated.h:
+//   #include "key_generated.h"  (at line 787 below)
+// ---------------------------------------------------------------------------
 
-// Also store MD5, SHA1, SHA512 for reference (all XOR-encoded with key 0xA5).
-static const uint8_t kEncodedMD5[] = {
-    0x91, 0x90, 0x96, 0x9C, 0x91, 0xE7, 0x93, 0xE4, 0x92, 0xE6,
-    0x92, 0xE0, 0x91, 0x94, 0x90, 0x96, 0x9D, 0x93, 0x9D, 0x9D,
-    0x96, 0xE7, 0xE4, 0xE3, 0xE6, 0xE6, 0x91, 0x90, 0xE7, 0x96,
-    0xE7, 0xE1
-};
-static const uint8_t kEncodedSHA1[] = {
-    0x92, 0xE4, 0x90, 0x9D, 0x90, 0x95, 0xE1, 0x93, 0xE4, 0xE6,
-    0x96, 0x96, 0x96, 0x96, 0xE1, 0x90, 0xE0, 0xE7, 0x92, 0xE7,
-    0xE6, 0xE7, 0x93, 0x91, 0x91, 0xE0, 0xE6, 0xE4, 0xE1, 0x96,
-    0xE1, 0x90, 0xE4, 0x93, 0xE7, 0x9D, 0x9C, 0x91, 0x93, 0x90
-};
-static const uint8_t kEncodedSHA512[] = {
-    0xE4, 0xE0, 0x91, 0x95, 0x97, 0xE1, 0x94, 0x93, 0x93, 0x90,
-    0x95, 0x90, 0x97, 0x91, 0x93, 0x97, 0x93, 0xE4, 0xE4, 0x9D,
-    0x96, 0x91, 0xE3, 0xE7, 0xE1, 0x95, 0xE7, 0x96, 0x97, 0x97,
-    0xE3, 0x96, 0xE0, 0x93, 0x96, 0x95, 0x93, 0xE4, 0x95, 0x91,
-    0x94, 0x9C, 0x9C, 0x91, 0xE7, 0x9C, 0x9D, 0x91, 0xE0, 0x95,
-    0x96, 0x9D, 0xE0, 0xE6, 0x90, 0x91, 0x92, 0x97, 0x95, 0x90,
-    0x95, 0xE6, 0x92, 0x90, 0x92, 0x93, 0xE6, 0x95, 0x97, 0x92,
-    0xE7, 0xE3, 0xE3, 0xE6, 0x90, 0x92, 0x90, 0x90, 0xE1, 0x94,
-    0x90, 0x96, 0xE6, 0x9D, 0x9D, 0x9D, 0x94, 0x9D, 0x9C, 0xE6,
-    0x90, 0x9D, 0x91, 0xE6, 0x9C, 0x91, 0x91, 0x93, 0xE4, 0x92,
-    0x92, 0x93, 0x93, 0xE4, 0x90, 0xE1, 0xE4, 0x91, 0x97, 0x91,
-    0xE1, 0xE1, 0x9C, 0x96, 0x9D, 0xE7, 0xE3, 0x97, 0xE4, 0x9D,
-    0x94, 0x92, 0xE4, 0x9C, 0xE7, 0x9C, 0xE0, 0x96
-};
-
-static const uint8_t kXorKey = 0xA5;
+#include "key_generated.h"
 
 /**
- * Decodes a XOR-encoded hex string into a plain hex string.
- * The encoded data is XOR'd with kXorKey byte by byte.
+ * Decodes a rotating multi-byte XOR-encoded hex string into a plain hex string.
+ * Each byte is XOR'd with kXorKey[i % kXorKeyLen] (from key_generated.h).
  */
 static std::string decode_xor_hex(const uint8_t* encoded, size_t len) {
     std::string result;
     result.reserve(len);
     for (size_t i = 0; i < len; i++) {
-        result.push_back(static_cast<char>(encoded[i] ^ kXorKey));
+        result.push_back(static_cast<char>(encoded[i] ^ kXorKey[i % kXorKeyLen]));
     }
     return result;
 }
@@ -911,21 +873,14 @@ static std::string sha256_hex(const uint8_t* data, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// Expected package name pin
+// Package name pin
 //
 // The app's package name ("com.soreverse.mcp") is pinned here, XOR-obfuscated
 // with the same key as the signer digest, so a repackaged build that changes
-// the package / applicationId is rejected at the native layer even if the
-// Java-level context.packageName is spoofed.
 // ---------------------------------------------------------------------------
-static const uint8_t kEncodedExpectedPackage[] = {
-    0xC6, 0xCA, 0xC8, 0x8B, 0xD6, 0xCA, 0xD7, 0xC0, 0xD3, 0xC0,
-    0xD7, 0xD6, 0xC0, 0x8B, 0xC8, 0xC6, 0xD5
-};
-static const size_t kEncodedExpectedPackageLen = sizeof(kEncodedExpectedPackage);
-
+// Package name pin: "com.soreverse.mcp" encoded with the rotating multi-byte
+// XOR cipher defined in key_generated.h (see extern declaration above).
 // ---------------------------------------------------------------------------
-// APK integrity verification
 //
 // Parses the APK ZIP central directory and checks:
 //   1. the ZIP structure is well-formed (EOCD + central directory in bounds);
@@ -1094,11 +1049,17 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
 
 /**
  * Returns the expected SHA-256 digest of the official release signing
- * certificate. The value is stored XOR-encoded in the binary and decoded
- * at runtime, so it does not appear as a plain-text literal.
+ * certificate. The value is stored XOR-encoded in key_generated.h and decoded
+ * at runtime, so it does not appear as a plain-text literal in the .so binary.
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDigest(
+Java_com_soreverse_mcp_nativecore_SignatureVerifier/nativeGetExpectedSignerDigest(
+    JNIEnv* env, jobject thiz) {
+    std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
+    return env->NewStringUTF(digest.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_soreverse_mcp_nativecore_SignatureVerifier/nativeGetExpectedSignerDigest(
     JNIEnv* env, jobject thiz) {
     std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
     return env->NewStringUTF(digest.c_str());
@@ -1432,7 +1393,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyPackageName(
     JNIEnv* env, jobject thiz, jstring packageName) {
 
     if (!packageName) {
-        LOGE("packageName is null");
+        LOGE("nativeVerifyPackageName: packageName is null");
         return JNI_FALSE;
     }
 

@@ -22,6 +22,9 @@ release-assets/
 *.keystore
 keystore.properties
 
+# Generated XOR key header (contains sensitive key material from TM secret) — CI only
+app/src/main/cpp/key_generated.h
+
 # Generated binaries and native build outputs
 *.apk
 *.aab

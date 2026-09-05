@@ -38,7 +38,11 @@ android {
 
         externalNativeBuild {
             cmake {
-                cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
+                cppFlags += listOf(
+                    "-std=c++17", "-fexceptions", "-frtti",
+                    // Additional compile-time checks
+                    "-Wall", "-Wextra"
+                )
                 arguments += listOf("-DANDROID_STL=c++_shared")
                 // Rizin source tree location. Optional: defaults to the repo's
                 // third_party/rizin-src (see CMakeLists.txt); set RIZIN_SRC to
@@ -51,6 +55,10 @@ android {
                 }
             }
         }
+
+        // Key and encoded arrays are generated at build time by generate_header.py
+        // from the TM GitHub Actions secret (CI only). There is no local fallback.
+        // Build requires: $env:TM = '<16-hex-chars>'
     }
 
     buildFeatures {
