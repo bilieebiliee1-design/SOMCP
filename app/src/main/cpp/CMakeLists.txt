@@ -85,6 +85,39 @@ endif()
 add_library(rz_native SHARED ${RZ_SOURCES})
 target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
+# Generate key_generated.h from the TM GitHub Actions secret.
+# The key is read from $TM (16 hex chars = 8 bytes). If $TM is not set,
+# the build fails — there is no local development fallback.
+set(KEY_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/key_generated.h")
+
+if(DEFINED ENV{TM} AND NOT "$ENV{TM}" STREQUAL "")
+    message(STATUS "[xor-key] generating key_generated.h from TM secret")
+    execute_process(
+        COMMAND python "${CMAKE_SOURCE_DIR}/app/generate_header.py"
+            --key "$ENV{TM}"
+            --src "${CMAKE_CURRENT_SOURCE_DIR}/signature_verify.cpp"
+            --dst "${KEY_GENERATED}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE GEN_RESULT
+    )
+    if(NOT GEN_RESULT EQUAL 0)
+        message(FATAL_ERROR "[xor-key] generation failed. Check generate_header.py output.")
+    endif()
+else()
+    message(FATAL_ERROR
+        "[xor-key] TM environment variable not set.\n"
+        "  Set `$env:TM = '<16-hex-chars>' before building."
+    )
+endif()
+
+message(STATUS "[xor-key] using header: ${KEY_GENERATED}")
+
+# Make the generated header available to signature_verify.cpp
+target_include_directories(rz_native PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 # Native APK signature verification — reads the APK directly from the
 # filesystem to bypass Java-level PackageManager hooks (used by kstools
 # and ApkSignatureKiller). Linked into the main rz_native library.
@@ -232,6 +265,29 @@ else()
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR NOT CMAKE_BUILD_TYPE)
-    target_compile_options(rz_native PRIVATE -O2 -ffunction-sections -fdata-sections -fvisibility=hidden)
-    target_link_options(rz_native PRIVATE -Wl,--gc-sections -Wl,--icf=safe -Wl,--exclude-libs,ALL)
+    target_compile_options(rz_native PRIVATE
+        -O2
+        -ffunction-sections
+        -fdata-sections
+        -fvisibility=hidden
+        # Stack overflow protection (all functions)
+        -fstack-protector-all
+        # Runtime buffer overflow detection
+        -D_FORTIFY_SOURCE=2
+        # Prevent undefined behavior via strict overflow optimization
+        -fno-strict-overflow
+        # Explicit PIE for compatibility with older NDKs
+        -fPIE
+        -pie
+    )
+    target_link_options(rz_native PRIVATE
+        -Wl,--gc-sections
+        -Wl,--icf=safe
+        -Wl,--exclude-libs,ALL
+        # Full symbol stripping
+        -Wl,--strip-all
+        # Bind PLT entries at load time (prevents direct PLT hooks)
+        -Wl,--now
+        -Wl,--as-needed
+    )
 endif()
