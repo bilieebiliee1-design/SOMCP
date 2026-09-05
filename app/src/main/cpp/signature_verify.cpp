@@ -1053,7 +1053,13 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
  * at runtime, so it does not appear as a plain-text literal in the .so binary.
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDigest(
+Java_com_soreverse_mcp_nativecore_SignatureVerifier/nativeGetExpectedSignerDigest(
+    JNIEnv* env, jobject thiz) {
+    std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
+    return env->NewStringUTF(digest.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_soreverse_mcp_nativecore_SignatureVerifier/nativeGetExpectedSignerDigest(
     JNIEnv* env, jobject thiz) {
     std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
     return env->NewStringUTF(digest.c_str());

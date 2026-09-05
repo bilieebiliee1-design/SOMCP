@@ -43,6 +43,7 @@ object BackupCrypto {
     private const val NONCE_SIZE = 12
     private const val TAG_SIZE_BITS = 128
     private const val ARGON2_MEMORY_KIB = 64 * 1024 // 64 MiB
+    private const val ARGON2_MEMORY_KIB = 32 * 1024 // 32 MiB
     private const val ARGON2_ITERATIONS = 10
     private const val ARGON2_PARALLELISM = 4
     private const val ARGON2_KEY_LENGTH = 32 // 256 bits for AES-256
