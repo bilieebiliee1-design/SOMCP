@@ -136,11 +136,16 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     call.respondText(serverDiscovery().toString(), ContentType.Application.Json)
                 }
                 get("/health") {
+                    if (!call.authorized()) {
+                        call.respondText(
+                            authError().toString(),
+                            ContentType.Application.Json,
+                            status = HttpStatusCode.Unauthorized
+                        )
+                        return@get
+                    }
                     call.respondText(
-                        JSONObject().put(
-                            "ok",
-                            true
-                        ).put("server", "SOMCP").put("endpoint", "/mcp").toString(),
+                        JSONObject().put("ok", true).put("server", "somcp").toString(),
                         ContentType.Application.Json
                     )
                 }
