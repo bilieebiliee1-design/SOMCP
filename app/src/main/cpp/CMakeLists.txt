@@ -1,3 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Copyright (C) 2026 bilieebiliee1-design
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 cmake_minimum_required(VERSION 3.22)
 
 # Rizin + LIEF + Unidbg toolchain — Capstone/Keystone fully removed.
@@ -87,27 +104,41 @@ target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
 # Generate key_generated.h from the TM GitHub Actions secret.
 # The key is read from $TM (16 hex chars = 8 bytes). If $TM is not set,
-# the build fails — there is no local development fallback.
+# local development builds fall back to a fixed key so the project builds
+# out of the box; hardened builds (REQUIRE_NATIVE_BACKENDS=ON) must provide
+# the secret.
 set(KEY_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/key_generated.h")
 
+# This CMakeLists is the top-level source dir for the Android Gradle plugin,
+# so CMAKE_SOURCE_DIR == <repo>/app/src/main/cpp. The generator script lives
+# at <repo>/app/generate_header.py — resolve it relative to this file.
+set(GEN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../../../../app/generate_header.py")
+
 if(DEFINED ENV{TM} AND NOT "$ENV{TM}" STREQUAL "")
+    set(XOR_KEY "$ENV{TM}")
     message(STATUS "[xor-key] generating key_generated.h from TM secret")
-    execute_process(
-        COMMAND python "${CMAKE_SOURCE_DIR}/app/generate_header.py"
-            --key "$ENV{TM}"
-            --src "${CMAKE_CURRENT_SOURCE_DIR}/signature_verify.cpp"
-            --dst "${KEY_GENERATED}"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        RESULT_VARIABLE GEN_RESULT
-    )
-    if(NOT GEN_RESULT EQUAL 0)
-        message(FATAL_ERROR "[xor-key] generation failed. Check generate_header.py output.")
-    endif()
-else()
+elseif(REQUIRE_NATIVE_BACKENDS)
     message(FATAL_ERROR
         "[xor-key] TM environment variable not set.\n"
         "  Set `$env:TM = '<16-hex-chars>' before building."
     )
+else()
+    set(XOR_KEY "0000000000000000")
+    message(WARNING
+        "[xor-key] TM environment variable not set; using fallback key "
+        "0000000000000000. Set `$env:TM = '<16-hex-chars>' in Release/CI."
+    )
+endif()
+
+execute_process(
+    COMMAND python "${GEN_SCRIPT}"
+        --key "${XOR_KEY}"
+        --dst "${KEY_GENERATED}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../../../.."
+    RESULT_VARIABLE GEN_RESULT
+)
+if(NOT GEN_RESULT EQUAL 0)
+    message(FATAL_ERROR "[xor-key] generation failed. Check generate_header.py output.")
 endif()
 
 message(STATUS "[xor-key] using header: ${KEY_GENERATED}")
