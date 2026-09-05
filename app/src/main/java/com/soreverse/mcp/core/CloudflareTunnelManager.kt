@@ -71,6 +71,21 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             }
             return BinaryState.NOT_FOUND
         }
+
+        /**
+         * Best-effort chmod +x on Android. [File.setExecutable] often silently
+         * fails under SELinux; calling the chmod binary directly works even on
+         * non-rooted devices when operating on the app's private directory.
+         */
+        fun chmodExecutable(file: File) {
+            runCatching {
+                // Try File API first (works on some older devices / emulators)
+                if (file.setExecutable(true, false)) return
+                // Fallback: exec chmod through Runtime (reliable on Android)
+                val proc = Runtime.getRuntime().exec(arrayOf("chmod", "755", file.absolutePath))
+                proc.waitFor()
+            }
+        }
     }
 
     data class TunnelStatus(
@@ -236,10 +251,11 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             val target = File(dir, CLOUDFLARED_FILE)
             if (target.exists()) target.delete()
             tmp.renameTo(target)
-            // Make executable
-            target.setExecutable(true, false)
+            // Make executable — File.setExecutable may silently fail under
+            // SELinux; chmod via Runtime.exec reliably sets the bits on Android.
+            chmodExecutable(target)
             _binaryState.set(BinaryState.READY)
-            AppLog.i("cloudflared binary downloaded to ${target.absolutePath}")
+            AppLog.i("cloudflared binary downloaded to ${target.absolutePath}, executable=${target.canExecute()}")
         } catch (e: Exception) {
             _binaryState.set(BinaryState.NOT_FOUND)
             throw e
@@ -548,6 +564,12 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             if (index > 0 && cmd[index - 1] == "--token") "<redacted>" else value
         }
         AppLog.i("cloudflare tunnel command: ${safeCommand.joinToString(" ")}")
+        // Ensure the binary is executable right before launch — the file may
+        // have been restored from a backup or adb push without execute bits.
+        chmodExecutable(bin)
+        if (!bin.canExecute()) {
+            AppLog.w("cloudflared binary is still not executable after chmod attempt")
+        }
         val pb = ProcessBuilder(cmd).directory(context.cacheDir).redirectErrorStream(true)
         pb.environment()["NO_AUTOUPDATE"] = "true"
         // The bare pb.start() call below can throw IOException when the device
@@ -561,7 +583,15 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             pb.start()
         } catch (e: Exception) {
             AppLog.w("cloudflared process spawn failed: ${e.message}")
-            fail(mode, targetPort, "spawn failed: ${e.message ?: e.javaClass.simpleName}")
+            val msg = e.message ?: e.javaClass.simpleName
+            val friendly = if (msg.contains("Permission denied", ignoreCase = true) ||
+                msg.contains("error=13")
+            ) {
+                "无法执行 cloudflared 二进制文件（权限问题）。请尝试重新下载：$msg"
+            } else {
+                "spawn failed: $msg"
+            }
+            fail(mode, targetPort, friendly)
             return
         }
         process = p

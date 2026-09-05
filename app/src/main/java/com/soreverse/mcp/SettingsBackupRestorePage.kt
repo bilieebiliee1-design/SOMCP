@@ -611,18 +611,16 @@ private fun BackupSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, m
         animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
         label = "backupSwitchThumb"
     )
+    val trackColor = when {
+        checked && enabled -> MaterialTheme.colorScheme.primary
+        checked && !enabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+        else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+    }
     Box(
         modifier = modifier
             .size(width = trackWidth, height = trackHeight)
             .clip(RoundedCornerShape(trackHeight / 2))
-            .background(
-                if (checked) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
-                }
-            )
-            .alpha(if (enabled) 1f else 0.4f)
+            .background(trackColor)
             .toggleable(
                 value = checked,
                 enabled = enabled,
@@ -649,7 +647,7 @@ private fun BackupActionCard(label: String, icon: ImageVector, onClick: () -> Un
             .clip(shape)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
             .border(
-                BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)),
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
                 shape
             )
             .clickable(onClick = onClick)
@@ -661,7 +659,7 @@ private fun BackupActionCard(label: String, icon: ImageVector, onClick: () -> Un
             Modifier
                 .size(44.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
