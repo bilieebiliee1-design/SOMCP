@@ -753,9 +753,11 @@ class SettingsStore(context: Context) {
             value.ifBlank { DEFAULT_AI_SYSTEM_PROMPT }
         ).apply()
 
+    private val secureRandom = SecureRandom()
+
     fun resetAccessToken(): String {
-        val bytes = ByteArray(18)
-        SecureRandom().nextBytes(bytes)
+        val bytes = ByteArray(32)
+        secureRandom.nextBytes(bytes)
         val token = bytes.joinToString("") { "%02x".format(it) }
         prefs.edit().putString("accessToken", token).apply()
         return token

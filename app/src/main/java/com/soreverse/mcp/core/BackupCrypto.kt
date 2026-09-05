@@ -42,8 +42,8 @@ object BackupCrypto {
     private const val SALT_SIZE = 16
     private const val NONCE_SIZE = 12
     private const val TAG_SIZE_BITS = 128
-    private const val ARGON2_MEMORY_KIB = 64 * 1024 // 64 MiB
-    private const val ARGON2_ITERATIONS = 3
+    private const val ARGON2_MEMORY_KIB = 32 * 1024 // 32 MiB
+    private const val ARGON2_ITERATIONS = 10
     private const val ARGON2_PARALLELISM = 4
     private const val ARGON2_KEY_LENGTH = 32 // 256 bits for AES-256
 
@@ -128,10 +128,10 @@ object BackupCrypto {
             mode = Argon2Mode.ARGON2_ID,
             password = password.toByteArray(Charsets.UTF_8),
             salt = salt,
-            mCostInKibibyte = 64 * 1024,
-            tCostInIterations = 3,
+            mCostInKibibyte = ARGON2_MEMORY_KIB,
+            tCostInIterations = ARGON2_ITERATIONS,
             hashLengthInBytes = KEY_BYTES,
-            parallelism = 2
+            parallelism = ARGON2_PARALLELISM
         )
         return hash.rawHashAsByteArray()
     }
