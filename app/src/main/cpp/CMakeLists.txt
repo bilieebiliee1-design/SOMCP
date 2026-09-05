@@ -109,6 +109,11 @@ target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 # the secret.
 set(KEY_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/key_generated.h")
 
+# This CMakeLists is the top-level source dir for the Android Gradle plugin,
+# so CMAKE_SOURCE_DIR == <repo>/app/src/main/cpp. The generator script lives
+# at <repo>/app/generate_header.py — resolve it relative to this file.
+set(GEN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../../../../app/generate_header.py")
+
 if(DEFINED ENV{TM} AND NOT "$ENV{TM}" STREQUAL "")
     set(XOR_KEY "$ENV{TM}")
     message(STATUS "[xor-key] generating key_generated.h from TM secret")
@@ -126,10 +131,10 @@ else()
 endif()
 
 execute_process(
-    COMMAND python "${CMAKE_SOURCE_DIR}/app/generate_header.py"
+    COMMAND python "${GEN_SCRIPT}"
         --key "${XOR_KEY}"
         --dst "${KEY_GENERATED}"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../../../.."
     RESULT_VARIABLE GEN_RESULT
 )
 if(NOT GEN_RESULT EQUAL 0)
