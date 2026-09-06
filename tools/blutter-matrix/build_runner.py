@@ -182,6 +182,20 @@ def main():
             elif "runner_shared_library" in reason or "runner_export" in reason:
                 reason = "android_cross_compile_error"
             write_status(status, "failed", reason, runnerId=args.runner_id, buildStatus="failed", staticStatus="failed", smokeStatus="not_run")
+            # Surface the captured build log so CI and local runs show the real
+            # compiler/toolchain error instead of only the generic cmake/ninja
+            # command from the RuntimeError above.
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+                    lines = handle.readlines()
+                tail = "".join(lines[-200:])
+                sys.stderr.write(f"\n===== [blutter-runners] tail of build log ({len(lines)} total lines): {log_path} =====\n")
+                sys.stderr.write(tail)
+                if not tail.endswith("\n"):
+                    sys.stderr.write("\n")
+                sys.stderr.write("===== [blutter-runners] end of build log =====\n")
+            except OSError:
+                pass
             raise
 
 
