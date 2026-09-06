@@ -1,3 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Copyright (C) 2026 bilieebiliee1-design
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 cmake_minimum_required(VERSION 3.22)
 project(blutter_android_runner LANGUAGES C CXX)
 
@@ -42,6 +59,6 @@ endif()
 if(NOT COMPRESSED_POINTERS)
     target_compile_definitions(${RUNNER_LIBRARY} PRIVATE NO_CODE_ANALYSIS CSREG_DART_HEAP=ARM64_REG_XZR)
 endif()
-target_compile_options(${RUNNER_LIBRARY} PRIVATE -O3 -fno-rtti -fvisibility=hidden -fvisibility-inlines-hidden -fno-omit-frame-pointer)
+target_compile_options(${RUNNER_LIBRARY} PRIVATE -O3 -fno-rtti -fvisibility=hidden -fvisibility-inlines-hidden -fno-omit-frame-pointer -include ${CMAKE_CURRENT_SOURCE_DIR}/dart_vm_atomic_ref_compat.h)
 target_link_libraries(${RUNNER_LIBRARY} PRIVATE ${DARTLIB} capstone ${LOG_LIBRARY} ${DL_LIBRARY})
 target_precompile_headers(${RUNNER_LIBRARY} PRIVATE "${SRCDIR}/pch.h")
