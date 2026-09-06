@@ -46,7 +46,7 @@ BLD="$PROJECT/build/blutter-matrix"
 CACHE="$BLD/cache"
 mkdir -p "$BLD" "$CACHE"
 
-# NOTE: build_icu_android.sh installs into <root>/../arm64-v8a/icu, i.e. here
+# build_icu_android.sh installs into <root>/arm64-v8a/icu, i.e. here
 # $BLD/arm64-v8a/icu. Capstone mirrors that layout into $BLD/arm64-v8a/capstone.
 ICU_ROOT="$BLD/arm64-v8a/icu"
 CAPSTONE_ROOT="$BLD/arm64-v8a/capstone"

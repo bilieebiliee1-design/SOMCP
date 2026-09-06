@@ -39,19 +39,17 @@ class CloudflareTunnelManager(private val context: Context, private val settings
 
     enum class Mode { OFF, QUICK, NAMED }
     enum class State { STOPPED, STARTING, RUNNING, FAILED }
-    enum class BinaryState { UNKNOWN, NOT_FOUND, DOWNLOADING, READY }
+    enum class BinaryState { UNKNOWN, NOT_FOUND, READY }
 
     companion object {
         /**
-         * GitHub release URL for the cloudflared arm64 binary. Cloudflare no
-         * longer publishes a `cloudflared-android-arm64` asset (that URL
-         * returns HTTP 404); the `cloudflared-linux-arm64` asset is a
-         * statically-linked Go binary with no libc dependencies, so it runs
-         * unmodified on Android arm64 (bionic).
+         * The cloudflared binary is cross-compiled for Android in CI
+         * (release.yml: "Cross-compile cloudflared for Android") and bundled
+         * into the APK as `app/src/main/jniLibs/<abi>/libcloudflared.so`.
+         * Android extracts it to the app's native library directory, so the
+         * binary is always available on-device and is never downloaded at
+         * runtime.
          */
-        const val CLOUDFLARED_DOWNLOAD_URL =
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
-        const val CLOUDFLARED_DIR = "cloudflared"
         const val CLOUDFLARED_FILE = "cloudflared"
 
         /**
@@ -62,12 +60,10 @@ class CloudflareTunnelManager(private val context: Context, private val settings
          * master switch is off.
          */
         fun probeBinaryState(context: Context): BinaryState {
-            val dataFile = File(File(context.filesDir, CLOUDFLARED_DIR), CLOUDFLARED_FILE)
-            if (dataFile.exists() && dataFile.canExecute()) return BinaryState.READY
             val ndkDir = context.applicationInfo?.nativeLibraryDir
             if (ndkDir != null) {
                 val ndkFile = File(ndkDir, "lib${CLOUDFLARED_FILE}.so")
-                if (ndkFile.exists()) return BinaryState.READY
+                if (ndkFile.exists() && ndkFile.canExecute()) return BinaryState.READY
             }
             return BinaryState.NOT_FOUND
         }
@@ -193,73 +189,9 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             return null
         }
         _binaryState.set(BinaryState.READY)
-        // Re-locate the file (same two locations as probeBinaryState) to return it.
-        val dataFile = File(File(context.filesDir, CLOUDFLARED_DIR), CLOUDFLARED_FILE)
-        if (dataFile.exists() && dataFile.canExecute()) return dataFile
+        // The binary ships inside the APK (libcloudflared.so in jniLibs) and is
+        // extracted to the app's native library directory by the system.
         return File(context.applicationInfo?.nativeLibraryDir ?: "", "lib${CLOUDFLARED_FILE}.so")
-    }
-
-    /**
-     * Download the cloudflared binary to the app's private data directory,
-     * automatically switching between GitHub official and multiple mirror
-     * sources until one succeeds.
-     * Runs on the calling thread — caller should dispatch to [Dispatchers.IO].
-     *
-     * @throws Exception on download / write failure.
-     */
-    fun downloadBinary() {
-        _binaryState.set(BinaryState.DOWNLOADING)
-        try {
-            val dir = File(context.filesDir, CLOUDFLARED_DIR)
-            dir.mkdirs()
-            val tmp = File(dir, "${CLOUDFLARED_FILE}.download")
-            // Build an ordered candidate list: GitHub official first, then a
-            // pool of public GitHub mirrors as automatic fallbacks. Sources are
-            // switched automatically — if one (e.g. ghproxy) is unreachable we
-            // simply move on to the next candidate, so a single down source can
-            // never block the binary download.
-            val policyCandidates = DownloadMirrorPolicy.candidates(CLOUDFLARED_DOWNLOAD_URL)
-            val urls = listOf(CLOUDFLARED_DOWNLOAD_URL) +
-                policyCandidates.filter { it != CLOUDFLARED_DOWNLOAD_URL }
-            var lastError: Exception? = null
-            for (url in urls) {
-                try {
-                    val req = Request.Builder()
-                        .url(url)
-                        .header("User-Agent", "SOMCP")
-                        .build()
-                    client.newCall(req).execute().use { resp ->
-                        if (!resp.isSuccessful) {
-                            throw IllegalStateException("HTTP ${resp.code}")
-                        }
-                        val body = resp.body ?: throw IllegalStateException("empty response body")
-                        body.byteStream().use { input ->
-                            tmp.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                    }
-                    lastError = null
-                    break
-                } catch (e: Exception) {
-                    lastError = e
-                    AppLog.w("cloudflared download failed from $url: ${e.message}")
-                }
-            }
-            if (lastError != null) throw lastError!!
-            // Atomically replace the old binary
-            val target = File(dir, CLOUDFLARED_FILE)
-            if (target.exists()) target.delete()
-            tmp.renameTo(target)
-            // Make executable — File.setExecutable may silently fail under
-            // SELinux; chmod via Runtime.exec reliably sets the bits on Android.
-            chmodExecutable(target)
-            _binaryState.set(BinaryState.READY)
-            AppLog.i("cloudflared binary downloaded to ${target.absolutePath}, executable=${target.canExecute()}")
-        } catch (e: Exception) {
-            _binaryState.set(BinaryState.NOT_FOUND)
-            throw e
-        }
     }
 
     fun start(targetPort: Int, mode: Mode, token: String): TunnelStatus = startInternal(targetPort, mode, token, userInitiated = true)
@@ -325,7 +257,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
             return fail(
                 mode,
                 targetPort,
-                "cloudflared binary not found — download it from the tunnel settings page"
+                "cloudflared binary not found — this APK does not bundle cloudflared; install the latest release"
             )
         }
         transitionTo(State.STARTING, mode, publicUrl = null, message = "starting")

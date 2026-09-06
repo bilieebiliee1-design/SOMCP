@@ -1,3 +1,22 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Copyright (C) 2026 bilieebiliee1-design
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.soreverse.mcp
 
 import android.content.Context
@@ -71,8 +90,6 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
     }
     var tunnelStatus by remember { mutableStateOf<CloudflareTunnelManager.TunnelStatus?>(null) }
     var binaryState by remember { mutableStateOf(CloudflareTunnelManager.BinaryState.UNKNOWN) }
-    var isDownloading by remember { mutableStateOf(false) }
-    var downloadError by remember { mutableStateOf<String?>(null) }
     var showExport by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf("") }
@@ -118,8 +135,10 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             val binaryLabel = if (t.zh) "cloudflared 二进制" else "cloudflared binary"
             val binaryStatusText = when (binaryState) {
                 CloudflareTunnelManager.BinaryState.READY -> "$binaryLabel: ${if (t.zh) "就绪" else "Ready"}"
-                CloudflareTunnelManager.BinaryState.DOWNLOADING -> "$binaryLabel: ${if (t.zh) "下载中…" else "Downloading…"}"
-                CloudflareTunnelManager.BinaryState.NOT_FOUND -> "$binaryLabel: ${if (t.zh) "未找到，请点击下方按钮下载" else "Not found, download below"}"
+                CloudflareTunnelManager.BinaryState.NOT_FOUND -> {
+                    val msg = if (t.zh) "未找到（当前安装包未内置 cloudflared）" else "Not found (cloudflared not bundled in this build)"
+                    "$binaryLabel: $msg"
+                }
                 else -> "$binaryLabel: ${if (t.zh) "未知" else "Unknown"}"
             }
             Text(
@@ -127,55 +146,6 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
             )
-            if (binaryState == CloudflareTunnelManager.BinaryState.NOT_FOUND && !isDownloading) {
-                Button(
-                    onClick = {
-                        isDownloading = true
-                        downloadError = null
-                        scope.launch {
-                            runCatching {
-                                withContext(Dispatchers.IO) {
-                                    val tunnel = activeTunnel(context)
-                                    if (tunnel != null) {
-                                        tunnel.downloadBinary()
-                                    } else {
-                                        // MCP server not running: use a throw-away
-                                        // manager so the binary can still be
-                                        // downloaded from this page.
-                                        CloudflareTunnelManager(context, settings)
-                                            .downloadBinary()
-                                    }
-                                }
-                            }.onSuccess {
-                                binaryState = CloudflareTunnelManager.probeBinaryState(context)
-                            }.onFailure { e ->
-                                downloadError = e.message ?: "download failed"
-                                binaryState = CloudflareTunnelManager.probeBinaryState(context)
-                            }
-                            isDownloading = false
-                        }
-                    },
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
-                ) {
-                    Text(if (t.zh) "下载 cloudflared" else "Download cloudflared")
-                }
-            }
-            if (isDownloading) {
-                Text(
-                    if (t.zh) "正在下载 cloudflared（约 15MB），请稍候…" else "Downloading cloudflared (~15 MB), please wait…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
-                )
-            }
-            downloadError?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
-                )
-            }
             if (tunnelStatus?.mode == CloudflareTunnelManager.Mode.NAMED &&
                 tunnelStatus?.state == CloudflareTunnelManager.State.RUNNING &&
                 tunnelStatus?.publicUrl.isNullOrBlank()
