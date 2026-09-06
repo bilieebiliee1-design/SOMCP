@@ -139,6 +139,9 @@ def main():
             checkout(args.dart_repository, runner["dartRevision"], dart, log)
             checkout(args.blutter_repository, runner["blutterCommit"], blutter, log)
             overlay = pathlib.Path(__file__).resolve().parent / "android-runner"
+            atomic_ref_shim = overlay / "dart_vm_atomic_ref_compat.h"
+            if not atomic_ref_shim.is_file():
+                raise RuntimeError("atomic_ref_shim_missing")
             run(["git", "apply", "--check", str(overlay / "dart-app-accessors.patch")], blutter, log)
             run(["git", "apply", str(overlay / "dart-app-accessors.patch")], blutter, log)
             prepare_dart_project(dart, blutter, runner, log)
@@ -151,7 +154,7 @@ def main():
             icu_root = pathlib.Path(args.icu_root).resolve()
             icu_include = icu_root / "include"
             icu_lib = icu_root / "lib"
-            run([args.cmake, "-S", str(dart), "-B", str(dart_build), "-G", "Ninja", f"-DCMAKE_TOOLCHAIN_FILE={toolchain}", "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-26", "-DTARGET_OS=android", "-DTARGET_ARCH=arm64", f"-DCOMPRESSED_PTRS={int(runner['compressedPointers'])}", f"-DICU_ROOT={icu_root}", f"-DCMAKE_PREFIX_PATH={icu_root}", f"-DICU_INCLUDE_DIR={icu_include}", f"-DICU_INCLUDE_DIRS={icu_include}", f"-DICU_LIBRARY={icu_lib / 'libicuuc.a'}", f"-DICU_LIBRARIES={icu_lib / 'libicuuc.a'}", f"-DICU_UC_LIBRARY={icu_lib / 'libicuuc.a'}", f"-DICU_UC_LIBRARY_RELEASE={icu_lib / 'libicuuc.a'}", f"-DICU_DATA_LIBRARY={icu_lib / 'libicudata.a'}", f"-DICU_DATA_LIBRARY_RELEASE={icu_lib / 'libicudata.a'}", f"-DCMAKE_INSTALL_PREFIX={packages}", "-DCMAKE_BUILD_TYPE=Release"], dart, log)
+            run([args.cmake, "-S", str(dart), "-B", str(dart_build), "-G", "Ninja", f"-DCMAKE_TOOLCHAIN_FILE={toolchain}", "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-26", "-DTARGET_OS=android", "-DTARGET_ARCH=arm64", f"-DCOMPRESSED_PTRS={int(runner['compressedPointers'])}", f"-DICU_ROOT={icu_root}", f"-DCMAKE_PREFIX_PATH={icu_root}", f"-DICU_INCLUDE_DIR={icu_include}", f"-DICU_INCLUDE_DIRS={icu_include}", f"-DICU_LIBRARY={icu_lib / 'libicuuc.a'}", f"-DICU_LIBRARIES={icu_lib / 'libicuuc.a'}", f"-DICU_UC_LIBRARY={icu_lib / 'libicuuc.a'}", f"-DICU_UC_LIBRARY_RELEASE={icu_lib / 'libicuuc.a'}", f"-DICU_DATA_LIBRARY={icu_lib / 'libicudata.a'}", f"-DICU_DATA_LIBRARY_RELEASE={icu_lib / 'libicudata.a'}", f"-DCMAKE_CXX_FLAGS=-include {atomic_ref_shim}", f"-DCMAKE_INSTALL_PREFIX={packages}", "-DCMAKE_BUILD_TYPE=Release"], dart, log)
             run([args.cmake, "--build", str(dart_build), "--target", "install", "--parallel"], dart, log)
             package = package_version(runner["dartVersion"])
             dart_package = packages / "lib" / "cmake" / f"dartvm{package}_android_arm64"
