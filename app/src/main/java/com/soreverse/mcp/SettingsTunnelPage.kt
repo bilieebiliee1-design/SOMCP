@@ -135,7 +135,10 @@ internal fun SettingsTunnelPage(t: UiText, settings: SettingsStore) {
             val binaryLabel = if (t.zh) "cloudflared 二进制" else "cloudflared binary"
             val binaryStatusText = when (binaryState) {
                 CloudflareTunnelManager.BinaryState.READY -> "$binaryLabel: ${if (t.zh) "就绪" else "Ready"}"
-                CloudflareTunnelManager.BinaryState.NOT_FOUND -> "$binaryLabel: ${if (t.zh) "未找到（当前安装包未内置 cloudflared）" else "Not found (cloudflared not bundled in this build)"}"
+                CloudflareTunnelManager.BinaryState.NOT_FOUND -> {
+                    val msg = if (t.zh) "未找到（当前安装包未内置 cloudflared）" else "Not found (cloudflared not bundled in this build)"
+                    "$binaryLabel: $msg"
+                }
                 else -> "$binaryLabel: ${if (t.zh) "未知" else "Unknown"}"
             }
             Text(
