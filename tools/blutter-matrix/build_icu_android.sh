@@ -43,7 +43,12 @@ if [ ! -f "$root/LICENSE" ]; then
 fi
 host="$root/host"
 target="$root/android-arm64"
-install="$root/../arm64-v8a/icu"
+# Must match the consumer path in build-blutter-runners.sh ($ICU_ROOT =
+# "$BLD/arm64-v8a/icu"). Previously this was set to "$root/../arm64-v8a/icu"
+# which resolved to <repo>/build/arm64-v8a/icu (one level above $BLD) — so
+# blutter-runners.sh always failed the "ICU build incomplete" check even
+# though libicuuc.a had been produced.
+install="$root/arm64-v8a/icu"
 toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64"
 if [ ! -d "$toolchain" ]; then
   toolchain="$ndk/toolchains/llvm/prebuilt/windows-x86_64"
