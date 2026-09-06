@@ -92,6 +92,66 @@ jobs:
           done
           echo "Unidbg native libs present for required ABIs."
 
+      - name: Set up Go for cloudflared cross-compile
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          # Module cache is populated only after the clone step below, so
+          # disable setup-go's default go.sum-based caching to avoid a warning.
+          cache: false
+
+      - name: Cross-compile cloudflared for Android (arm64-v8a / armeabi-v7a / x86 / x86_64)
+        run: |
+          set -euo pipefail
+          # The Cloudflare tunnel client is no longer downloaded at runtime by
+          # the app. From this release onward it is cross-compiled here from
+          # the pinned upstream tag and bundled into the APK
+          # (app/src/main/jniLibs/<abi>/libcloudflared.so), so the tunnel works
+          # out of the box on a freshly installed APK.
+          #
+          # Supported ABIs (mapped to GOOS/GOARCH):
+          #   - arm64-v8a   → GOOS=android GOARCH=arm64  (native Android target)
+          #   - armeabi-v7a → GOOS=linux   GOARCH=arm GOARM=7 (static, no libc)
+          #   - x86         → GOOS=linux   GOARCH=386   (static, no libc)
+          #   - x86_64      → GOOS=linux   GOARCH=amd64  (static, no libc)
+          # All four are fully static, so they run unmodified on Android bionic.
+          CLOUDFLARED_TAG="2026.8.3"
+          git clone --depth 1 --branch "$CLOUDFLARED_TAG" \
+            https://github.com/cloudflare/cloudflared.git cloudflared-src
+          (
+            cd cloudflared-src
+            GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-arm64-v8a ./cmd/cloudflared
+            GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-armeabi-v7a ./cmd/cloudflared
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-x86_64 ./cmd/cloudflared
+            GOOS=linux GOARCH=386 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-x86 ./cmd/cloudflared
+          )
+          # Bundle into the APK via jniLibs so the packaged binary is always
+          # available on-device (no runtime download).
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            mkdir -p "app/src/main/jniLibs/$abi"
+          done
+          cp libcloudflared-arm64-v8a app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+          cp libcloudflared-armeabi-v7a app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
+          cp libcloudflared-x86_64 app/src/main/jniLibs/x86_64/libcloudflared.so
+          cp libcloudflared-x86 app/src/main/jniLibs/x86/libcloudflared.so
+          # Sanity-check every expected output before the APK is assembled;
+          # a missing binary must fail the release, not ship a broken tunnel.
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            test -f "app/src/main/jniLibs/$abi/libcloudflared.so" || {
+              echo "::error::missing app/src/main/jniLibs/$abi/libcloudflared.so after cloudflared cross-compile"
+              exit 1
+            }
+          done
+          echo "cloudflared cross-compiled for arm64-v8a + armeabi-v7a + x86_64 + x86 and bundled into jniLibs."
+
       - name: Build Blutter runners (best-effort)
         continue-on-error: true
         run: |
