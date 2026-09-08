@@ -316,6 +316,19 @@ dependencies {
         exclude(group = "com.github.zhkl0228", module = "capstone")
         exclude(group = "com.github.zhkl0228", module = "keystone")
     }
+    // The patched unidbg-api jar still ships BackendFactory + UnicornBackend whose
+    // bytecode references unicorn.Unicorn / unicorn.UnicornConst / unicorn.UnicornException
+    // (and Unicorn2Backend in unidbg-unicorn2 references unicorn.UnicornConst /
+    // unicorn.UnicornException as well). Those classes come from
+    // com.github.zhkl0228:unicorn, which is a transitive of unidbg-api and therefore
+    // drops out of the classpath the moment we exclude unidbg-api above. Without
+    // this direct dependency, BackendFactory.createBackend() falls back from
+    // Unicorn2Backend to UnicornBackend and then dies with
+    //   ClassNotFoundException: unicorn_Unicorn
+    // during session_open on every architecture. Pulling the original unicorn
+    // artifact in explicitly restores the unicorn.* classes without re-introducing
+    // unidbg-api (which would conflict with our patched jar).
+    implementation("com.github.zhkl0228:unicorn:1.0.15")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 
