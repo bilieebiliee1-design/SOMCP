@@ -67,10 +67,16 @@ jobs:
       #   2) 跨作者重复（与其他作者的历史 issue 重复，如都上报同一句报错文案）：
       #      同样计 1 次作者警告并自动关闭新 issue（评论会注明原 issue 与作者），
       #      防止借他人先例反复开重复单；累计 5 次同样触发 7 天限制。
-      # 重复判定信号：归一化标题完全一致 / token 集合 Jaccard>=0.5（同作者）/
-      # 共享显著长文本片段（归一化后 >=10 字符的相同 token，如整句报错文案；
-      # 该信号同作者与跨作者均适用）。机制与 pr-auto-review.yml 的作者限制
-      # 一致，仓库所有者始终豁免。
+      # 判定前置：先剥离图片/链接/URL/HTML 等样板噪声。否则 user-attachments
+      #   这类"人人都有"的串会被当成显著重复片段，使任何带截图的 issue 互相
+      #   命中（历史 bug：#91 因此被错判为与 frida 单 #74 重复）。
+      # 重复判定信号（同作者）：归一化标题完全一致 / 标题 2-gram 相似度>=0.4 /
+      #   共享 >=1 个专有标识符（unidbg、unicorn 这类长度>=4 的非通用 ASCII
+      #   词）且共享内容片段>=3；跨作者：共享 >=10 字符的连续中文片段
+      #   （如双方正文都贴了同一句报错文案）。
+      # 命中后不再只取一条：列出全部命中的重复 issue（同作者优先，其次相似度，
+      #   再取创建时间最早的作为"原 issue"）。机制与 pr-auto-review.yml 的作者
+      #   限制一致，仓库所有者始终豁免。
       - name: Check duplicate-issue author restriction
         id: restrict
         uses: actions/github-script@v7
@@ -164,75 +170,158 @@ jobs:
               return;
             }
 
-            // 2) 比对全仓库 issue（含其他作者）。重复判定信号：
-            //    - 归一化标题完全一致（强重复）；
-            //    - 同作者时按标题+正文 token 集合 Jaccard>=0.5 估算，数值越高
-            //      越可能重复（避免误伤内容不同的 issue）；
-            //    - 共享显著长文本片段：双方归一化 token 中存在 >=10 字符的相同
-            //      token（如整句报错文案"当前设备没有可用的文件夹选择器…"），
-            //      同作者与跨作者都适用，可命中正文只共享一句报错文案的重复
-            //      （如 #78 与 #71 由不同作者提交但报同一句 SAF 错误提示）。
-            const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ');
-            const curNT = norm(title);
-            const curTokens = new Set((curNT + ' ' + norm(body)).split(' ').filter(Boolean));
+            // 2) 比对全仓库 issue（含其他作者）。
+            //    先剥离图片/链接/URL/HTML 等样板噪声：否则 user-attachments 这类
+            //    "人人都有"的串会被当成显著重复片段，让任何带截图的 issue 互相
+            //    命中（历史 bug：#91 因此被错判为与 frida 单 #74 重复）。
+            const stripNoise = (s) => String(s || '')
+              .replace(/<[^>]*>/g, ' ')                                   // <img ...> 等 HTML 标签
+              .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')                      // ![alt](url)
+              .replace(/\[[^\]]*\]\([^)]*\)/g, ' ')                       // [text](url)
+              .replace(/https?:\/\/\S+/g, ' ')                            // 裸 URL
+              .replace(/\b[\w.-]+\.(?:png|jpe?g|gif|webp|bmp|mp4|mov|zip|apk|so|log|txt|json|md)\b/gi, ' ')
+              .replace(/[`*_>#|~]+/g, ' ');
+            const norm = (s) => stripNoise(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+            const CJK_RE = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
+            const runs = (w) => w.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]+|[a-z0-9]+/g) || [];
+            // 通用词（仓库名/平台名/常见英文）不参与标识符判定。
+            const GENERIC = new Set(['somcp', 'android', 'github', 'http', 'https', 'www', 'issue',
+              'image', 'img', 'width', 'height', 'alt', 'src', 'this', 'that', 'with', 'from', 'have',
+              'been', 'your', 'will', 'they', 'than', 'then', 'when', 'what', 'which', 'there', 'their',
+              'about', 'version', 'release', 'device', 'error', 'check', 'missing', 'native', 'start',
+              'stop', 'free', 'size', 'name', 'file', 'path', 'class', 'method', 'code', 'test', 'build',
+              'libs', 'java', 'crash', 'after', 'report', 'analysis', 'before', 'user', 'users',
+              'should', 'would', 'could', 'please', 'thanks', 'help', 'support', 'main', 'apk', 'app']);
+            // 内容片段：中文 3-gram + 非通用 ASCII 词（长度>=3）。
+            const fragOf = (s) => {
+              const out = new Set();
+              for (const w of norm(s).split(' ')) for (const p of runs(w)) {
+                if (CJK_RE.test(p)) { for (let i = 0; i + 3 <= p.length; i++) out.add(p.slice(i, i + 3)); }
+                else if (p.length >= 3 && !GENERIC.has(p) && !/^\d+$/.test(p)) out.add(p);
+              }
+              return out;
+            };
+            // 专有标识符：非通用 ASCII 词（长度>=4），如 unidbg / unicorn / frida。
+            const identOf = (s) => {
+              const out = new Set();
+              for (const w of norm(s).split(' ')) for (const p of runs(w)) {
+                if (!CJK_RE.test(p) && p.length >= 4 && !GENERIC.has(p) && !/^\d+$/.test(p)) out.add(p);
+              }
+              return out;
+            };
+            // 显著中文片段：>=10 字符的连续中文窗口（跨作者判定用，如整句报错文案）。
+            const longCJKOf = (s) => {
+              const out = new Set();
+              for (const w of norm(s).split(' ')) {
+                if (!CJK_RE.test(w)) continue;
+                for (let i = 0; i + 10 <= w.length; i++) out.add(w.slice(i, i + 10));
+              }
+              return out;
+            };
+            // 标题 2-gram（中文）+ ASCII 词，用于标题相似度。
+            const titleTokens = (s) => {
+              const out = new Set();
+              for (const w of norm(s).split(' ')) for (const p of runs(w)) {
+                if (CJK_RE.test(p)) { if (p.length <= 2) out.add(p); else for (let i = 0; i + 2 <= p.length; i++) out.add(p.slice(i, i + 2)); }
+                else if (p.length > 1) out.add(p);
+              }
+              return out;
+            };
             const jaccard = (a, b) => {
               if (!a.size || !b.size) return 0;
               let inter = 0;
               for (const t of a) if (b.has(t)) inter++;
               return inter / (a.size + b.size - inter);
             };
-            // 与当前 issue 共享的最长显著片段长度（无则 0）。
-            const sharedSignature = (tok) => {
-              let best = 0;
-              for (const t of tok) {
-                if (t.length >= 10 && curTokens.has(t)) best = Math.max(best, t.length);
-              }
-              return best;
+            const curTxt = title + ' ' + body;
+            const cur = {
+              frag: fragOf(curTxt),
+              ident: identOf(curTxt),
+              longCJK: longCJKOf(curTxt),
+              tt: titleTokens(title),
+              nt: norm(title)
             };
-            // dup: 同作者重复候选（得分制）；crossDup: 跨作者重复候选（显著片段
-            // 命中）。两者命中都会计入当前作者的重复警告并关闭新 issue。
-            let dup = null, bestScore = 0;   // 同作者重复候选
-            let crossDup = null;             // 跨作者重复候选
-            for (const it of priorIssues) {
-              if (it.number === issue_number) continue;
-              const t = norm(it.title || '');
-              const tok = new Set((t + ' ' + norm(it.body || '')).split(' ').filter(Boolean));
-              const sig = sharedSignature(tok);
-              const sameAuthor = String((it.user || {}).login || '').toLowerCase() === authorKey;
+            const curBuilt = priorIssues.map((it) => {
+              const txt = String(it.title || '') + ' ' + String(it.body || '');
+              return {
+                it,
+                frag: fragOf(txt),
+                ident: identOf(txt),
+                longCJK: longCJKOf(txt),
+                tt: titleTokens(it.title || ''),
+                nt: norm(it.title || '')
+              };
+            });
+            // 片段 df/idf：降权"全仓库通用"的片段，并按显著度排序候选。
+            const dfMap = new Map();
+            for (const b of curBuilt) for (const g of b.frag) dfMap.set(g, (dfMap.get(g) || 0) + 1);
+            const idfOf = (g) => Math.log(Math.max(2, curBuilt.length) / (dfMap.get(g) || 1));
+            const dfCap = Math.max(2, Math.ceil(curBuilt.length * 0.5));
+            // matches: 全部命中的重复 issue（修复前只保留一条，且被最近的一条抢占）。
+            const matches = [];
+            for (const b of curBuilt) {
+              if (b.it.number === issue_number) continue;
+              const sameAuthor = String((b.it.user || {}).login || '').toLowerCase() === authorKey;
+              const sharedIdent = [...cur.ident].filter((x) => b.ident.has(x));
+              const sharedFrag = [...cur.frag].filter((x) => b.frag.has(x) && (dfMap.get(x) || 1) <= dfCap);
+              const sharedLong = [...cur.longCJK].filter((x) => b.longCJK.has(x));
+              const titleSim = jaccard(cur.tt, b.tt);
+              const titleEq = !!cur.nt && cur.nt === b.nt;
+              let hit = false, score = 0;
               if (sameAuthor) {
-                let sc = 0;
-                if (t && t === curNT) sc = 1;
-                else if (curTokens.size >= 2) sc = Math.max(jaccard(curTokens, tok), sig >= 10 ? 0.8 : 0);
-                if (sc > bestScore) { bestScore = sc; dup = it; }
-              } else if (curTokens.size >= 2 && sig >= 10) {
-                // 跨作者命中：保留最近创建的一条作为主引用
-                if (!crossDup || new Date(it.created_at) > new Date(crossDup.created_at)) crossDup = it;
+                if (titleEq) { hit = true; score = 1e6; }
+                else if (titleSim >= 0.4) { hit = true; score = 1e5 * titleSim; }
+                else if (sharedIdent.length >= 1 && sharedFrag.length >= 3) {
+                  hit = true;
+                  score = sharedFrag.reduce((a, x) => a + idfOf(x), 0);
+                }
+              } else if (sharedLong.length >= 1) {
+                // 跨作者：必须命中同一句显著文案/报错（>=10 字连续中文），避免误伤。
+                hit = true;
+                score = 1000 + sharedLong.length * 10 + sharedFrag.length;
+              }
+              if (hit) {
+                matches.push({
+                  number: b.it.number,
+                  title: String(b.it.title || ''),
+                  author: String((b.it.user || {}).login || 'unknown'),
+                  created: b.it.created_at,
+                  sameAuthor,
+                  score,
+                  sharedIdent
+                });
               }
             }
-            const isSameAuthorDup = !!dup && bestScore >= 0.5 && curTokens.size >= 2;
-            if (!isSameAuthorDup && !crossDup) {
+            if (!matches.length) {
               core.setOutput('restricted', 'false');
               core.setOutput('duplicate', 'false');
               return;
             }
+            // 排序：同作者优先 -> 相似度高的优先 -> 创建时间早的优先（最早的是原 issue）。
+            matches.sort((a, b) => (Number(b.sameAuthor) - Number(a.sameAuthor)) ||
+              (b.score - a.score) || (new Date(a.created) - new Date(b.created)));
             // 命中（同作者或跨作者），统一走下面"记警告 + 评论 + 关闭"流程：
-            // 跨作者重复同样计作者警告（7 天 5 次触发限制），评论会注明原 issue
-            // 与作者，避免同一问题反复开重复单。
-            const dupRef = isSameAuthorDup ? dup : crossDup;
-            const isCross = !isSameAuthorDup;
+            // 跨作者重复同样计作者警告（7 天 5 次触发限制），评论会列出全部重复
+            // issue 并注明跨作者条目的作者，避免同一问题反复开重复单。
+            const dupRef = matches[0];
+            const hasCross = matches.some((m) => !m.sameAuthor);
 
             // 4) 记录 1 次作者警告 + 评论提示，并关闭该重复 issue（同作者/跨作者一致）。
             const soonWarn = warned.size + 1;
             const cntPart = soonWarn >= 5
               ? '你已经被限制，无法再提交 issue。'
               : '当前连续 7 天内已累计 **' + soonWarn + '/5 次重复警告**，达到 5 次将被限制 7 天。';
-            const dupRefAuthor = String((dupRef.user || {}).login || 'unknown');
-            const dupRefTitle = String(dupRef.title || '').slice(0, 120);
-            const dupMsg = '## 重复 Issue 自动关闭\n\n本 issue 与已存在的 #' + dupRef.number +
-              (isCross ? '（作者：@' + dupRefAuthor + '，标题：' + dupRefTitle + '）' : '') +
-              '内容重复' + (isCross ? '（检测到相同的关键内容/报错文案）' : '') +
-              '。为保证工单质量，请勿重复提交相同问题，请到原 issue 下继续讨论或补充信息' +
-              (isCross ? '；若你的场景确有差异，请重新开 issue 并明确说明不同点' : '') + '。' + cntPart;
+            // 评论列出全部命中的重复 issue（最多 5 条），跨作者条目附作者与标题。
+            const shown = matches.slice(0, 5);
+            const refList = shown.map((m) => '#' + m.number).join('、');
+            const crossNotes = shown.filter((m) => !m.sameAuthor)
+              .map((m) => '#' + m.number + '（作者：@' + m.author + '，标题：' + String(m.title || '').slice(0, 120) + '）')
+              .join('、');
+            const moreNote = matches.length > shown.length ? ' 等 ' + matches.length + ' 条' : '';
+            const dupMsg = '## 重复 Issue 自动关闭\n\n本 issue 与已存在的 ' + refList + moreNote +
+              ' 内容重复' + (crossNotes ? '（检测到与 ' + crossNotes + '相同的关键内容/报错文案）' : '') +
+              '。为保证工单质量，请勿重复提交相同问题，请到原 issue（#' + dupRef.number + '）下继续讨论或补充信息' +
+              (hasCross ? '；若你的场景确有差异，请重新开 issue 并明确说明不同点' : '') + '。' + cntPart;
             try {
               await github.rest.issues.addLabels({
                 owner, repo, issue_number,
@@ -249,7 +338,7 @@ jobs:
                 const cur = (await github.rest.issues.get({ owner, repo, issue_number })).data;
                 if (cur.state === 'open' && !cur.pull_request) {
                   await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
-                  console.log('Closed duplicate issue #' + issue_number + (isCross ? ' (cross-author duplicate of #' + dupRef.number + ').' : '.'));
+                  console.log('Closed duplicate issue #' + issue_number + ' (refs: ' + matches.slice(0, 5).map((m) => '#' + m.number + (m.sameAuthor ? '' : '/cross')).join(', ') + ').');
                 }
               } catch (e) {}
             }
