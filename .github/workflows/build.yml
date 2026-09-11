@@ -4,6 +4,11 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      go_proxy:
+        description: 'GOPROXY for the cloudflared cross-compile (set https://goproxy.cn,direct on CN-network / restricted runners)'
+        required: false
+        default: 'https://proxy.golang.org,direct'
 
 # Pushes to main are serialized; a newer push supersedes an in-flight build so
 # the artifact always corresponds to the branch tip, not a stale queue entry.
@@ -14,6 +19,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Safety net for the whole chain: the validated pipeline takes ~56 min
+    # (run 34614015172); 150 min leaves ~2.5x headroom while guaranteeing a
+    # wedged network step can never occupy the runner for the 360-min default.
+    timeout-minutes: 150
 
     steps:
       - name: Checkout
@@ -53,10 +62,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends meson ninja-build gcc g++ pkg-config cmake
 
+      # Full-clone of rizinorg/rizin over the public internet. Known network
+      # constraint: GitHub-hosted runners reach github.com directly (validated
+      # by run 34614015172), but a self-hosted runner without proxy/mirror
+      # access can hang here. The step-level timeout + retry loop fail fast
+      # with a clear ::error instead of stalling to the job default.
       - name: Clone Rizin source (v0.10.0)
+        timeout-minutes: 15
         run: |
+          set -euo pipefail
           if [ ! -d third_party/rizin-src/librz/include ]; then
-            git clone https://github.com/rizinorg/rizin.git third_party/rizin-src
+            for attempt in 1 2 3; do
+              if git clone --depth 1 https://github.com/rizinorg/rizin.git third_party/rizin-src; then
+                break
+              fi
+              rm -rf third_party/rizin-src
+              if [ "$attempt" -ge 3 ]; then
+                echo "::error::git clone rizin failed after 3 attempts (network unreachable from this runner; configure a proxy/mirror or pre-populate third_party/rizin-src)"
+                exit 1
+              fi
+              echo "rizin clone attempt $attempt failed; retrying in 15s"
+              sleep 15
+            done
           fi
 
       # Same pipeline as the Release workflow: librz_native.so / libLIEF are
@@ -102,12 +129,31 @@ jobs:
 
       # The app no longer downloads cloudflared at runtime; it must be bundled
       # into jniLibs or the Cloudflare tunnel feature is dead on a fresh install.
+      # Two network dependencies live here (the GitHub clone and the Go module
+      # downloads). The clone is retried; module downloads go through the
+      # configurable GOPROXY (workflow_dispatch input, default proxy.golang.org;
+      # pass https://goproxy.cn,direct on runners behind CN networks). The
+      # step-level timeout keeps a wedged fetch from occupying the runner.
       - name: Cross-compile cloudflared for Android (arm64-v8a / armeabi-v7a / x86 / x86_64)
+        timeout-minutes: 20
+        env:
+          GOPROXY: ${{ github.event.inputs.go_proxy || 'https://proxy.golang.org,direct' }}
         run: |
           set -euo pipefail
           CLOUDFLARED_TAG="2026.8.3"
-          git clone --depth 1 --branch "$CLOUDFLARED_TAG" \
-            https://github.com/cloudflare/cloudflared.git cloudflared-src
+          for attempt in 1 2 3; do
+            if git clone --depth 1 --branch "$CLOUDFLARED_TAG" \
+              https://github.com/cloudflare/cloudflared.git cloudflared-src; then
+              break
+            fi
+            rm -rf cloudflared-src
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::git clone cloudflared ($CLOUDFLARED_TAG) failed after 3 attempts (network unreachable from this runner; configure a proxy/mirror or pre-populate cloudflared-src)"
+              exit 1
+            fi
+            echo "cloudflared clone attempt $attempt failed; retrying in 15s"
+            sleep 15
+          done
           (
             cd cloudflared-src
             GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
