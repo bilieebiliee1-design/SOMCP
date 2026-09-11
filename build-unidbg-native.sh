@@ -30,6 +30,11 @@
 # submodules (third_party/*) for a given ABI and copies them into
 # app/src/main/jniLibs/<ABI>/; rebuild the APK afterwards to enable Unidbg.
 #
+# libunicorn.so is special: unidbg's unicorn2 backend is a JNI binding, so the
+# library must carry the JNI bridge (Java_com_github_unidbg_arm_backend_unicorn_
+# Unicorn_*), not only the raw uc_* engine API. See the unicorn section below
+# and tools/verify_unicorn_jni.py.
+#
 # Usage:
 #   ./build-unidbg-native.sh
 #   ./build-unidbg-native.sh -Abi armeabi-v7a
@@ -53,6 +58,10 @@
 #     paths in unidbg 0.9.9 and have no Android prebuilt source;
 #     UnidbgEmulator loads them tolerantly (warning only), so they are not
 #     built here either.
+#   - libunicorn.so is built as unidbg's unicorn2 JNI bridge (unicorn engine
+#     archive + backend/unicorn2/src/main/native/unicorn.c). The script
+#     refuses to install a library that does not export that bridge, so an
+#     engine-only libunicorn.so can no longer reach the APK (issue #91).
 #   - The CMake flags target NDK 29 / CMake 3.22 / unidbg 0.9.9; if you bump
 #     the NDK or CMake, adjust the flags per the upstream READMEs.
 set -euo pipefail
@@ -200,6 +209,31 @@ build_one() {
   "$CMAKE_BIN" --build "$build" --parallel 4
 }
 
+# Refuse to install a libunicorn.so that cannot serve unidbg's unicorn2
+# backend. Prefers the python verifier (real .dynsym inspection); falls back to
+# a raw symbol scan so the guard also works where python is unavailable.
+verify_unicorn_jni() {
+  local so="$1" runner="" hits=""
+  for candidate in python3 python py; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      runner="$candidate"
+      break
+    fi
+  done
+  if [[ -n "$runner" && -f "$PROJECT/tools/verify_unicorn_jni.py" ]]; then
+    "$runner" "$PROJECT/tools/verify_unicorn_jni.py" "$so"
+    return $?
+  fi
+  echo "[unidbg-native] python not found - falling back to a raw symbol scan"
+  hits="$(LC_ALL=C grep -a -o 'Java_com_github_unidbg_arm_backend_unicorn_Unicorn_' "$so" 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ -z "$hits" || "$hits" -lt 20 ]]; then
+    echo "error: $so exports only ${hits:-0} unicorn2 JNI symbols (need >= 20); it looks like the raw unicorn engine instead of unidbg's JNI bridge" >&2
+    return 1
+  fi
+  echo "[unidbg-native] JNI bridge symbol scan passed ($hits symbol references)"
+  return 0
+}
+
 if [[ $SKIP_CAPSTONE -eq 0 ]]; then
   # Prefer the zhkl0228 fork (the unidbg 0.9.9 JNA bindings were written
   # against its API); fall back to the official capstone-4.0.2-src
@@ -243,13 +277,125 @@ if [[ $SKIP_UNICORN -eq 0 ]]; then
   if [[ "$ABI" != "arm64-v8a" && "$ABI" != "x86_64" ]]; then
     echo "[unidbg-native] WARNING: unicorn cannot compile on 32-bit ABI '$ABI' (needs __uint128_t); skipping libunicorn.so for this ABI"
   else
-    # unidbg 0.9.9's Unicorn2Factory uses unicorn2 (the zhkl0228 fork).
-    uni="$PROJECT/third_party/unicorn-zhkl0228"
-    [[ -d "$uni" ]] || uni="$PROJECT/third_party/unicorn-engine-unicorn2"
+    # ---------------------------------------------------------------------
+    # libunicorn.so must be unidbg's *unicorn2 JNI bridge*, not the raw engine.
+    #
+    # The backend the app registers (Unicorn2Factory -> Unicorn2Backend) calls
+    # com.github.unidbg.arm.backend.unicorn.Unicorn, whose entry points are JNI
+    # `native` methods. Android resolves them by symbol name, so the library
+    # must export
+    #     Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*
+    # which the plain unicorn engine does not: it only exports the flat uc_*
+    # API. An engine-only lib loads fine, so UnidbgEmulator still reports the
+    # backend as available; the failure only appears when a session is opened -
+    # Unicorn2Backend cannot bind, and because the app constructs
+    # Unicorn2Factory(true), BackendFactory.newBackend swallows the error and
+    # falls back to the legacy UnicornBackend, which then dies with
+    # NoClassDefFoundError: unicorn.Unicorn (issue #91).
+    #
+    # Two defects used to be baked in here:
+    #   1. `-DUNICORN_ARCH=arm,aarch64` is a single bogus CMake token - the arch
+    #      list must be semicolon separated. With it, no arm-softmmu /
+    #      aarch64-softmmu backend was compiled in at all: the result was a
+    #      ~54 KB library exporting the whole uc_* surface with no emulation
+    #      core behind it.
+    #   2. A correct engine build still carries no JNI bridge; that has to be
+    #      compiled from unidbg's backend/unicorn2/src/main/native/unicorn.c and
+    #      linked against the engine archive.
+    # The steps below mirror unidbg's own
+    # backend/unicorn2/src/main/native/{Dockerfile,CMakeLists.txt}.
+    # ---------------------------------------------------------------------
+    uni="$PROJECT/third_party/unicorn-engine-unicorn2"
+    if [[ ! -f "$uni/include/unicorn/unicorn.h" ]] ||
+      ! grep -q "uc_ctl_set_cpu_model" "$uni/include/unicorn/unicorn.h"; then
+      echo "error: unicorn 2.x engine source not found at $uni" >&2
+      echo "       run 'git submodule update --init --recursive'. unidbg's JNI bridge needs the" >&2
+      echo "       unicorn 2.x API (uc_ctl_set_cpu_model / uc_ctl_remove_cache); the 1.0.x snapshot" >&2
+      echo "       in third_party/unicorn-zhkl0228 cannot build it." >&2
+      exit 1
+    fi
+    jni_dir="$PROJECT/third_party/unidbg-zhkl0228/backend/unicorn2/src/main/native"
+    if [[ ! -f "$jni_dir/unicorn.c" ]]; then
+      echo "error: unidbg unicorn2 JNI bridge sources missing: $jni_dir/unicorn.c" >&2
+      echo "       run 'git submodule update --init --recursive' (needs third_party/unidbg-zhkl0228)" >&2
+      exit 1
+    fi
+
+    # 1) engine: arm + aarch64 back ends, Release, position independent, plus
+    #    the all-in-one libunicorn.a archive the bridge links against.
+    #    The JNI bridge is written against the unicorn 2.x API (uc_init,
+    #    uc_ctl_*), which third_party/unicorn-engine-unicorn2 tracks.
     build_one unicorn "$uni" \
-      -DUNICORN_ARCH=arm,aarch64 -DUNICORN_BUILD_TESTS=OFF -DUNICORN_BUILD_SAMPLES=OFF
-    cp "$BUILD_ROOT/unicorn/libunicorn.so" "$JNI_LIBS/"
-    echo "[unidbg-native] copied libunicorn.so -> $JNI_LIBS"
+      -DUNICORN_ARCH="arm;aarch64" \
+      -DBUILD_SHARED_LIBS=ON \
+      -DUNICORN_LEGACY_STATIC_ARCHIVE=ON \
+      -DUNICORN_BUILD_TESTS=OFF -DUNICORN_INSTALL=OFF -DUNICORN_TRACER=OFF
+
+    engine_lib="$BUILD_ROOT/unicorn/libunicorn.a"
+    if [[ ! -f "$engine_lib" ]]; then
+      engine_lib="$(find "$BUILD_ROOT/unicorn" -maxdepth 1 -name 'libunicorn*.a' -print -quit || true)"
+    fi
+    if [[ -z "$engine_lib" || ! -f "$engine_lib" ]]; then
+      echo "error: unicorn engine archive (libunicorn.a) not found under $BUILD_ROOT/unicorn" >&2
+      exit 1
+    fi
+    echo "[unidbg-native] unicorn engine archive: $engine_lib"
+    # Extra archives are harmless inside --start-group: the linker only pulls
+    # the members it still needs.
+    engine_extra=()
+    while IFS= read -r extra; do
+      if [[ -z "$extra" || "$extra" == "$engine_lib" ]]; then continue; fi
+      engine_extra+=("$extra")
+    done < <(find "$BUILD_ROOT/unicorn" -maxdepth 1 \( -name 'lib*-softmmu.a' -o -name 'libunicorn-common.a' \) 2>/dev/null | sort)
+
+    # 2) JNI bridge -> libunicorn.so, compiled with the NDK toolchain.
+    host_tag=""
+    for candidate in linux-x86_64 linux-aarch64 darwin-x86_64 darwin-arm64 windows-x86_64; do
+      if [[ -d "$NDK/toolchains/llvm/prebuilt/$candidate" ]]; then
+        host_tag="$candidate"
+        break
+      fi
+    done
+    if [[ -z "$host_tag" ]]; then
+      echo "error: NDK LLVM prebuilt toolchain not found under $NDK/toolchains/llvm/prebuilt" >&2
+      exit 1
+    fi
+    case "$ABI" in
+      arm64-v8a) clang_triple="aarch64-linux-android" ;;
+      x86_64) clang_triple="x86_64-linux-android" ;;
+      *)
+        echo "error: unexpected 64-bit ABI '$ABI'" >&2
+        exit 1
+        ;;
+    esac
+    bridge_cc="$NDK/toolchains/llvm/prebuilt/$host_tag/bin/${clang_triple}26-clang"
+    if [[ ! -x "$bridge_cc" ]]; then
+      echo "error: NDK clang not found: $bridge_cc" >&2
+      exit 1
+    fi
+    ndk_include="$NDK/toolchains/llvm/prebuilt/$host_tag/sysroot/usr/include"
+    if [[ ! -f "$ndk_include/jni.h" ]]; then
+      echo "error: jni.h not found in the NDK sysroot: $ndk_include" >&2
+      exit 1
+    fi
+
+    bridge_so="$BUILD_ROOT/libunicorn.so"
+    rm -f "$bridge_so"
+    echo "[unidbg-native] linking the unicorn2 JNI bridge for $ABI ..."
+    "$bridge_cc" -shared -fPIC -O3 -DNDEBUG -Wall -Wno-missing-braces \
+      -I "$jni_dir" -I "$uni/include" -I "$ndk_include" \
+      "$jni_dir/unicorn.c" "$jni_dir/sample_arm.c" "$jni_dir/sample_arm64.c" \
+      -Wl,--start-group "$engine_lib" ${engine_extra[@]+"${engine_extra[@]}"} -Wl,--end-group \
+      -llog -lm -ldl \
+      -o "$bridge_so"
+
+    # 3) never install a library that cannot satisfy the backend.
+    if ! verify_unicorn_jni "$bridge_so"; then
+      echo "error: refusing to install $bridge_so - it does not export the unicorn2 JNI bridge" >&2
+      exit 1
+    fi
+    cp "$bridge_so" "$JNI_LIBS/libunicorn.so"
+    echo "[unidbg-native] copied libunicorn.so (unicorn2 JNI bridge) -> $JNI_LIBS"
   fi
 fi
 
