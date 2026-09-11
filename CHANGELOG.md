@@ -1,5 +1,13 @@
 # 更新日志
 
+## 未发布
+
+- 修复 Unidbg 动态模拟完全不可用的问题（issue #91）：APK 里打包的 `libunicorn.so` 从来都不是 unidbg unicorn2 后端需要的那个库。unicorn2 后端（`com.github.unidbg.arm.backend.Unicorn2Backend` 调用 `com.github.unidbg.arm.backend.unicorn.Unicorn`）是 JNI 绑定，要求 `libunicorn.so` 导出 `Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*`；而此前编出来的是「原始 unicorn 引擎」，只导出 `uc_*` C API。雪上加霜的是 `-DUNICORN_ARCH=arm,aarch64` 用了逗号——CMake 架构列表的分隔符是分号，于是 `arm-softmmu` / `aarch64-softmmu` 两个后端根本没参与编译，产物只有约 54 KB，是一个「只有 API 外壳、没有模拟核心」的空库。
+- 这个坏库的危害在于它「看起来是好的」：`System.loadLibrary("unicorn")` 能成功，`system_control(action=status)` 也一直显示已随包内置，直到真正打开会话才失败——`Unicorn2Backend` 绑定不到 native 符号，而 `BackendFactory.newBackend` 因为应用以 `Unicorn2Factory(true)` 注册会吞掉这个异常，回退到旧版 `UnicornBackend`，后者随即抛 `NoClassDefFoundError: unicorn.Unicorn`（1.0.21 只带了一个精简的 `unicorn.UnicornException`），最终表现为「Unidbg 不可用」，并把排查引向 R8/ProGuard 方向。
+- 修复 `build-unidbg-native.sh` / `build-unidbg-native.ps1` 的 unicorn 构建：改用 unicorn 2.x 引擎（`third_party/unicorn-engine-unicorn2`）编出 all-in-one `libunicorn.a`，再用 NDK 编译并链接 unidbg 自带的 JNI 桥（`backend/unicorn2/src/main/native/unicorn.c`）产出真正的 `libunicorn.so`，步骤与 unidbg 官方 `backend/unicorn2/src/main/native` 的构建方式一致；32 位 ABI（armeabi-v7a / x86）仍因 QEMU 需要 `__uint128_t` 而跳过 unicorn。
+- 新增 `tools/verify_unicorn_jni.py`（可直接校验 `.so` 或 Release APK），并在两个构建脚本中作为硬性门槛：导出不了 unicorn2 JNI 桥的 `libunicorn.so` 一律拒绝安装，宁可让构建失败，也不再发出「自称可用、实则不可用」的包。
+- 修正诊断信息：`system_control(action=status)` 的 `coverageModel` 新增 `backendInitError`，`UnidbgEmulator.unavailableReason()` 现在会区分「库没打进包」与「库在但不是 unicorn2 JNI 桥」，避免再次被误导。
+
 ## 1.0.17
 
 本节仅记录 `1.0.16` 发布后到 `1.0.17` 发布之间的变化。
