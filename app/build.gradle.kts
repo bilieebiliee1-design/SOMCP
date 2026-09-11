@@ -231,7 +231,16 @@ abstract class UnidbgNativeBuildTask : DefaultTask() {
             // the 32-bit ABIs get capstone/keystone only (Unidbg degrades
             // gracefully there but the APKs still build).
             val required = if (abi == "arm64-v8a" || abi == "x86_64") libs else libs - "unicorn"
-            dir.isDirectory && required.all { lib -> dir.resolve("lib$lib.so").exists() }
+            dir.isDirectory && required.all { lib ->
+                val artifact = dir.resolve("lib$lib.so")
+                // libunicorn.so must be unidbg's unicorn2 JNI bridge, which
+                // links the whole emulation engine and therefore weighs
+                // megabytes. The engine-only library shipped before the fix
+                // was ~54 KB and could never serve the backend, so treat a
+                // tiny one as stale and rebuild instead of reusing it
+                // (issue #91).
+                artifact.exists() && (lib != "unicorn" || artifact.length() > 1L * 1024 * 1024)
+            }
         }
         if (haveAll) {
             logger.lifecycle("[unidbg-native] libs already present in jniLibs; skipping build")
