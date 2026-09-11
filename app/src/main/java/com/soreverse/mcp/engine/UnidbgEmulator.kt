@@ -63,6 +63,16 @@ class UnidbgEmulator(private val context: Context) {
 
         @Volatile private var availabilityError: Throwable? = null
 
+        /**
+         * Why [addUnicorn2Backend] could not register Unicorn2Factory, when it
+         * failed. Recorded so callers can tell "the native libraries are not
+         * bundled" apart from "libunicorn.so is there but is not unidbg's
+         * unicorn2 JNI bridge": BackendFactory.newBackend swallows the binding
+         * error and falls back to the legacy UnicornBackend, so without this
+         * the real cause stays invisible (issue #91).
+         */
+        @Volatile private var backendInitError: String? = null
+
         @Volatile private var nativeLoaded = false
 
         /**
@@ -193,6 +203,7 @@ class UnidbgEmulator(private val context: Context) {
 
         fun nativeDependencyError(): Throwable? = nativeLoadError
         fun availabilityError(): Throwable? = availabilityError
+        fun backendInitReason(): String? = backendInitError
         fun optionalNativeMissing(): Boolean = optionalNativeMissing
 
         /**
@@ -226,6 +237,12 @@ class UnidbgEmulator(private val context: Context) {
 
                 abi64Bit && !unicornLoaded ->
                     "libunicorn.so was not bundled into this 64-bit APK. Unicorn2Factory requires it. Rebuild with build-unidbg-native.sh or install a release APK that bundles the unicorn native library."
+
+                backendInitError != null ->
+                    "libunicorn.so is present but Unidbg's unicorn2 backend could not be initialised " +
+                        "($backendInitError). The bundled library must be unidbg's unicorn2 JNI bridge " +
+                        "(Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*), not the bare unicorn " +
+                        "engine; rebuild the natives with build-unidbg-native.sh and reinstall the APK."
 
                 else -> "Unidbg unavailable on this device"
             }
@@ -2080,11 +2097,21 @@ class UnidbgEmulator(private val context: Context) {
                 is UnsatisfiedLinkError ->
                     AppLog.w(
                         "Unicorn2Factory backend init failed — libunicorn.so could not be bound: ${root.message}. " +
-                            "Run build-unidbg-native.sh for this ABI or install a release APK."
+                            "The bundled library must export unidbg's unicorn2 JNI bridge " +
+                            "(Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*), not just the uc_* engine API. " +
+                            "Run build-unidbg-native.sh for this ABI or install a release APK that bundles it."
                     )
                 else ->
                     AppLog.w("Unicorn2Factory backend init failed: ${root.message} (${root.javaClass.simpleName})")
             }
+        }
+        // Remember why the factory could not be registered: BackendFactory
+        // swallows this failure and degrades to the legacy UnicornBackend, so
+        // without recording it the user only sees a generic "natives missing"
+        // message (issue #91).
+        backendInitError = result.exceptionOrNull()?.let { error ->
+            val root = rootCause(error)
+            "${root.javaClass.name}: ${root.message ?: "backend factory init failed"}"
         }
         return result.getOrNull() ?: "missing"
     }
