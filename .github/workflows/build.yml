@@ -5,6 +5,11 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# 与 release.yml 保持同一套构建前置与签名密钥。历史版本在本 job 里
+# 执行 `chmod +x ./gradlew`，但仓库从未提交过 Gradle Wrapper
+# （只有 gradle/wrapper/gradle-wrapper.properties），因此每次都在
+# 第一步失败。这里改为与 release.yml 一致：由 setup-gradle 直接
+# 提供 Gradle 9.6.1，不再依赖 gradlew。
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -12,26 +17,97 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
-      - name: Grant execute permission
-        run: chmod +x ./gradlew
+      - name: Set up Gradle 9.6.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
 
-      - name: Build release APK
-        run: ./gradlew assembleRelease
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build gcc g++ pkg-config
+
+      - name: Clone Rizin source (v0.10.0)
+        run: |
+          if [ ! -d third_party/rizin-src/librz/include ]; then
+            git clone https://github.com/rizinorg/rizin.git third_party/rizin-src
+          fi
+
+      - name: Grant execute permission to native scripts
+        run: chmod +x build-native-android.sh build-unidbg-native.sh
+
+      - name: Build native backends (Rizin + LIEF)
+        run: ./build-native-android.sh
+
+      - name: Build Unidbg native libs (capstone/keystone/unicorn)
+        run: |
+          set -euo pipefail
+          # 交叉编译 Unidbg 后端所需的 Android 原生库，并做存在性检查：
+          # 缺任何一个都直接失败，绝不打出后端残缺的 APK。
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            ./build-unidbg-native.sh --abi "$abi"
+          done
+          for abi in arm64-v8a x86_64; do
+            for lib in capstone keystone unicorn; do
+              test -f "app/src/main/jniLibs/$abi/lib$lib.so" || {
+                echo "::error::missing app/src/main/jniLibs/$abi/lib$lib.so"
+                exit 1
+              }
+            done
+          done
+          for abi in armeabi-v7a x86; do
+            for lib in capstone keystone; do
+              test -f "app/src/main/jniLibs/$abi/lib$lib.so" || {
+                echo "::error::missing app/src/main/jniLibs/$abi/lib$lib.so"
+                exit 1
+              }
+            done
+          done
+          echo "Unidbg native libs present for required ABIs."
+      - name: Restore release signing keystore
+        run: |
+          set -euo pipefail
+          # 与 release.yml 相同的 secrets 名称，保证两条流水线只用一套密钥。
+          if [ -z "${{ secrets.KEYSTORE }}" ] \
+             || [ -z "${{ secrets.ALIAS }}" ] \
+             || [ -z "${{ secrets.ALIAS_PASSWORD }}" ] \
+             || [ -z "${{ secrets.PASSWORD }}" ]; then
+            echo "::error::Signing secrets (KEYSTORE/ALIAS/ALIAS_PASSWORD/PASSWORD) must all be configured."
+            exit 1
+          fi
+          mkdir -p release
+          echo "${{ secrets.KEYSTORE }}" | base64 -d > release/so-reverse-mcp-release.jks
+          echo "Restored release signing keystore from secrets."
+
+      - name: Build release APKs
         env:
-          STORE_FILE: ${{ secrets.STORE_FILE }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_FILE: release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
 
-      - name: Upload APK
+      - name: Wipe signing artifacts
+        run: |
+          set -euo pipefail
+          rm -f release/keystore.properties release/*.jks release/*.jks.asc
+          echo "Signing material wiped from the workspace."
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: somcp-release
