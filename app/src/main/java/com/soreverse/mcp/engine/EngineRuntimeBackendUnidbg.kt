@@ -1339,6 +1339,10 @@ internal fun EngineRuntime.emulationStatus(): JSONObject {
                     "availabilityError",
                     UnidbgEmulator.availabilityError()?.toString() ?: JSONObject.NULL
                 )
+                .put(
+                    "backendInitError",
+                    UnidbgEmulator.backendInitReason() ?: JSONObject.NULL
+                )
         )
         .put(
             "limitations",
