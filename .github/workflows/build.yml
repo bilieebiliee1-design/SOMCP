@@ -127,6 +127,7 @@ jobs:
         # v7 runs on the Node 24 runtime and clears the `punycode` (DEP0040)
         # deprecation warning that v5 emitted on the Node 24 runner.
         uses: actions/setup-go@v7
+        uses: actions/setup-go@v5
         with:
           go-version: 'stable'
           cache: false
