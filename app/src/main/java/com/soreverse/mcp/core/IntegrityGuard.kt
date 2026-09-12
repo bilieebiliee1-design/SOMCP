@@ -136,6 +136,14 @@ object IntegrityGuard {
      * and logs the exact reason before terminating.
      */
     fun enforceEarly(context: Context) {
+        // Prime the native anti-tamper layer FIRST, at the earliest app-controlled
+        // lifecycle point: this captures the load-time .text snapshot before most
+        // in-memory patching tools run. Failure is recorded but not fatal here
+        // (see the NOTE above about attachBaseContext diagnostics).
+        val hardened = SignatureVerifier.initHardening()
+        if (!hardened) {
+            AppLog.w("INTEGRITY (early) native hardening init failed")
+        }
         if (!SignatureVerifier.verify(context) ||
             !SignatureVerifier.verifyV234(context) ||
             !SignatureVerifier.verifyPackageName(context) ||
@@ -197,12 +205,16 @@ object IntegrityGuard {
             val expected = SignatureVerifier.getExpectedSignerDigest().normalizeDigest()
             val threats = runtimeThreats()
             if (expected.isBlank()) {
+                // A blank pin means the native layer failed to produce the pinned
+                // digest. Previously this returned `trusted = true`, which was a
+                // one-call bypass (stub the JNI method -> whole check skipped).
+                // Treat it as a hard failure instead.
                 Result(
-                    threats.isEmpty(),
-                    if (threats.isEmpty()) "no release signer pin configured" else "runtime instrumentation detected",
-                    expected,
-                    emptyList(),
-                    threats
+                    trusted = false,
+                    reason = "release signer pin unavailable (native verification failed)",
+                    expected = expected,
+                    actual = emptyList(),
+                    threats = listOf("signer pin unavailable") + threats
                 )
             } else {
                 val actual = signingCertificateDigests(context).map { it.normalizeDigest() }

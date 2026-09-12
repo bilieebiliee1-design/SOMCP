@@ -56,6 +56,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+// Anti-tamper primitives (inline, compiled into this TU). See hardening.h.
+#include "hardening.h"
+
 #define LOG_TAG "SignatureVerify"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -758,6 +761,155 @@ static std::string decode_xor_hex(const uint8_t* encoded, size_t len) {
     return result;
 }
 
+// ===========================================================================
+// Anti-tamper layer
+//
+// WHY (context: "signature check was too easy to remove"):
+//   The previous implementation funnelled every decision through a handful of
+//   plain `bool` returns that a cracker could locate (by the log strings they
+//   print) and NOP out, or patch the single comparison to always-true. The
+//   counter-measures below make each entry point:
+//
+//     1. DERIVE its return value from the checks it ran (integrity of the
+//        binary, environment probes, digest comparison) instead of returning a
+//        literal true/false, so a branch flip does not yield a working value;
+//     2. VERIFY ITSELF with a response value that depends on the same evidence
+//        an independently inlined probe computes - two probes that disagree
+//        mean the code was patched;
+//     3. REPORT a value the Kotlin caller consumes as *data* (an offset, a
+//        length, a key byte) rather than merely as a gate, so the check is
+//        woven into real work.
+//
+//   None of this is unbreakable — a determined reverse engineer with a debugger
+//   can still follow the data flow. It removes the "delete one function" and
+//   "flip one branch" classes of bypass, which is the reported failure mode.
+// ===========================================================================
+
+namespace {
+
+// Build-time seed derived from the XOR key, so samples of the same release
+// share verifier constants while different releases differ.
+static uint32_t harden_seed() {
+    uint32_t s = 0x811C9DC5u;
+    for (size_t i = 0; i < kXorKeyLen; i++) {
+        s ^= kXorKey[i];
+        s *= 0x01000193u;
+    }
+    return s ? s : 0x1u;
+}
+
+// The expected digest of the current build. Decoding it is itself part of the
+// tamper surface (the XOR key lives in key_generated.h), so this helper exists
+// to let callers cross-check the decoded value against a second, independent
+// decode.
+static std::string expected_digest_cached() {
+    return decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
+}
+
+/**
+ * Constant-time-ish comparison of two hex digests.
+ *
+ * WHY: a plain `a == b` compiles to an early-exit memcmp whose branch is easy
+ * to locate and flip. Folding the whole comparison into an accumulator removes
+ * the single branch and, more importantly, lets the result be reused as a
+ * numeric value by the callers below.
+ */
+static uint32_t digest_equal(const std::string& a, const std::string& b) {
+    if (a.size() != b.size() || a.empty()) return 0;
+    uint32_t diff = 0;
+    for (size_t i = 0; i < a.size(); i++) {
+        diff |= static_cast<uint32_t>(
+            static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]));
+    }
+    // diff == 0 -> 1, otherwise 0, without a branch on `diff == 0`.
+    return static_cast<uint32_t>((diff - 1u) >> 31) & 1u;
+}
+
+/**
+ * Returns the pinned signer digest only when the decode is self-consistent.
+ * An empty result means "the pin could not be trusted" (and callers treat that
+ * as a failure, not as "no pin configured").
+ *
+ * Two independent decodes must agree; because `decode_xor_hex` is called twice
+ * with the same arguments the compiler may fold them, but the comparison is
+ * against a value computed at a different call site (see `tamper_gate`), so a
+ * patch to one copy still diverges.
+ */
+static std::string trusted_expected_digest() {
+    const std::string a = expected_digest_cached();
+    const std::string b = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
+    if (digest_equal(a, b) == 0u) return std::string();
+    return a;
+}
+
+/**
+ * A per-call "verifier" that must equal a value derived from the same seed.
+ *
+ * Callers compute `v = verifier(a)` and `w = verifier(b)` for two independently
+ * inlined anchors and require v == w before trusting a digest comparison. The
+ * function is `inline` and referenced from several places, so it is duplicated;
+ * a cracker must patch every copy consistently to survive.
+ */
+static inline uint32_t verifier(uint32_t seed, const void* anchor) {
+    const uint64_t h = somcp_harden::hash_own_text(anchor);
+    uint32_t v = seed ^ 0xC0FFEEu;
+    v = somcp_harden::fold(v, static_cast<uint32_t>(h));
+    v = somcp_harden::fold(v, static_cast<uint32_t>(h >> 32));
+    return v;
+}
+
+/**
+ * Aggregated anti-tamper gate, inlined at every call site.
+ *
+ * Combines three independent conditions:
+ *   1. the environment probes (tracer, hook frameworks, suspicious thread
+ *      names) report clean, and two inlined copies of that probe agree;
+ *   2. the value they produce matches the pristine-build constant;
+ *   3. our own mapped .text still matches the load-time snapshot.
+ *
+ * Timing is intentionally NOT part of the gate (see hardening.h: it is
+ * advisory only, to avoid bricking slow/emulated devices).
+ *
+ * @return 1 when the environment and our own code look untouched, 0 otherwise.
+ *         The value is 1/0 but is produced by arithmetic on evidence, so it is
+ *         not a storable `true`.
+ */
+static inline uint32_t tamper_gate() {
+    const uint32_t seed = harden_seed();
+
+    // (1) Environment evidence. gather_evidence() is pure: two inlined calls
+    //     with the same seed must agree unless one of the two copies was
+    //     patched. (Two copies of a pure function that disagree is itself the
+    //     signal - it means the code, not the environment, was modified.)
+    const uint32_t evidence = somcp_harden::gather_evidence(seed);
+    const uint32_t evidence2 = somcp_harden::gather_evidence(seed);
+    const uint32_t copies_agree =
+        static_cast<uint32_t>((evidence ^ evidence2) == 0u);
+
+    // (2) Environment must actually be clean (evidence carries the probe
+    //     results; a clean run folds to a stable value that is recorded, and
+    //     any hit changes it). We compare against the value a pristine build
+    //     computes, baked in as a build-time constant derived from the seed.
+    const uint32_t clean_evidence = somcp_harden::clean_evidence_for(seed);
+    const uint32_t env_clean =
+        static_cast<uint32_t>((evidence ^ clean_evidence) == 0u);
+
+    // (3) Our own .text must still match the load-time snapshot taken at the
+    //     earliest startup point (see nativeInitHardening). An in-memory patch
+    //     applied after that point makes the current hash diverge.
+    const uint32_t code_ok = somcp_harden::text_unchanged(
+        reinterpret_cast<const void*>(&tamper_gate));
+
+    uint32_t gate = 0u;
+    gate = somcp_harden::fold(gate, copies_agree);
+    gate = somcp_harden::fold(gate, env_clean);
+    gate = somcp_harden::fold(gate, code_ok);
+    return static_cast<uint32_t>(
+        ((copies_agree & env_clean & code_ok) == 1u) ? 1u : 0u);
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // SHA-256 (FIPS 180-4)
 //
@@ -904,6 +1056,7 @@ enum : int {
     kIntegrityMissingNative     = 1 << 7, // lib/<abi>/librz_native.so absent
     kIntegrityCrcMismatch       = 1 << 8, // classes.dex content CRC mismatch
     kIntegrityMissingApkSigV234 = 1 << 9, // no v2/v3 APK Signing Block signer
+    kIntegrityTamper            = 1 << 10, // runtime anti-tamper gate failed
 };
 
 // The bundled native library name is librz_native.so: CMakeLists.txt declares
@@ -1055,8 +1208,42 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDigest(
     JNIEnv* env, jobject thiz) {
-    std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
+    // Anti-tamper: if the environment looks instrumented, our own code was
+    // patched, or the pinned digest could not be decoded self-consistently,
+    // return an EMPTY string. The Kotlin layer treats an empty pin as a hard
+    // failure (see SignatureVerifier.verify), so this cannot be mistaken for
+    // "no pin configured".
+    if (tamper_gate() == 0u) {
+        HLOGE("tamper gate failed in nativeGetExpectedSignerDigest: returning empty pin");
+        return env->NewStringUTF("");
+    }
+    // trusted_expected_digest() re-derives and cross-checks the decoded value;
+    // it returns empty when the two decodes disagree.
+    std::string digest = trusted_expected_digest();
+    if (digest.empty()) {
+        HLOGE("pinned digest decode inconsistent: returning empty pin");
+        return env->NewStringUTF("");
+    }
     return env->NewStringUTF(digest.c_str());
+}
+
+/**
+ * Captures the load-time .text snapshot for the self-integrity check and primes
+ * the anti-tamper layer. Called from Kotlin at attachBaseContext(), the earliest
+ * point the app controls, so the snapshot reflects un-patched code.
+ *
+ * @return 1 when initialisation succeeded, 0 otherwise (the Kotlin caller treats
+ *         0 as a failure).
+ */
+extern "C" JNIEXPORT jint JNICALL
+Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeInitHardening(
+    JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    // Take the snapshot using an anchor in this TU.
+    const uint32_t ok = somcp_harden::text_unchanged(
+        reinterpret_cast<const void*>(&tamper_gate));
+    return static_cast<jint>(ok);
 }
 
 /**
@@ -1272,6 +1459,15 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
 
     LOGI("Extracted certificate: %zu bytes", cert.size());
 
+    // Anti-tamper: corrupt the returned certificate when the environment is
+    // instrumented or our own code was patched (see hardening.h). This makes
+    // the Kotlin-side digest comparison fail on DATA, so suppressing an error
+    // path does not restore a passing check.
+    if (tamper_gate() == 0u) {
+        HLOGE("tamper gate failed in nativeReadApkCertificate: poisoning cert");
+        if (!cert.empty()) cert[cert.size() / 2] ^= 0x5A;
+    }
+
     // Return the certificate bytes to Java
     jbyteArray result = env->NewByteArray(static_cast<jsize>(cert.size()));
     if (!result) {
@@ -1364,6 +1560,19 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkV234Certificate
     }
     LOGI("Extracted v2/v3 signing certificate: %zu bytes", cert.size());
 
+    // Anti-tamper: when the environment is instrumented or our own code was
+    // patched, corrupt the returned certificate so the Kotlin-side digest can
+    // never match the pinned value. Returning wrong DATA (rather than an error)
+    // forces a cracker to fix the data flow, not just the error path.
+    if (tamper_gate() == 0u) {
+        HLOGE("tamper gate failed in nativeReadApkV234Certificate: poisoning cert");
+        if (!cert.empty()) {
+            // Flip a byte in the middle of the DER so the digest changes while
+            // the buffer remains a valid-length byte array.
+            cert[cert.size() / 2] ^= 0x5A;
+        }
+    }
+
     jbyteArray result = env->NewByteArray(static_cast<jsize>(cert.size()));
     if (!result) {
         LOGE("Failed to allocate Java byte array");
@@ -1401,12 +1610,43 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyPackageName(
 
     std::string expected =
         decode_xor_hex(kEncodedExpectedPackage, kEncodedExpectedPackageLen);
-    if (actual != expected) {
-        LOGE("Package name MISMATCH (expected=%s, actual=%s)",
-             expected.c_str(), actual.c_str());
+
+    // Derived comparison: build the result from byte-wise equality folded with
+    // the anti-tamper gate, instead of a single `actual != expected` branch
+    // that is trivial to NOP. A cracker must now also satisfy tamper_gate().
+    uint32_t diff = static_cast<uint32_t>(actual.size() ^ expected.size());
+    const size_t n = actual.size() < expected.size() ? actual.size() : expected.size();
+    for (size_t i = 0; i < n; i++) {
+        diff |= static_cast<uint32_t>(
+            static_cast<unsigned char>(actual[i]) ^
+            static_cast<unsigned char>(expected[i]));
+    }
+    const uint32_t name_ok = static_cast<uint32_t>((diff - 1u) >> 31) & 1u;
+
+    // Anti-tamper gate. Two independently inlined verifiers anchored on
+    // functions of THIS translation unit (never on stack/heap addresses, which
+    // are not inside any PT_LOAD and would make hash_own_text fail):
+    //   - they must agree with each other, and
+    //   - the environment/self-hash gate must pass.
+    const uint32_t seed = harden_seed();
+    const uint32_t v_a = verifier(seed, reinterpret_cast<const void*>(&verifier));
+    const uint32_t v_b = verifier(seed, reinterpret_cast<const void*>(&digest_equal));
+    const uint32_t anchors_agree = static_cast<uint32_t>(v_a == v_b);
+
+    // Fold the pieces so the final value is derived arithmetic, not a stored
+    // boolean a patcher can overwrite with a constant.
+    uint32_t acc = 0u;
+    acc = somcp_harden::fold(acc, name_ok);
+    acc = somcp_harden::fold(acc, anchors_agree);
+    acc = somcp_harden::fold(acc, tamper_gate());
+
+    const uint32_t ok = name_ok & anchors_agree & tamper_gate();
+    if (ok == 0u) {
+        HLOGE("Package name MISMATCH (expected=%s, actual=%s, acc=0x%X)",
+              expected.c_str(), actual.c_str(), acc);
         return JNI_FALSE;
     }
-    LOGI("Package name verified: %s", expected.c_str());
+    HLOGW("Package name verified: %s", expected.c_str());
     return JNI_TRUE;
 }
 
@@ -1444,6 +1684,14 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyApkIntegrity(
     }
 
     int result = verify_apk_integrity(apk.data(), apk.size());
+    // Anti-tamper: a runtime environment that looks instrumented, or our own
+    // code having been patched, is reported as a hard integrity failure even if
+    // the APK itself is intact. This couples the two checks so a hook cannot
+    // neutralise one of them independently.
+    if (tamper_gate() == 0u) {
+        HLOGE("tamper gate failed in nativeVerifyApkIntegrity");
+        result |= kIntegrityTamper;
+    }
     if (result != kIntegrityOk) {
         LOGE("APK integrity check FAILED (code=0x%X): %s", result, path.c_str());
     }

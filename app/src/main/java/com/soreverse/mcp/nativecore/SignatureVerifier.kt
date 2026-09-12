@@ -68,6 +68,26 @@ object SignatureVerifier {
     private external fun nativeVerifyPackageName(packageName: String): Boolean
     private external fun nativeVerifyApkIntegrity(apkPath: String): Int
     private external fun nativeComputeSha256Hex(data: ByteArray): String?
+    private external fun nativeInitHardening(): Int
+
+    /**
+     * Primes the native anti-tamper layer: captures the load-time hash of the
+     * library's own executable text so a later in-memory patch is detectable.
+     *
+     * MUST be called as early as possible (Application.attachBaseContext), i.e.
+     * before hooking frameworks patch our code in memory.
+     *
+     * @return true when the snapshot was captured.
+     */
+    fun initHardening(): Boolean {
+        if (!loaded) return false
+        return try {
+            nativeInitHardening() == 1
+        } catch (e: Exception) {
+            AppLog.e("SignatureVerifier: nativeInitHardening failed", e)
+            false
+        }
+    }
 
     /**
      * Integrity error-code bitmask returned by [verifyApkIntegrity].
@@ -85,6 +105,7 @@ object SignatureVerifier {
         const val MISSING_NATIVE = 1 shl 7
         const val CRC_MISMATCH = 1 shl 8
         const val MISSING_APK_SIG_V234 = 1 shl 9
+        const val TAMPER = 1 shl 10
     }
 
     /**
@@ -197,10 +218,12 @@ object SignatureVerifier {
     fun verify(context: Context): Boolean {
         val expected = nativeGetExpectedSignerDigest().let { normalizeSignerDigest(it) }
         if (expected.isBlank()) {
-            AppLog.i(
-                "SignatureVerifier: no release signer pin configured, skipping native verification"
-            )
-            return true // no pin configured, skip
+            // A blank pin means the native layer could not produce the pinned
+            // digest (library missing, decode tampered with, or a hook stubbed
+            // the JNI call). This is a FAILURE, never a pass: treating it as
+            // "nothing to check" was itself a one-line bypass.
+            AppLog.e("SignatureVerifier: expected signer digest unavailable -> FAIL")
+            return false
         }
 
         // Scheme-agnostic verification. We require BOTH the v1 (JAR) certificate
@@ -275,7 +298,11 @@ object SignatureVerifier {
      */
     fun verifyV234(context: Context): Boolean {
         val expected = getExpectedSignerDigest().let { normalizeSignerDigest(it) }
-        if (expected.isBlank()) return true // no pin configured, skip
+        if (expected.isBlank()) {
+            // Blank pin => the native layer failed to produce it. FAIL, do not skip.
+            AppLog.e("SignatureVerifier: v2/v3 expected digest unavailable -> FAIL")
+            return false
+        }
         val actual = computeApkV234SignerDigest(context) ?: return false
         return actual == expected
     }

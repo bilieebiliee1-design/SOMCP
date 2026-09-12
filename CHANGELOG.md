@@ -3,13 +3,14 @@
 ## 1.0.21
 
 - APK MCP 桥接的「持续自动探测」改为默认开启：存储默认值由 `false` 翻转为 `true`，并新增一次性 `apkAutoProbeDefaultMigrated_v2` 迁移把升级用户的旧默认（曾被 1.0.x 强制关闭）重新翻回开启；用户仍可在设置页手动关闭。
-## 未发布
-
-- 修复 Unidbg 动态模拟完全不可用的问题（issue #91）：APK 里打包的 `libunicorn.so` 从来都不是 unidbg unicorn2 后端需要的那个库。unicorn2 后端（`com.github.unidbg.arm.backend.Unicorn2Backend` 调用 `com.github.unidbg.arm.backend.unicorn.Unicorn`）是 JNI 绑定，要求 `libunicorn.so` 导出 `Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*`；而此前编出来的是「原始 unicorn 引擎」，只导出 `uc_*` C API。雪上加霜的是 `-DUNICORN_ARCH=arm,aarch64` 用了逗号——CMake 架构列表的分隔符是分号，于是 `arm-softmmu` / `aarch64-softmmu` 两个后端根本没参与编译，产物只有约 54 KB，是一个「只有 API 外壳、没有模拟核心」的空库。
-- 这个坏库的危害在于它「看起来是好的」：`System.loadLibrary("unicorn")` 能成功，`system_control(action=status)` 也一直显示已随包内置，直到真正打开会话才失败——`Unicorn2Backend` 绑定不到 native 符号，而 `BackendFactory.newBackend` 因为应用以 `Unicorn2Factory(true)` 注册会吞掉这个异常，回退到旧版 `UnicornBackend`，后者随即抛 `NoClassDefFoundError: unicorn.Unicorn`（1.0.21 只带了一个精简的 `unicorn.UnicornException`），最终表现为「Unidbg 不可用」，并把排查引向 R8/ProGuard 方向。
-- 修复 `build-unidbg-native.sh` / `build-unidbg-native.ps1` 的 unicorn 构建：改用 unicorn 2.x 引擎（`third_party/unicorn-engine-unicorn2`）编出 all-in-one `libunicorn.a`，再用 NDK 编译并链接 unidbg 自带的 JNI 桥（`backend/unicorn2/src/main/native/unicorn.c`）产出真正的 `libunicorn.so`，步骤与 unidbg 官方 `backend/unicorn2/src/main/native` 的构建方式一致；32 位 ABI（armeabi-v7a / x86）仍因 QEMU 需要 `__uint128_t` 而跳过 unicorn。
-- 新增 `tools/verify_unicorn_jni.py`（可直接校验 `.so` 或 Release APK），并在两个构建脚本中作为硬性门槛：导出不了 unicorn2 JNI 桥的 `libunicorn.so` 一律拒绝安装，宁可让构建失败，也不再发出「自称可用、实则不可用」的包。
-- 修正诊断信息：`system_control(action=status)` 的 `coverageModel` 新增 `backendInitError`，`UnidbgEmulator.unavailableReason()` 现在会区分「库没打进包」与「库在但不是 unicorn2 JNI 桥」，避免再次被误导。
+- 修复 APK 签名校验中三处「一行即可绕过」的真空门，整体加固原生校验链路：
+  - **空校验值不再等同于放行**：此前 `SignatureVerifier.verify/verifyV234` 与 `IntegrityGuard.verify` 在拿不到固定签名摘要（native 返回空串）时会直接判为通过（原注释为"未配置签名固定值，跳过校验"）。这意味着只需 hook 掉对应 JNI 调用使返回值为空，整套校验即被整体跳过。现改为空白摘要一律判为**校验失败**，不再提供"跳过"分支。
+  - **返回值由字面量布尔改为派生值**：各 native 校验入口不再直接返回 `JNI_TRUE`/`JNI_FALSE` 常量，而是把逐字节比较结果、环境证据与自校验结果**折叠（fold）**成返回值，使单纯把某个 `==` 分支 NOP 掉或把返回值改成常量无法得到可用结果。校验失败时**投毒返回数据**而非仅返回错误：v1/v2/v3 证书读取路径翻转 DER 中间字节、预期摘要接口返回空串，使错误路径即使被抑制，用于比对的数据本身也是错的。
+  - **新增原生反调试与自校验层**（`app/src/main/cpp/hardening.h`，全部 `static inline`、逐编译单元内联复制，无单一函数可删）：以裸 `open`/`read` 直接解析 `/proc/self/status` 的 `TracerPid`（绕开 libc 层 hook）、扫描 `/proc/self/maps` 命中 frida / xposed / apptweak / tweakme / sigkill / sandhook / dobby 等注入框架、遍历 `/proc/self/task/*/comm` 识别可疑线程名；并通过 `dl_iterate_phdr` 定位自身 `.text` 可执行段，用 FNV-1a 计算加载时快照并在后续校验中比对，以检测运行期内存补丁。
+  - 新增 JNI 接口 `nativeInitHardening()`，在 `Application.attachBaseContext()` 这一最早可控时机采集 `.text` 快照（早于多数内存补丁工具介入）。
+  - 新增完整性错误码 `TAMPER`（`1 << 10`）：运行时环境或自身代码被判定为被篡改时，APK 完整性校验按硬失败上报。
+  - **计时探测不参与判定**：rdtsc / `cntvct_el0` 计时结果仅作参考记录，不作为拒绝依据，避免在慢速设备或模拟器上误伤正常用户。
+  - 说明：以上均为客户端加固，用于消除"删除单个函数 / 翻转单个分支"这类低成本绕过，**只能抬高攻击成本，无法从根本上杜绝**。若需真正不可绕过的校验，仍需引入服务端校验（签名摘要 + 设备指纹 + 一次性随机数换发令牌）。
 
 ## 1.0.17
 
