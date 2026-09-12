@@ -4,14 +4,35 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      go_proxy:
+        description: 'GOPROXY for the cloudflared cross-compile (set https://goproxy.cn,direct on CN-network / restricted runners)'
+        required: false
+        default: 'https://proxy.golang.org,direct'
+
+# Pushes to main are serialized; a newer push supersedes an in-flight build so
+# the artifact always corresponds to the branch tip, not a stale queue entry.
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Safety net for the whole chain: the validated pipeline takes ~56 min
+    # (run 34614015172); 150 min leaves ~2.5x headroom while guaranteeing a
+    # wedged network step can never occupy the runner for the 360-min default.
+    timeout-minutes: 150
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # build-native-android.sh / build-unidbg-native.sh compile from the
+          # in-repo third_party/* submodules (rizin, LIEF, capstone, keystone,
+          # unicorn 2.x, unidbg's JNI bridge); without them the native backends
+          # cannot be produced and the emulated engine degrades or fails.
+          submodules: recursive
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -20,19 +41,214 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Grant execute permission
-        run: chmod +x ./gradlew
+      # The repo ships gradle/wrapper/gradle-wrapper.properties (Gradle 9.6.1)
+      # but deliberately no gradlew launcher/gradle-wrapper.jar, so `./gradlew`
+      # does not exist. Provision the same Gradle version via the tool instead
+      # of chmod-ing a file that is not there (this was the failure in
+      # https://github.com/bilieebiliee1-design/SOMCP/actions/runs/34595668784).
+      - name: Set up Gradle 9.6.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.1'
 
-      - name: Build release APK
-        run: ./gradlew assembleRelease
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build gcc g++ pkg-config cmake
+
+      # Full-clone of rizinorg/rizin over the public internet. Known network
+      # constraint: GitHub-hosted runners reach github.com directly (validated
+      # by run 34614015172), but a self-hosted runner without proxy/mirror
+      # access can hang here. The step-level timeout + retry loop fail fast
+      # with a clear ::error instead of stalling to the job default.
+      - name: Clone Rizin source (v0.10.0)
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          if [ ! -d third_party/rizin-src/librz/include ]; then
+            for attempt in 1 2 3; do
+              if git clone --depth 1 https://github.com/rizinorg/rizin.git third_party/rizin-src; then
+                break
+              fi
+              rm -rf third_party/rizin-src
+              if [ "$attempt" -ge 3 ]; then
+                echo "::error::git clone rizin failed after 3 attempts (network unreachable from this runner; configure a proxy/mirror or pre-populate third_party/rizin-src)"
+                exit 1
+              fi
+              echo "rizin clone attempt $attempt failed; retrying in 15s"
+              sleep 15
+            done
+          fi
+
+      # Same pipeline as the Release workflow: librz_native.so / libLIEF are
+      # linked from these archives by app/src/main/cpp/CMakeLists.txt, so an
+      # APK without this step would build but ship a crippled native engine.
+      - name: Build native backends (Rizin + LIEF)
+        run: bash build-native-android.sh
+
+      # Cross-compile the Android natives required by the Unidbg backend
+      # (libcapstone.so / libkeystone.so / libunicorn.so). Fatal on failure so
+      # a "signed APK" artifact can never silently lack the emulation backend.
+      - name: Build Unidbg native libs (capstone/keystone/unicorn)
+        run: |
+          set -euo pipefail
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            bash build-unidbg-native.sh --abi "$abi"
+          done
+          # unicorn (QEMU, __uint128_t) only compiles for the 64-bit ABIs; the
+          # 32-bit ABIs get capstone/keystone only and Unidbg degrades there.
+          for abi in arm64-v8a x86_64; do
+            for lib in capstone keystone unicorn; do
+              test -f "app/src/main/jniLibs/$abi/lib$lib.so" || {
+                echo "::error::missing app/src/main/jniLibs/$abi/lib$lib.so after build-unidbg-native.sh"
+                exit 1
+              }
+            done
+          done
+          for abi in armeabi-v7a x86; do
+            for lib in capstone keystone; do
+              test -f "app/src/main/jniLibs/$abi/lib$lib.so" || {
+                echo "::error::missing app/src/main/jniLibs/$abi/lib$lib.so after build-unidbg-native.sh"
+                exit 1
+              }
+            done
+          done
+          echo "Unidbg native libs present for required ABIs."
+
+      - name: Set up Go for cloudflared cross-compile
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      # The app no longer downloads cloudflared at runtime; it must be bundled
+      # into jniLibs or the Cloudflare tunnel feature is dead on a fresh install.
+      # Two network dependencies live here (the GitHub clone and the Go module
+      # downloads). The clone is retried; module downloads go through the
+      # configurable GOPROXY (workflow_dispatch input, default proxy.golang.org;
+      # pass https://goproxy.cn,direct on runners behind CN networks). The
+      # step-level timeout keeps a wedged fetch from occupying the runner.
+      - name: Cross-compile cloudflared for Android (arm64-v8a / armeabi-v7a / x86 / x86_64)
+        timeout-minutes: 20
         env:
-          STORE_FILE: ${{ secrets.STORE_FILE }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          GOPROXY: ${{ github.event.inputs.go_proxy || 'https://proxy.golang.org,direct' }}
+        run: |
+          set -euo pipefail
+          CLOUDFLARED_TAG="2026.8.3"
+          for attempt in 1 2 3; do
+            if git clone --depth 1 --branch "$CLOUDFLARED_TAG" \
+              https://github.com/cloudflare/cloudflared.git cloudflared-src; then
+              break
+            fi
+            rm -rf cloudflared-src
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::git clone cloudflared ($CLOUDFLARED_TAG) failed after 3 attempts (network unreachable from this runner; configure a proxy/mirror or pre-populate cloudflared-src)"
+              exit 1
+            fi
+            echo "cloudflared clone attempt $attempt failed; retrying in 15s"
+            sleep 15
+          done
+          (
+            cd cloudflared-src
+            GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-arm64-v8a ./cmd/cloudflared
+            GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-armeabi-v7a ./cmd/cloudflared
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-x86_64 ./cmd/cloudflared
+            GOOS=linux GOARCH=386 CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" \
+              -o ../libcloudflared-x86 ./cmd/cloudflared
+          )
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            mkdir -p "app/src/main/jniLibs/$abi"
+          done
+          cp libcloudflared-arm64-v8a app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+          cp libcloudflared-armeabi-v7a app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
+          cp libcloudflared-x86_64 app/src/main/jniLibs/x86_64/libcloudflared.so
+          cp libcloudflared-x86 app/src/main/jniLibs/x86/libcloudflared.so
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -f "app/src/main/jniLibs/$abi/libcloudflared.so" || {
+              echo "::error::missing app/src/main/jniLibs/$abi/libcloudflared.so after cloudflared cross-compile"
+              exit 1
+            }
+          done
+          echo "cloudflared cross-compiled and bundled into jniLibs."
+
+      # Signing secrets use the same names as the Release workflow
+      # (KEYSTORE/ALIAS/ALIAS_PASSWORD/PASSWORD). The old STORE_FILE/... names
+      # do not exist as repository secrets, so the previous configuration could
+      # never have produced a signed APK even past the gradlew failure.
+      - name: Restore release signing keystore
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.KEYSTORE }}" ] \
+             || [ -z "${{ secrets.ALIAS }}" ] \
+             || [ -z "${{ secrets.ALIAS_PASSWORD }}" ] \
+             || [ -z "${{ secrets.PASSWORD }}" ]; then
+            echo "::error::Signing secrets (KEYSTORE/ALIAS/ALIAS_PASSWORD/PASSWORD) must all be configured."
+            exit 1
+          fi
+          mkdir -p release
+          echo "${{ secrets.KEYSTORE }}" | base64 -d > release/so-reverse-mcp-release.jks
+          echo "Restored release signing keystore from secrets."
+
+      - name: Build release APKs
+        env:
+          # Read by app/build.gradle.kts so no plaintext keystore.properties is
+          # ever written to disk.
+          STORE_FILE: release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
+
+      - name: Verify and ensure v2/v3 APK signing
+        env:
+          STORE_FILE: release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          for apk in app/build/outputs/apk/release/*.apk; do
+            echo "=== Checking signing schemes: $(basename "$apk") ==="
+            if "$APKSIGNER" verify --verbose "$apk" 2>&1 | grep -qi "NOT PRESENT"; then
+              echo "::warning::v2/v3 signing NOT verified in $(basename "$apk"); re-signing with apksigner"
+              "$APKSIGNER" sign \
+                --ks "$STORE_FILE" \
+                --ks-pass "pass:$STORE_PASSWORD" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass "pass:$KEY_PASSWORD" \
+                --v1-signing-enabled true \
+                --v2-signing-enabled true \
+                --v3-signing-enabled true \
+                --v4-signing-enabled true \
+                "$apk"
+            fi
+            "$APKSIGNER" verify --print-certs "$apk"
+            echo "OK: $(basename "$apk") has valid v2/v3 signing"
+          done
+
+      # Never let the keystore leak into the uploaded artifact.
+      - name: Wipe signing artifacts
+        run: rm -f release/so-reverse-mcp-release.jks
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: somcp-release
           path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
