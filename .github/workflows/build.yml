@@ -35,7 +35,9 @@ jobs:
           submodules: recursive
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        # v6 runs on the Node 24 runtime and clears the `punycode` (DEP0040)
+        # deprecation warning that v4 emitted on the Node 24 runner.
+        uses: actions/setup-java@v6
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -122,6 +124,9 @@ jobs:
           echo "Unidbg native libs present for required ABIs."
 
       - name: Set up Go for cloudflared cross-compile
+        # v7 runs on the Node 24 runtime and clears the `punycode` (DEP0040)
+        # deprecation warning that v5 emitted on the Node 24 runner.
+        uses: actions/setup-go@v7
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
@@ -247,7 +252,10 @@ jobs:
         run: rm -f release/so-reverse-mcp-release.jks
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        # Pinned to v7+ (Node 24 rebuild): v4 emitted `[DEP0169] url.parse()`
+        # and `punycode` deprecation warnings on the Node 24 runner. Do not
+        # downgrade below v7 or the warnings return.
+        uses: actions/upload-artifact@v7
         with:
           name: somcp-release
           path: app/build/outputs/apk/release/*.apk
