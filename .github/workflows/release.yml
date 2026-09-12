@@ -22,7 +22,7 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -93,7 +93,7 @@ jobs:
           echo "Unidbg native libs present for required ABIs."
 
       - name: Set up Go for cloudflared cross-compile
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "stable"
           # Module cache is populated only after the clone step below, so
