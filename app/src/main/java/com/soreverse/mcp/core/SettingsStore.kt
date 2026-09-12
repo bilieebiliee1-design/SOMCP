@@ -25,10 +25,13 @@ class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("so_reverse_mcp", Context.MODE_PRIVATE)
 
     init {
-        if (!prefs.getBoolean("apkAutoProbeDefaultMigrated", false)) {
+        // 持续自动探测（apkMcpAutoProbe）改为默认开启。早期 1.0.x 迁移曾把它
+        // 强制关掉；v2 迁移把存储的默认值翻回开启，新装与升级用户都拿到新默认。
+        // 用户仍可在设置中手动关闭。
+        if (!prefs.getBoolean("apkAutoProbeDefaultMigrated_v2", false)) {
             prefs.edit()
-                .putBoolean("apkMcpAutoProbe", false)
-                .putBoolean("apkAutoProbeDefaultMigrated", true)
+                .putBoolean("apkMcpAutoProbe", true)
+                .putBoolean("apkAutoProbeDefaultMigrated_v2", true)
                 .apply()
         }
         // Pre-populate the default MT Manager bridge URL (:8787) when no bridge
@@ -684,7 +687,7 @@ class SettingsStore(context: Context) {
         }
 
     var apkMcpAutoProbe: Boolean
-        get() = prefs.getBoolean("apkMcpAutoProbe", false)
+        get() = prefs.getBoolean("apkMcpAutoProbe", true)
         set(value) = prefs.edit().putBoolean("apkMcpAutoProbe", value).apply()
 
     var apkMcpMergeTools: Boolean

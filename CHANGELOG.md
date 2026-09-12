@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.21
+
+- APK MCP 桥接的「持续自动探测」改为默认开启：存储默认值由 `false` 翻转为 `true`，并新增一次性 `apkAutoProbeDefaultMigrated_v2` 迁移把升级用户的旧默认（曾被 1.0.x 强制关闭）重新翻回开启；用户仍可在设置页手动关闭。
 ## 未发布
 
 - 修复 Unidbg 动态模拟完全不可用的问题（issue #91）：APK 里打包的 `libunicorn.so` 从来都不是 unidbg unicorn2 后端需要的那个库。unicorn2 后端（`com.github.unidbg.arm.backend.Unicorn2Backend` 调用 `com.github.unidbg.arm.backend.unicorn.Unicorn`）是 JNI 绑定，要求 `libunicorn.so` 导出 `Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*`；而此前编出来的是「原始 unicorn 引擎」，只导出 `uc_*` C API。雪上加霜的是 `-DUNICORN_ARCH=arm,aarch64` 用了逗号——CMake 架构列表的分隔符是分号，于是 `arm-softmmu` / `aarch64-softmmu` 两个后端根本没参与编译，产物只有约 54 KB，是一个「只有 API 外壳、没有模拟核心」的空库。
