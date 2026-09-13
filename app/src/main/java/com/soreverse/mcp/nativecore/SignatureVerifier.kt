@@ -68,6 +68,25 @@ object SignatureVerifier {
     private external fun nativeVerifyPackageName(packageName: String): Boolean
     private external fun nativeVerifyApkIntegrity(apkPath: String): Int
     private external fun nativeComputeSha256Hex(data: ByteArray): String?
+    private external fun nativeGetReportingApiKey(): String
+
+    /**
+     * Returns the log-report-platform reporting API key injected into the
+     * native library at build time (XOR-obfuscated in key_generated.h). The
+     * key lives only in the native layer; it is never a user setting and is
+     * never logged. Returns an empty string when no key was injected or the
+     * native library is unavailable.
+     */
+    fun getReportingApiKey(): String {
+        if (!loaded) return ""
+        return try {
+            nativeGetReportingApiKey()
+        } catch (e: Exception) {
+            // Deliberately silent: never surface key material or its absence
+            // through logs / reports.
+            ""
+        }
+    }
 
     /**
      * Integrity error-code bitmask returned by [verifyApkIntegrity].
