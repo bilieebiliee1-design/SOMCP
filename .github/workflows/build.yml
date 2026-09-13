@@ -126,8 +126,11 @@ jobs:
       - name: Set up Go for cloudflared cross-compile
         # v7 runs on the Node 24 runtime and clears the `punycode` (DEP0040)
         # deprecation warning that v5 emitted on the Node 24 runner.
+        # NOTE: exactly one `uses:` per step. A stray leftover `uses:` line makes
+        # the key a duplicate, the whole workflow file unparseable, and every run
+        # dies at startup with 0 jobs (the run is then labelled with the file
+        # path instead of the workflow name).
         uses: actions/setup-go@v7
-        uses: actions/setup-go@v5
         with:
           go-version: 'stable'
           cache: false
