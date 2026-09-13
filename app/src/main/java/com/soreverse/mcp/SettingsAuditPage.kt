@@ -230,7 +230,13 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
             }
             GroupDivider()
             Text(
-                if (t.zh) "上报服务器地址。开启后，未捕获崩溃与捕获型错误会连同设备型号、系统版本、CPU 架构、应用版本等基础信息发往该地址；不含个人文件、账号或输入。" else "Reporting server URL. Once enabled, uncaught crashes and captured errors are sent here along with basic device details (model, OS version, CPU architecture, app version); files, accounts, and input are not included.",
+                if (t.zh) {
+                    "上报服务器地址。开启后，未捕获崩溃与捕获型错误会连同设备型号、系统版本、CPU 架构、应用版本等基础信息发往该地址；不含个人文件、账号或输入。"
+                } else {
+                    "Reporting server URL. Once enabled, uncaught crashes and captured errors are sent here " +
+                        "along with basic device details (model, OS version, CPU architecture, app version); " +
+                        "files, accounts, and input are not included."
+                },
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -254,7 +260,12 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
                 )
             )
             Text(
-                if (t.zh) "默认开启；首次启动会先征求同意，未同意前不会上报任何数据，上报发往 https://api.somcp.cn。" else "Enabled by default. Consent is requested on first launch, and nothing is reported until it is granted. Reports go to https://api.somcp.cn.",
+                if (t.zh) {
+                    "默认开启；首次启动会先征求同意，未同意前不会上报任何数据，上报发往 https://api.somcp.cn。"
+                } else {
+                    "Enabled by default. Consent is requested on first launch, and nothing is reported " +
+                        "until it is granted. Reports go to https://api.somcp.cn."
+                },
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

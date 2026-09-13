@@ -22,7 +22,6 @@ import android.os.Build
 import android.util.Log
 import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.nativecore.SignatureVerifier
-import org.json.JSONObject
 import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -33,6 +32,7 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
 
 /**
  * 错误 / 崩溃自动上报客户端，上报协议对齐 `log-report-platform` 的 `/api/v1/report`。
@@ -117,13 +117,7 @@ object LogReporter {
     }
 
     /** 手动上报一条错误 / 日志（异步，不阻塞调用方；网络不可用时落盘队列稍后补传）。 */
-    fun report(
-        logType: String = "error",
-        content: String,
-        throwable: Throwable? = null,
-        tag: String? = null,
-        extras: Map<String, Any?>? = null
-    ) {
+    fun report(logType: String = "error", content: String, throwable: Throwable? = null, tag: String? = null, extras: Map<String, Any?>? = null) {
         val (endpoint, enabled) = config()
         if (!enabled || endpoint == null) return
         if (shouldSuppress("$logType|${tag ?: ""}|$content")) return
@@ -139,12 +133,7 @@ object LogReporter {
      * 未捕获崩溃专用：保证先把日志落盘（同步、不阻塞崩溃流程），再尽力即时上报。
      * 即时发送成功会删除落盘文件；失败则留给下次启动 [flushQueue] 补传。
      */
-    fun reportCrash(
-        content: String,
-        stackTrace: String? = null,
-        threadName: String? = null,
-        extras: Map<String, Any?>? = null
-    ) {
+    fun reportCrash(content: String, stackTrace: String? = null, threadName: String? = null, extras: Map<String, Any?>? = null) {
         val (endpoint, enabled) = config()
         if (!enabled || endpoint == null) return
         val json = buildPayload("crash", content, stackTrace, "AndroidRuntime", threadName, extras)
@@ -156,14 +145,7 @@ object LogReporter {
 
     // ---------------------------------------------------------------- 组装 payload
 
-    private fun buildPayload(
-        logType: String,
-        content: String,
-        stackTrace: String?,
-        tag: String?,
-        threadName: String?,
-        extras: Map<String, Any?>?
-    ): JSONObject {
+    private fun buildPayload(logType: String, content: String, stackTrace: String?, tag: String?, threadName: String?, extras: Map<String, Any?>?): JSONObject {
         val ctx = appContext
         val json = JSONObject()
 
