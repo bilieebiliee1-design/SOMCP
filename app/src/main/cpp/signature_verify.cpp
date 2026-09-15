@@ -1060,6 +1060,23 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDiges
 }
 
 /**
+ * Returns the log-report-platform reporting API key (sent by the client as the
+ * X-API-Key request header). The value is injected into the native layer at
+ * build time (see key_generated.h / generate_header.py) and stored XOR-encoded,
+ * so it never appears as a plain-text literal in the .so binary, in source, or
+ * in any log. Returns an empty string when no key was injected.
+ */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetReportingApiKey(
+    JNIEnv* env, jobject thiz) {
+    if (kEncodedReportingApiKeyLen == 0) {
+        return env->NewStringUTF("");
+    }
+    std::string key = decode_xor_hex(kEncodedReportingApiKey, kEncodedReportingApiKeyLen);
+    return env->NewStringUTF(key.c_str());
+}
+
+/**
  * Reads the APK file directly from the filesystem and extracts the first
  * X.509 signing certificate from the META-INF/ *.RSA/.DSA/.EC signature file.
  *
