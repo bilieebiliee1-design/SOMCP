@@ -92,6 +92,7 @@ import com.soreverse.mcp.core.DeepAnalysisService
 import com.soreverse.mcp.core.GitHubRelease
 import com.soreverse.mcp.core.GitHubUpdateManager
 import com.soreverse.mcp.core.IntegrityGuard
+import com.soreverse.mcp.core.LogReporter
 import com.soreverse.mcp.core.SettingsStore
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -245,6 +246,10 @@ private fun textFor(mode: String, context: Context): UiText {
         accept = s(R.string.accept),
         decline = s(R.string.decline),
         firstRunDisclaimerTitle = s(R.string.first_run_disclaimer_title),
+        privacyConsentTitle = s(R.string.privacy_consent_title),
+        privacyConsentBody = s(R.string.privacy_consent_body),
+        privacyConsentAllow = s(R.string.privacy_consent_allow),
+        privacyConsentDeny = s(R.string.privacy_consent_deny),
         externalProbeExample = s(R.string.external_probe_example),
         backupRestore = s(R.string.backup_restore),
         backupRestoreSubtitle = s(R.string.backup_restore_subtitle),
@@ -314,6 +319,8 @@ private fun SoReverseApp() {
     var textScale by remember { mutableStateOf(settings.textScale) }
     var predictiveBack by remember { mutableStateOf(settings.predictiveBackEnabled) }
     var disclaimerAccepted by remember { mutableStateOf(settings.disclaimerAccepted) }
+    // 隐私合规闸门：用户就「错误与崩溃上报」隐私告知作出选择前，绝不上报任何数据。
+    var privacyConsentAnswered by remember { mutableStateOf(settings.crashReportConsentAnswered) }
     val analyzeState = remember { AnalyzeUiState() }
     var pendingDeepLeave by remember { mutableStateOf<(() -> Unit)?>(null) }
     var backProgress by remember { mutableStateOf(0f) }
@@ -643,6 +650,38 @@ private fun SoReverseApp() {
                         TextButton(onClick = {
                             (context as? Activity)?.finish()
                         }) { Text(t.decline) }
+                    }
+                )
+            } else if (!privacyConsentAnswered) {
+                // 隐私合规：单独就错误与崩溃上报作一次性告知并取得选择。
+                // 选择前 LogReporter 一律不外发（crashReportConsentAnswered=false 即静默）。
+                AlertDialog(
+                    onDismissRequest = {},
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    title = { Text(t.privacyConsentTitle, fontWeight = FontWeight.SemiBold) },
+                    text = { Text(t.privacyConsentBody) },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                settings.crashReportConsentAnswered = true
+                                privacyConsentAnswered = true
+                            },
+                            shape = RoundedCornerShape(LocalUiMetrics.current.controlRadius),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = Color.White
+                            )
+                        ) { Text(t.privacyConsentAllow) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            settings.crashReportConsentAnswered = true
+                            settings.crashReportEnabled = false
+                            LogReporter.clearQueue()
+                            privacyConsentAnswered = true
+                        }) { Text(t.privacyConsentDeny) }
                     }
                 )
             }

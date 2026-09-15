@@ -47,6 +47,16 @@ object AppLog {
     fun w(message: String) = add("W", message)
     fun e(message: String, throwable: Throwable? = null) {
         add("E", if (throwable == null) message else "$message: ${throwable.message}")
+        // 捕获型错误自动上报到 log-report-platform：未开启或服务器地址为空时 LogReporter 内部直接返回，
+        // 不产生网络请求或任何副作用；runCatching 保证日志调用本身绝不抛异常、不影响业务执行。
+        runCatching {
+            LogReporter.report(
+                logType = "error",
+                content = message,
+                throwable = throwable,
+                tag = "AppLog.e"
+            )
+        }
     }
 
     fun snapshot(): List<String> = synchronized(lock) { lines.toList() }

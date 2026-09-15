@@ -47,6 +47,8 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
         mutableStateOf(settings.toolCallRateLimitPerMin.toString())
     }
     var disabledTools by remember { mutableStateOf(settings.disabledTools) }
+    var crashReportEnabled by remember { mutableStateOf(settings.crashReportEnabled) }
+    var crashReportEndpoint by remember { mutableStateOf(settings.crashReportEndpoint) }
     PageScroll {
         GlassGroup {
             ToggleRow(
@@ -211,6 +213,59 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
             }
             Text(
                 if (t.zh) "从下拉菜单勾选或直接输入工具名称，逗号分隔。" else "Check tools in the dropdown or type names directly, comma-separated.",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        GlassGroup {
+            ToggleRow(
+                if (t.zh) "崩溃与错误自动上报" else "Auto-report crashes & errors",
+                crashReportEnabled
+            ) {
+                crashReportEnabled = it
+                settings.crashReportEnabled = it
+                // 在设置页主动开启即视为已作出隐私选择（等同同意上报）。
+                if (it) settings.crashReportConsentAnswered = true
+            }
+            GroupDivider()
+            Text(
+                if (t.zh) {
+                    "上报服务器地址。开启后，未捕获崩溃与捕获型错误会连同设备型号、系统版本、CPU 架构、应用版本等基础信息发往该地址；不含个人文件、账号或输入。"
+                } else {
+                    "Reporting server URL. Once enabled, uncaught crashes and captured errors are sent here " +
+                        "along with basic device details (model, OS version, CPU architecture, app version); " +
+                        "files, accounts, and input are not included."
+                },
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = crashReportEndpoint,
+                onValueChange = {
+                    crashReportEndpoint = it
+                    settings.crashReportEndpoint = it
+                },
+                label = { Text(if (t.zh) "服务器地址" else "Server URL") },
+                placeholder = { Text(SettingsStore.DEFAULT_CRASH_REPORT_ENDPOINT) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                )
+            )
+            Text(
+                if (t.zh) {
+                    "默认开启；首次启动会先征求同意，未同意前不会上报任何数据，上报发往 https://api.somcp.cn。"
+                } else {
+                    "Enabled by default. Consent is requested on first launch, and nothing is reported " +
+                        "until it is granted. Reports go to https://api.somcp.cn."
+                },
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
