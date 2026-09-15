@@ -53,6 +53,27 @@ def xor_encode(plain: str, key: list) -> list:
     return [ord(c) ^ key[i % len(key)] for i, c in enumerate(plain)]
 
 
+def read_local_prop(name: str) -> str:
+    """Best-effort read of `name` from ./local.properties (gitignored).
+
+    Used only as a local-development convenience for the reporting API key;
+    CI injects it through the LRP_API_KEY environment variable instead. The
+    file is never committed and the value is never printed.
+    """
+    try:
+        with open("local.properties", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == name:
+                    return v.strip()
+    except OSError:
+        pass
+    return ""
+
+
 def fmt_array(name: str, data: list, indent: int = 4) -> str:
     """Format a byte array as C source code."""
     spaces = " " * indent
@@ -76,6 +97,12 @@ def main():
         help="16-char hex key (8 bytes). Falls back to $TM env var."
     )
     parser.add_argument(
+        "--reporting-key",
+        default=None,
+        help="log-report-platform API key (X-API-Key). Falls back to $LRP_API_KEY; "
+             "empty when neither is set. Never printed."
+    )
+    parser.add_argument(
         "--dst",
         required=True,
         help="Output path for key_generated.h"
@@ -88,7 +115,8 @@ def main():
         tm_env = os.environ.get("TM", "").strip()
         if tm_env:
             key_hex = tm_env.lower()
-            print(f"[gen] using TM env var: {key_hex}", file=sys.stderr)
+            # Never echo the key material itself into build logs.
+            print("[gen] using TM env var (value not logged)", file=sys.stderr)
         else:
             print("ERROR: no key provided and $TM not set", file=sys.stderr)
             sys.exit(1)
@@ -119,6 +147,24 @@ def main():
         "kEncodedSHA512": xor_encode(EXPECTED_SHA512, key),
         "kEncodedExpectedPackage": xor_encode(EXPECTED_PACKAGE, key),
     }
+    # Each array carries an explicit length. The reporting key overrides its
+    # length below so that 0 unambiguously means "no key injected" even though a
+    # placeholder byte is always emitted to keep the generated array well-formed.
+    lengths = {name: len(v) for name, v in arrays.items()}
+
+    # log-report-platform reporting API key (X-API-Key), injected at build time
+    # from $LRP_API_KEY (CI secret) or --reporting-key. Stored XOR-encoded like
+    # the other secrets. The plaintext is NEVER printed or logged.
+    reporting_key = args.reporting_key
+    if reporting_key is None:
+        reporting_key = os.environ.get("LRP_API_KEY", "")
+    if not reporting_key.strip():
+        # Local dev convenience: `lrpApiKey=` in the (gitignored) local.properties.
+        reporting_key = read_local_prop("lrpApiKey")
+    reporting_key = reporting_key.strip()
+    encoded_reporting = xor_encode(reporting_key, key)
+    arrays["kEncodedReportingApiKey"] = encoded_reporting if encoded_reporting else [0]
+    lengths["kEncodedReportingApiKey"] = len(encoded_reporting)
 
     # Generate header
     parts = []
@@ -138,7 +184,7 @@ static const size_t kXorKeyLen = """ + str(len(key)) + """;
     for name, enc_bytes in sorted(arrays.items()):
         parts.append(fmt_array(name, enc_bytes))
         len_name = name + "Len"
-        parts.append(f"static const size_t {len_name} = {len(enc_bytes)};\n\n")
+        parts.append(f"static const size_t {len_name} = {lengths[name]};\n\n")
 
     header = "".join(parts)
 

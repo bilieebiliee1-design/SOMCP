@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Process
+import android.util.Log
 import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.CrashReportActivity
 import java.io.File
@@ -48,7 +49,16 @@ object CrashReporter {
             val ackFile = ackFile(app, token)
             runCatching {
                 cleanOldReports(app)
-                writeAtomically(reportFile, buildReport(thread, throwable))
+                val report = buildReport(thread, throwable)
+                // 未捕获崩溃：先落盘到本地上报队列（保证崩溃日志不丢），再尽力上报到
+                // log-report-platform。上报失败 / 进程在发送前被杀都不影响本地的崩溃展示与队列补传。
+                LogReporter.reportCrash(
+                    content = report,
+                    stackTrace = Log.getStackTraceString(throwable),
+                    threadName = thread.name,
+                    extras = mapOf("process" to currentProcessName())
+                )
+                writeAtomically(reportFile, report)
                 app.startActivity(
                     Intent(app, CrashReportActivity::class.java)
                         .putExtra(EXTRA_TOKEN, token)

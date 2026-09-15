@@ -36,6 +36,10 @@
     <string name="accept">我已阅读并同意</string>
     <string name="decline">退出</string>
     <string name="first_run_disclaimer_title">使用前请确认免责声明</string>
+    <string name="privacy_consent_title">崩溃与错误上报</string>
+    <string name="privacy_consent_body">为定位闪退和异常，应用会通过 HTTPS 向 https://api.somcp.cn 发送崩溃日志与错误日志，以及设备型号、Android 版本、CPU 架构、应用版本、包名等基础信息。上报内容不含个人文件、账号或输入，仅用于排查缺陷；可随时在设置中关闭上报。</string>
+    <string name="privacy_consent_allow">同意</string>
+    <string name="privacy_consent_deny">不允许</string>
     <string name="external_probe_example">可填写远端探测服务地址；如果没有自建服务，可留空，直接用另一台不在同一局域网的设备访问 MCP 链接验证。</string>
     <string name="backup_restore">备份与恢复</string>
     <string name="backup_restore_subtitle">导出 / 导入设置快照</string>

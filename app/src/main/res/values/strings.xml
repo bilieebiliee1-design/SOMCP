@@ -36,6 +36,10 @@
     <string name="accept">I agree</string>
     <string name="decline">Exit</string>
     <string name="first_run_disclaimer_title">Confirm disclaimer before use</string>
+    <string name="privacy_consent_title">Crash &amp; error reporting</string>
+    <string name="privacy_consent_body">To help diagnose crashes and errors, the app sends crash logs and error logs, along with basic device details (device model, Android version, CPU architecture, app version, package name), to https://api.somcp.cn over HTTPS. Reports contain no files, accounts, or user input, and are used only to locate defects. Reporting can be turned off at any time in Settings.</string>
+    <string name="privacy_consent_allow">Allow</string>
+    <string name="privacy_consent_deny">Do not allow</string>
     <string name="external_probe_example">Enter a remote probe service URL if you operate one. Otherwise leave it empty and verify the MCP URL from a device outside this LAN.</string>
     <string name="backup_restore">Backup &amp; Restore</string>
     <string name="backup_restore_subtitle">Export / import settings snapshot</string>

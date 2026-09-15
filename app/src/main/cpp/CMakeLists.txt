@@ -130,6 +130,18 @@ else()
     )
 endif()
 
+# The reporting API key (log-report-platform X-API-Key) is read by
+# generate_header.py from the inherited $LRP_API_KEY environment variable and
+# XOR-encoded into key_generated.h, i.e. injected straight into the native
+# layer. It is deliberately NOT passed on any command line and never written to
+# the CMake cache, so the value cannot leak into build logs. Only its presence
+# is reported.
+if(DEFINED ENV{LRP_API_KEY} AND NOT "$ENV{LRP_API_KEY}" STREQUAL "")
+    message(STATUS "[reporting-key] LRP_API_KEY present; injecting into native key_generated.h")
+else()
+    message(STATUS "[reporting-key] LRP_API_KEY not set; reports will be sent without an API key")
+endif()
+
 execute_process(
     COMMAND python "${GEN_SCRIPT}"
         --key "${XOR_KEY}"
