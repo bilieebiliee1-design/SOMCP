@@ -55,6 +55,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default packages are "tools platform-tools". Google has
+          # removed the legacy `tools` package from the SDK repository, so keep
+          # platform-tools only.
+          packages: platform-tools
 
       - name: Install SDK packages
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
@@ -218,6 +223,11 @@ jobs:
           STORE_PASSWORD: ${{ secrets.PASSWORD }}
           KEY_ALIAS: ${{ secrets.ALIAS }}
           KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+          # Reporting API key (log-report-platform X-API-Key). Consumed by
+          # app/src/main/cpp/CMakeLists.txt -> generate_header.py, which XOR-encodes
+          # it into the native header baked into librz_native.so. GitHub masks
+          # secrets in logs automatically; it is never echoed here.
+          LRP_API_KEY: ${{ secrets.LRP_API_KEY }}
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace

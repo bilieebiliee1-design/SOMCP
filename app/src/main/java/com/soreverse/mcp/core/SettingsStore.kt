@@ -766,6 +766,32 @@ class SettingsStore(context: Context) {
         return token
     }
 
+    // ---- 崩溃 / 错误自动上报（log-report-platform）----
+    /**
+     * Master switch for sending uncaught crashes and manually-reported errors to a
+     * log-report-platform server. Defaults to true: uncaught crashes and captured
+     * errors are reported out of the box; the user can turn it off in Settings.
+     * The default endpoint is https://api.somcp.cn and no API key is required.
+     */
+    var crashReportEnabled: Boolean
+        get() = prefs.getBoolean("crashReportEnabled", true)
+        set(value) = prefs.edit().putBoolean("crashReportEnabled", value).apply()
+
+    /** Base URL of the log-report-platform server. Default https://api.somcp.cn; blank resolves back to it. */
+    var crashReportEndpoint: String
+        get() = prefs.getString("crashReportEndpoint", DEFAULT_CRASH_REPORT_ENDPOINT)
+            ?.ifBlank { null } ?: DEFAULT_CRASH_REPORT_ENDPOINT
+        set(value) = prefs.edit().putString("crashReportEndpoint", value.trim().trimEnd('/')).apply()
+
+    /**
+     * 隐私合规闸门：用户是否已就「错误与崩溃上报」的一次性隐私告知作出选择。
+     * 为 false 时 [com.soreverse.mcp.core.LogReporter] 一律不外发任何数据。
+     * 与 [crashReportEnabled] 组合即三态：未询问 (false, true)、已同意 (true, true)、已拒绝 (true, false)。
+     */
+    var crashReportConsentAnswered: Boolean
+        get() = prefs.getBoolean("crashReportConsentAnswered", false)
+        set(value) = prefs.edit().putBoolean("crashReportConsentAnswered", value).apply()
+
     fun snapshot(maskSecrets: Boolean = true): org.json.JSONObject {
         fun mask(value: String): String {
             if (!maskSecrets || value.isBlank()) return value
@@ -901,6 +927,13 @@ class SettingsStore(context: Context) {
                     .put("customHeadersJson", aiCustomHeadersJson)
                     .put("customBodyJson", aiCustomBodyJson)
                     .put("systemPromptChars", aiSystemPrompt.length)
+            )
+            .put(
+                "reporting",
+                org.json.JSONObject()
+                    .put("crashReportEnabled", crashReportEnabled)
+                    .put("crashReportEndpoint", crashReportEndpoint)
+                    .put("crashReportConsentAnswered", crashReportConsentAnswered)
             )
     }
 
@@ -1045,6 +1078,11 @@ class SettingsStore(context: Context) {
         applyBool(apk, "apkMcpMergeTools") { apkMcpMergeTools = it }
         applyInt(apk, "apkMcpProbeTimeoutMs") { apkMcpProbeTimeoutMs = it }
 
+        val reporting = obj("reporting") ?: patch
+        applyBool(reporting, "crashReportEnabled") { crashReportEnabled = it }
+        applyStr(reporting, "crashReportEndpoint") { crashReportEndpoint = it }
+        applyBool(reporting, "crashReportConsentAnswered") { crashReportConsentAnswered = it }
+
         // Flat key support for AI convenience: app_config set key=value
         val flatKeys = listOf(
             "language", "themeMode", "accentColor", "pureBlackDark", "uiDensity", "cornerStyle",
@@ -1055,7 +1093,8 @@ class SettingsStore(context: Context) {
             "disasmMaxBytes", "emulationEnabled", "leanTools", "adaptiveLeanTools", "logLevel",
             "tunnelMode", "tunnelAutoStart", "tunnelTargetPort", "tunnelNamedToken", "tunnelProtocol",
             "apkMcpUrl", "apkMcpToken", "apkMcpAutoProbe", "apkMcpMergeTools", "disabledTools",
-            "maxConcurrentTools", "requestTimeoutMs", "toolResultMaxChars", "toolCallRateLimitPerMin"
+            "maxConcurrentTools", "requestTimeoutMs", "toolResultMaxChars", "toolCallRateLimitPerMin",
+            "crashReportEnabled", "crashReportEndpoint", "crashReportConsentAnswered"
         )
         for (key in flatKeys) {
             if (!patch.has(key) || patch.isNull(key)) continue
@@ -1245,6 +1284,21 @@ class SettingsStore(context: Context) {
                     touch(key)
                 }
 
+                "crashReportEnabled" -> {
+                    crashReportEnabled = patch.optBoolean(key)
+                    touch(key)
+                }
+
+                "crashReportEndpoint" -> {
+                    crashReportEndpoint = patch.optString(key)
+                    touch(key)
+                }
+
+                "crashReportConsentAnswered" -> {
+                    crashReportConsentAnswered = patch.optBoolean(key)
+                    touch(key)
+                }
+
                 "disabledTools" -> {
                     disabledTools = patch.optString(key)
                     touch(key)
@@ -1296,6 +1350,13 @@ class SettingsStore(context: Context) {
                     .put("language", enums("system", "zh", "en"))
             )
             .put(
+                "reporting",
+                org.json.JSONObject()
+                    .put("crashReportEnabled", enums("true", "false"))
+                    .put("crashReportEndpoint", "string e.g. https://api.somcp.cn")
+                    .put("crashReportConsentAnswered", enums("true", "false"))
+            )
+            .put(
                 "notes",
                 "Use app_config action=get|set|schema|reset_token. Nested groups or flat keys both work. Secret fields are masked on get."
             )
@@ -1344,6 +1405,9 @@ class SettingsStore(context: Context) {
     )
 
     companion object {
+        /** Default reporting endpoint. The settings UI pre-fills it, and blank values fall back to it. */
+        const val DEFAULT_CRASH_REPORT_ENDPOINT = "https://api.somcp.cn"
+
         const val DEFAULT_AI_SYSTEM_PROMPT =
             """You are SOMCP Deep Reverse Agent for Android native .so analysis.
 Always call MCP tools to gather evidence before concluding. Prefer this workflow:
