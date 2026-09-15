@@ -19,6 +19,7 @@ package com.soreverse.mcp.core
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.nativecore.SignatureVerifier
@@ -62,6 +63,9 @@ object LogReporter {
     private const val MAX_QUEUE_FILES = 50
     private const val MAX_LOG_CHARS = 2 * 1024 * 1024 // 与后端 LRP_MAX_LOG_BYTES 对齐
 
+    /** [sendBlocking] 的返回码：连接 / IO 层失败，服务器根本没应答。 */
+    private const val SEND_TRANSPORT_ERROR = -1
+
     @Volatile private var appContext: Context? = null
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "LogReporter").apply { isDaemon = true }
@@ -104,7 +108,8 @@ object LogReporter {
      * 仅作用于 [report]（捕获型错误与手动上报）；崩溃上报 [reportCrash] 不受抑制，确保每条崩溃都送达。
      */
     private fun shouldSuppress(key: String): Boolean {
-        val now = System.currentTimeMillis()
+        // 单调时钟：设备时钟被手动改动 / NTP 回拨时，窗口不会突然放开或误抑制。
+        val now = SystemClock.elapsedRealtime()
         synchronized(recentLock) {
             while (recentReports.isNotEmpty() && now - recentReports.first().second > DEDUP_WINDOW_MS) {
                 recentReports.removeFirst()
@@ -125,7 +130,7 @@ object LogReporter {
         val full = if (stack.isNullOrEmpty()) content else "$content\n$stack"
         val json = buildPayload(logType, full, stack, tag, Thread.currentThread().name, extras)
         executor.execute {
-            if (!sendBlocking(json, endpoint)) saveToQueue(json)
+            if (sendBlocking(json, endpoint) !in 200..299) saveToQueue(json)
         }
     }
 
@@ -139,7 +144,7 @@ object LogReporter {
         val json = buildPayload("crash", content, stackTrace, "AndroidRuntime", threadName, extras)
         val file = saveToQueue(json) ?: return
         executor.execute {
-            if (sendBlocking(json, endpoint)) file.delete()
+            if (sendBlocking(json, endpoint) in 200..299) file.delete()
         }
     }
 
@@ -210,8 +215,12 @@ object LogReporter {
 
     // ---------------------------------------------------------------- 网络
 
-    /** 同步发送；成功返回 true。 */
-    private fun sendBlocking(json: JSONObject, endpoint: String): Boolean {
+    /**
+     * 同步发送。返回 HTTP 状态码；连接 / IO 层失败返回 [SEND_TRANSPORT_ERROR]。
+     * 调用方据此区分「服务器已应答但拒绝」与「网络不可达」：前者可以继续处理队列里的
+     * 下一条，后者应立即中止整轮补传。
+     */
+    private fun sendBlocking(json: JSONObject, endpoint: String): Int {
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(endpoint.trimEnd('/') + REPORT_PATH).openConnection() as HttpURLConnection).apply {
@@ -222,23 +231,25 @@ object LogReporter {
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 // API Key 来自构建期注入 native 层的 key_generated.h（经 JNI 读取），
                 // 仅作为请求头发送；绝不打印到日志，也不进入上报 body / SettingsStore / 快照。
-                val apiKey = SignatureVerifier.getReportingApiKey()
-                if (apiKey.isNotBlank()) setRequestProperty("X-API-Key", apiKey)
+                // 只在 release 构建附带：debug 包可能被自由分发，不把生产密钥带进调试包。
+                if (!BuildConfig.DEBUG) {
+                    val apiKey = SignatureVerifier.getReportingApiKey()
+                    if (apiKey.isNotBlank()) setRequestProperty("X-API-Key", apiKey)
+                }
             }
             OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(json.toString()) }
 
             val code = conn.responseCode
             if (code in 200..299) {
                 if (BuildConfig.DEBUG) Log.d(TAG, "上报成功: $code")
-                true
             } else {
                 // 仅记录 HTTP 状态码，绝不回显响应体或 API Key。
                 Log.w(TAG, "上报失败: HTTP $code")
-                false
             }
+            code
         } catch (t: Throwable) {
             if (BuildConfig.DEBUG) Log.w(TAG, "上报异常: ${t.message}")
-            false
+            SEND_TRANSPORT_ERROR
         } finally {
             conn?.disconnect()
         }
@@ -290,11 +301,19 @@ object LogReporter {
         if (!enabled || endpoint == null) return
         val files = dir.listFiles()?.sortedBy { it.lastModified() } ?: return
         for (file in files) {
-            try {
-                val json = JSONObject(file.readText(Charsets.UTF_8))
-                if (sendBlocking(json, endpoint)) file.delete() else return
+            val code = try {
+                sendBlocking(JSONObject(file.readText(Charsets.UTF_8)), endpoint)
             } catch (t: Throwable) {
-                file.delete() // 内容损坏，直接丢弃
+                file.delete() // 内容损坏，直接丢弃，不阻断后续补传
+                continue
+            }
+            // 2xx 视为送达并删除；连接层失败说明网络不可达，整轮中止（避免对剩余文件逐个
+            // 空等连接超时）；其余是服务器已应答但拒绝（4xx / 5xx），保留该文件并继续尝试
+            // 后续条目，避免一条永远失败的记录压住整个队列。
+            if (code in 200..299) {
+                file.delete()
+            } else if (code == SEND_TRANSPORT_ERROR) {
+                return
             }
         }
     }

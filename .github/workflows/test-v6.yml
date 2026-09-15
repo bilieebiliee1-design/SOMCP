@@ -24,6 +24,11 @@ jobs:
         with:
           gradle-version: "9.6.1"
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default packages are "tools platform-tools". Google has
+          # removed the legacy `tools` package from the SDK repository, so keep
+          # platform-tools only.
+          packages: platform-tools
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
 
       - name: Determine base revision
