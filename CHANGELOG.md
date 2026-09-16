@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+
 # 更新日志
 
 ## 1.0.21
@@ -9,6 +11,8 @@
 - 修复 `build-unidbg-native.sh` / `build-unidbg-native.ps1` 的 unicorn 构建：改用 unicorn 2.x 引擎（`third_party/unicorn-engine-unicorn2`）编出 all-in-one `libunicorn.a`，再用 NDK 编译并链接 unidbg 自带的 JNI 桥（`backend/unicorn2/src/main/native/unicorn.c`）产出真正的 `libunicorn.so`，步骤与 unidbg 官方 `backend/unicorn2/src/main/native` 的构建方式一致；32 位 ABI（armeabi-v7a / x86）仍因 QEMU 需要 `__uint128_t` 而跳过 unicorn。
 - 新增 `tools/verify_unicorn_jni.py`（可直接校验 `.so` 或 Release APK），并在两个构建脚本中作为硬性门槛：导出不了 unicorn2 JNI 桥的 `libunicorn.so` 一律拒绝安装，宁可让构建失败，也不再发出「自称可用、实则不可用」的包。
 - 修正诊断信息：`system_control(action=status)` 的 `coverageModel` 新增 `backendInitError`，`UnidbgEmulator.unavailableReason()` 现在会区分「库没打进包」与「库在但不是 unicorn2 JNI 桥」，避免再次被误导。
+- 修复前台服务被系统后台重启时必崩的问题（`ForegroundServiceStartNotAllowedException`，1.0.21(22) 现网崩溃报告，Android 16 / Samsung SM-S9110）：服务声明为 `START_STICKY`，进程被杀后系统会在应用处于后台时以 null Intent 重启它（崩溃报告顶部的 `Unable to start service ... with null` 即该路径），此时 `startForeground()` 因 `mAllowStartForeground=false` 被平台拒绝直接抛异常，且系统每轮按退避重启都会再次崩溃，构成崩溃循环。现在 `McpForegroundService` 把 `startForeground()` 包进 try/catch（捕获其父类 `IllegalStateException`——具体异常类 API 31 才存在，父类引用在旧系统上同样安全；另捕获 `SecurityException` 覆盖权限被回收的场景），被拒时记录日志、`stopSelf()` 并由 `onStartCommand` 返回 `START_NOT_STICKY`，系统停止重试这个永远无法满足的启动；服务器启动失败（如端口占用）同样返回 `START_NOT_STICKY`，不再无限重启。
+- 顺带消除同一路径上的姊妹崩溃：完整性校验失败分支此前在 `startForeground()` 之前就 `stopSelf()`，违反 `startForegroundService()` 的平台契约（必须先进入前台才允许自行销毁），会被系统以 `RemoteServiceException: Context.startForegroundService() did not then call Service.startForeground()` 击落。现在 `startForeground()` 一律先执行，再走完整性校验与服务器启动逻辑。
 - 接入 log-report-platform 的崩溃 / 错误自动上报能力：新增 `app/src/main/java/com/soreverse/mcp/core/LogReporter.kt`，按该平台的 `/api/v1/report` 协议（仅用 `HttpURLConnection`，零额外依赖）上报未捕获崩溃与手动错误。默认开启，开箱即上报至默认服务器 `https://api.somcp.cn`；用户仍可在设置页关闭。崩溃日志先落盘到本地队列（`logreport-queue`）再尽力即时上报；若进程在发送前被杀，下次启动 `LogReporter.init()` 自动补传残队。已与现有 `CrashReporter` 对接（`CrashReporter.install` 的未捕获处理器会调用 `LogReporter.reportCrash`），并新增 `SettingsStore` 两项配置（`crashReportEnabled` / `crashReportEndpoint`）同步进 `snapshot` / `applyPatch` / `schema`，可通过 MCP `app_config` 读写。
 - 捕获型错误（`AppLog.e`）接入自动上报：`AppLog.e(message, throwable)` 现在把捕获到的错误（含异常堆栈）转发到 `LogReporter.report(logType="error", tag="AppLog.e")`，随同一开关生效；上报调用包在 `runCatching` 中，绝不会因上报失败影响业务。`LogReporter.report` 新增 30 秒重复指纹抑制（相同 `logType|tag|content` 只放行一次，最多保留 64 条指纹），避免重试循环等高频错误刷爆服务端；崩溃上报 `reportCrash` 不受抑制，确保每条崩溃都送达。
 - 上报服务端定为 `https://api.somcp.cn`：将 `crashReportEndpoint` 默认值设为 `https://api.somcp.cn`，开启开关后即直接上报至默认服务器。
