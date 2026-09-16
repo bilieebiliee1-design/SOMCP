@@ -1,7 +1,13 @@
 diff --git a/blutter/src/DartApp.h b/blutter/src/DartApp.h
-index 59f7017..bb75511 100644
+index a61081d..7e63913 100644
 --- a/blutter/src/DartApp.h
 +++ b/blutter/src/DartApp.h
-@@ -29,0 +30,2 @@ public:
+@@ -27,6 +27,8 @@ public:
+ 
+ 	dart::ObjectPool& GetObjectPool() { return *ppool; }
+ 	DartTypeDb* TypeDb() { return typeDb.get(); }
 +	const std::vector<DartLibrary*>& Libraries() const { return libs; }
 +	const std::vector<DartClass*>& Classes() const { return classes; }
+ 
+ 	intptr_t DartIntCid() const { return dartIntCid; }
+ 	intptr_t DartFutureCid() const { return dartFutureCid; }
