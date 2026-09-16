@@ -65,10 +65,15 @@ class atomic_ref {
     return __atomic_is_lock_free(sizeof(T), ptr_) != 0;
   }
 
+  // Values are loaded into raw storage rather than a local T: Dart's
+  // Compressed*Ptr types (DEFINE_COMPRESSED_POINTER) declare no default
+  // constructor, so a `T result;` destination fails to compile. T is trivially
+  // copyable (static_assert above), which is what makes copying the bytes back
+  // out as T valid.
   T load(memory_order order = memory_order_seq_cst) const noexcept {
-    T result;
-    __atomic_load(ptr_, &result, order_to_builtin(order));
-    return result;
+    alignas(T) unsigned char storage[sizeof(T)];
+    __atomic_load(ptr_, reinterpret_cast<T*>(storage), order_to_builtin(order));
+    return *reinterpret_cast<const T*>(storage);
   }
 
   void store(T value, memory_order order = memory_order_seq_cst) const noexcept {
@@ -77,9 +82,10 @@ class atomic_ref {
 
   T exchange(T value,
              memory_order order = memory_order_seq_cst) const noexcept {
-    T result;
-    __atomic_exchange(ptr_, &value, &result, order_to_builtin(order));
-    return result;
+    alignas(T) unsigned char storage[sizeof(T)];
+    __atomic_exchange(ptr_, &value, reinterpret_cast<T*>(storage),
+                      order_to_builtin(order));
+    return *reinterpret_cast<const T*>(storage);
   }
 
   bool compare_exchange_weak(T& expected,
