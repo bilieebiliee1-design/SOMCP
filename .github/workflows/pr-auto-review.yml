@@ -213,11 +213,17 @@ jobs:
           HEAD_SHA: ${{ steps.resolve.outputs.head_sha || github.event.pull_request.head.sha }}
           BASE_REF: ${{ steps.resolve.outputs.base_ref || github.event.pull_request.base.ref }}
           RUN_ID: ${{ github.run_id }}
-        timeout-minutes: 90
+        # This step budget must stay strictly above the polling window below
+        # (MAX_WAIT), otherwise the step gets killed mid-wait and fails the job
+        # before the graceful ci_state=timeout fallback can run. Measured CI
+        # wall time is ~99 min (native backends 44 min + Blutter runners
+        # 32 min on a cold cache) and grows with the Blutter matrix, so allow
+        # ~3 h of headroom.
+        timeout-minutes: 195
         run: |
           set -euo pipefail
           PERIOD=30
-          MAX_WAIT=5400   # 90 minutes
+          MAX_WAIT=10800  # 180 minutes — must stay below timeout-minutes above
           elapsed=0
           ci_found=false
           all_done=false

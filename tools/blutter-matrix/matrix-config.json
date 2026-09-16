@@ -6,7 +6,7 @@
   "engineRepository": "https://github.com/flutter/engine.git",
   "dartRepository": "https://github.com/dart-lang/sdk.git",
   "blutterRepository": "https://github.com/worawit/blutter.git",
-  "blutterCommit": "528acbe83ba35a3a53fb97b231cb5f968c7068d1",
+  "blutterCommit": "4a60ac648bf448c5a7596437243bcd0b9376fdf0",
   "channels": ["stable", "beta"],
   "targetAbi": "arm64-v8a",
   "androidApi": 26,
