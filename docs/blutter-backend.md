@@ -48,12 +48,14 @@ BlutterCoordinator
   "schemaVersion": 2,
   "matrixVersion": "2026.07.1",
   "protocolVersion": 1,
-  "upstreamCommit": "528acbe83ba35a3a53fb97b231cb5f968c7068d1",
+  "upstreamCommit": "4a60ac648bf448c5a7596437243bcd0b9376fdf0",
   "generatedAt": "2026-07-23T00:00:00Z",
   "runners": [],
   "coverage": []
 }
 ```
+
+`upstreamCommit` 是上游基线，固定在 `worawit/blutter` 的 `4a60ac648b`（2026-08-18）。构建前会在该提交上按序应用 `tools/blutter-matrix/android-runner/` 下的两个本地补丁：`dart-app-accessors.patch` 暴露 `DartApp::Libraries()` / `Classes()`；`dart-single-snapshot.patch` 是上游 PR #213 的原始 diff（尚未合并），用于让 Dart 3.13+ 可以编译——这些版本移除了 VM isolate，快照符号由 `_kDartVm*` / `_kDartIsolate*` 合并为 `_kDartSnapshotData` / `_kDartSnapshotText`，且 `OBJECT_STORE_STUB_CODE_LIST` 被折叠进 `VM_STUB_CODE_LIST`。该补丁靠 `pch.h` 里的 `#ifdef kSnapshotDataAsmSymbol` 自动开关（`dart_api.h` 只在 3.13+ 定义这个宏），所以 Dart 3.12 及更早版本仍走原始代码路径；上游合并 PR #213 后可直接删掉这个文件。
 
 `runners` 只包含可执行条目。每项必须包含唯一 `runnerId`、`libraryName`、ABI、Dart version/revision、engine revision、snapshot aliases、指针模式、分析能力、SHA-256、构建状态、静态验证状态和冒烟状态。`smokeStatus` 可以是 `not_run` 或 `passed`；只有 `failed` 才禁止入包。
 
