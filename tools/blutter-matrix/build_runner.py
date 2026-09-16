@@ -26,7 +26,7 @@ import subprocess
 import sys
 
 
-UPSTREAM_COMMIT = "528acbe83ba35a3a53fb97b231cb5f968c7068d1"
+UPSTREAM_COMMIT = "4a60ac648bf448c5a7596437243bcd0b9376fdf0"
 
 
 def package_version(value):
@@ -142,8 +142,17 @@ def main():
             atomic_ref_shim = overlay / "dart_vm_atomic_ref_compat.h"
             if not atomic_ref_shim.is_file():
                 raise RuntimeError("atomic_ref_shim_missing")
-            run(["git", "apply", "--check", str(overlay / "dart-app-accessors.patch")], blutter, log)
-            run(["git", "apply", str(overlay / "dart-app-accessors.patch")], blutter, log)
+            # Local patches applied on top of the pinned upstream commit, in order:
+            #   - dart-app-accessors.patch: expose DartApp::Libraries()/Classes().
+            #   - dart-single-snapshot.patch: upstream PR #213 (unmerged) so Dart
+            #     3.13+ can be built at all. Those versions dropped the VM isolate,
+            #     which renames the snapshot symbols and folds
+            #     OBJECT_STORE_STUB_CODE_LIST into VM_STUB_CODE_LIST. The patch
+            #     self-gates on the BLUTTER_DART_SINGLE_SNAPSHOT define set in
+            #     pch.h, so older Dart versions keep the original code path.
+            for patch_name in ("dart-app-accessors.patch", "dart-single-snapshot.patch"):
+                run(["git", "apply", "--check", str(overlay / patch_name)], blutter, log)
+                run(["git", "apply", str(overlay / patch_name)], blutter, log)
             prepare_dart_project(dart, blutter, runner, log)
             packages = root / "packages" / args.runner_id
             if not (overlay / "CMakeLists.txt").is_file():
