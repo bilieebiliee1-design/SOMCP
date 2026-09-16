@@ -1,0 +1,378 @@
+diff --git a/blutter/CMakeLists.txt b/blutter/CMakeLists.txt
+index 9751cd6..c154ce0 100644
+--- a/blutter/CMakeLists.txt
++++ b/blutter/CMakeLists.txt
+@@ -45,6 +45,18 @@ add_executable(${BINNAME} ${SRCS})
+ 
+ target_link_libraries(${BINNAME} PRIVATE ${DARTLIB} capstone)
+ 
++if (MSVC)
++	# Dart 3.13's regexp references ICU (UnicodeSet/UnicodeString and u_* property APIs).
++	# The Dart VM static lib is compiled against external/icu-windows (ICU 73), but
++	# find_package(ICU) in scripts/CMakeLists.txt resolves the library to the Windows SDK
++	# copy (wrong version, without the _73 symbols), so link the matching ICU 73 libs here.
++	set(BLUTTER_ICU_LIB_DIR "${PROJECT_SOURCE_DIR}/../external/icu-windows/lib64")
++	target_link_libraries(${BINNAME} PRIVATE
++		"${BLUTTER_ICU_LIB_DIR}/icuuc.lib"
++		"${BLUTTER_ICU_LIB_DIR}/icuin.lib"
++		"${BLUTTER_ICU_LIB_DIR}/icudt.lib")
++endif()
++
+ target_precompile_headers(${BINNAME} PRIVATE "${SRCDIR}/pch.h")
+ 
+ if (MSVC)
+diff --git a/blutter/src/CodeAnalyzer_arm64.cpp b/blutter/src/CodeAnalyzer_arm64.cpp
+index e50c965..cb38a2a 100644
+--- a/blutter/src/CodeAnalyzer_arm64.cpp
++++ b/blutter/src/CodeAnalyzer_arm64.cpp
+@@ -1988,8 +1988,11 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
+ 		++insn;
+ 	}
+ 
++#ifndef BLUTTER_DART_SINGLE_SNAPSHOT
+ 	// PrologueBuilder::BuildClosureContextHandling()
+ 	// closure context handling
++	// TODO: Dart 3.13 replaced Closure's fixed context_offset with a variable-length
++	// elements[] region, so this fixed-offset analysis no longer applies. Disabled for now.
+ 	if (dartFn->IsClosure() && insn.id() == ARM64_INS_LDUR && insn.ops(1).mem.disp == AOT_Closure_context_offset - dart::kHeapObjectTag) {
+ 		const auto arg1Reg = [&] {
+ 			if (fnInfo->params.numFixedParam > 0) {
+@@ -2020,6 +2023,8 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
+ 			}
+ 	}
+ 
++#endif
++
+ 	// TypeArgument from Arguments Descriptor might be used
+ 	if (argsDescReg != ARM64_REG_INVALID)
+ 		handleArgumentsDescriptorTypeArguments(insn);
+@@ -2027,7 +2032,10 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
+ 	if (endPrologueAddr != 0 && insn.address() < endPrologueAddr)
+ 		handleInitialization();
+ 
++#ifndef BLUTTER_DART_SINGLE_SNAPSHOT
+ 	// closure delayed type arguments
++	// TODO: Dart 3.13 moved the delayed type arguments into Closure's elements[]; the old
++	// fixed AOT_Closure_delayed_type_arguments_offset is gone. Disabled for now.
+ 	if (dartFn->IsClosure()) {
+ 		const auto save_ins = insn.Current();
+ 
+@@ -2141,6 +2149,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
+ 			insn.SetCurrent(save_ins);
+ 		}
+ 	}
++#endif
+ 
+ 	if (insn.address() < endPrologueAddr) {
+ 		// short-lived aliases for prologue parameter register shuffle
+diff --git a/blutter/src/DartApp.cpp b/blutter/src/DartApp.cpp
+index 25ad347..00a2f13 100644
+--- a/blutter/src/DartApp.cpp
++++ b/blutter/src/DartApp.cpp
+@@ -294,6 +294,33 @@ void DartApp::loadFromClassTable(dart::IsolateGroup* ig)
+ 
+ void DartApp::loadStubs(dart::ObjectStore* store)
+ {
++#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
++	// Dart 3.13: the object store no longer keeps stub references and
++	// OBJECT_STORE_STUB_CODE_LIST is gone. Every stub now lives in VM_STUB_CODE_LIST
++	// and is fetched through StubCode.
++	(void)store;
++	uint64_t ep_addr;
++	DartStub* stub;
++
++	throwStubAddr = dart::StubCode::Throw().EntryPoint();
++
++#define DO(name) { \
++		const auto& code = dart::StubCode::name(); \
++		ep_addr = code.EntryPoint() - base(); \
++		if (!stubs.contains(ep_addr)) { \
++			stub = new DartStub(code.ptr(), DartStub::name ## Stub, ep_addr, code.Size(), #name); \
++			stubs[ep_addr] = stub; \
++			auto it = functions.find(ep_addr); \
++			if (it != functions.end()) { \
++				auto dartFn = it->second; \
++				std::erase(dartFn->Class().functions, dartFn); \
++				functions.erase(it); \
++			} \
++		} \
++	}
++	VM_STUB_CODE_LIST(DO);
++#undef DO
++#else
+ 	dart::CodePtr ptr;
+ 	auto& code = dart::Code::Handle();
+ 	uint64_t ep_addr;
+@@ -314,7 +341,7 @@ void DartApp::loadStubs(dart::ObjectStore* store)
+ 	DO(build_generic_method_extractor_code, BuildGenericMethodExtractor);
+ #endif
+ #undef DO
+-	
++
+ 	code = store->throw_stub();
+ 	throwStubAddr = code.EntryPoint();
+ 
+@@ -340,6 +367,7 @@ void DartApp::loadStubs(dart::ObjectStore* store)
+ 	}
+ 	VM_STUB_CODE_LIST(DO);
+ #undef DO
++#endif
+ }
+ 
+ DartFunction* DartApp::addFunctionNoCheck(const dart::Function& func)
+diff --git a/blutter/src/DartLoader.cpp b/blutter/src/DartLoader.cpp
+index b938219..cb8bd70 100644
+--- a/blutter/src/DartLoader.cpp
++++ b/blutter/src/DartLoader.cpp
+@@ -18,6 +18,22 @@ static void init_vm_flags()
+ 		throw std::runtime_error(error);
+ }
+ 
++#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
++static void init_dart()
++{
++	char* error = NULL;
++
++	Dart_InitializeParams init_params;
++	memset(&init_params, 0, sizeof(init_params));
++	init_params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
++	init_params.start_kernel_isolate = false;
++	// Dart 3.13 removed the VM isolate, so there is no VM snapshot to pass here
++	error = Dart_Initialize(&init_params);
++	if (error) {
++		throw std::runtime_error(error);
++	}
++}
++#else
+ static void init_dart(const uint8_t* vm_snapshot_data, const uint8_t* vm_snapshot_instructions)
+ {
+ 	char* error = NULL;
+@@ -34,6 +50,7 @@ static void init_dart(const uint8_t* vm_snapshot_data, const uint8_t* vm_snapsho
+ 		throw std::runtime_error(error);
+ 	}
+ }
++#endif
+ 
+ static Dart_Isolate load_isolate(const uint8_t* isolate_snapshot_data, const uint8_t* isolate_snapshot_instructions)
+ {
+@@ -46,6 +63,10 @@ static Dart_Isolate load_isolate(const uint8_t* isolate_snapshot_data, const uin
+ 	// dart 3 is always null safety
+ 	// null safety is enabled by default on Flutter 2.0 with Dart 2.12 (since April 2021)
+ 	// null safety flag is removed in https://github.com/dart-lang/sdk/commit/8e2acda7d68702d43eefae0c7b17d314d5c93b00#diff-0c27ee5540bcadf9531563ffd7dc5266b1475db16c6d75b73949611551452348
++#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
++	// Dart 3.13 VM supports only strong null safety
++	flags.null_safety = true;
++#else
+ 	auto pos = strstr((const char*)isolate_snapshot_data + 0x30, "null-safety");
+ 	if (pos == NULL) {
+ 		// the null-safety flag is removed because it is always enabled.
+@@ -55,6 +76,7 @@ static Dart_Isolate load_isolate(const uint8_t* isolate_snapshot_data, const uin
+ 		// "no-null-safety" is set when null safety is disabled. So check for space
+ 		flags.null_safety = pos[-1] == ' ';
+ 	}
++#endif
+ 
+ 	auto isolate = Dart_CreateIsolateGroup(nullptr, nullptr, isolate_snapshot_data,
+ 		isolate_snapshot_instructions, &flags,
+@@ -70,7 +92,11 @@ Dart_Isolate DartLoader::Load(LibAppInfo& libInfo)
+ {
+ 	init_vm_flags();
+ 
++#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
++	init_dart();
++#else
+ 	init_dart(libInfo.vm_snapshot_data, libInfo.vm_snapshot_instructions);
++#endif
+ 
+ 	auto isolate = load_isolate(libInfo.isolate_snapshot_data, libInfo.isolate_snapshot_instructions);
+ 
+diff --git a/blutter/src/DartStub.h b/blutter/src/DartStub.h
+index f932cbc..c6a4c51 100644
+--- a/blutter/src/DartStub.h
++++ b/blutter/src/DartStub.h
+@@ -10,6 +10,13 @@ class DartStub : public DartFnBase
+ {
+ public:
+ 	enum Kind : int32_t {
++#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
++		// Dart 3.13: all stubs are consolidated into VM_STUB_CODE_LIST
++		// (OBJECT_STORE_STUB_CODE_LIST is gone), so there is only one naming scheme
++#define DO(name) name ## Stub,
++		VM_STUB_CODE_LIST(DO)
++#undef DO
++#else
+ #define DO(member, name) name ## Stub,
+ 		OBJECT_STORE_STUB_CODE_LIST(DO)
+ #undef DO
+@@ -18,6 +25,7 @@ class DartStub : public DartFnBase
+ #define DO(name) name ## VMStub,
+ 		VM_STUB_CODE_LIST(DO)
+ #undef DO
++#endif
+ 		SharedStub,
+ 		AllocateUserObjectStub,
+ 		TypeCheckStub,
+diff --git a/blutter/src/DartTypes.cpp b/blutter/src/DartTypes.cpp
+index 9482811..0508198 100644
+--- a/blutter/src/DartTypes.cpp
++++ b/blutter/src/DartTypes.cpp
+@@ -307,6 +307,12 @@ DartFunctionType* DartTypeDb::FindOrAdd(dart::FunctionTypePtr fnTypePtr)
+ 
+ DartAbstractType* DartTypeDb::FindOrAdd(dart::AbstractTypePtr abTypePtr)
+ {
++	// A null slot in a type context (e.g. an unfilled type argument) means "dynamic".
++	// In Dart 3.13 this shows up where older versions stored an explicit dynamic Type.
++	if ((intptr_t)abTypePtr == (intptr_t)dart::Object::null()) {
++		return FindOrAdd(dart::Type::DynamicType());
++	}
++
+ 	switch (abTypePtr.GetClassId()) {
+ 	case dart::kTypeCid:
+ 		return FindOrAdd(dart::Type::RawCast(abTypePtr));
+@@ -327,7 +333,9 @@ DartAbstractType* DartTypeDb::FindOrAdd(dart::AbstractTypePtr abTypePtr)
+ 		return FindOrAdd(dart::FunctionType::RawCast(abTypePtr));
+ 	}
+ 	//return nullptr;
+-	FATAL("Invalid abstract type");
++	const auto _cid = abTypePtr.GetClassId();
++	const auto& _cls = dart::Class::Handle(dart::IsolateGroup::Current()->class_table()->At(_cid));
++	FATAL("Invalid abstract type (cid %d, class %s)", (int)_cid, _cls.ScrubbedNameCString());
+ }
+ 
+ const DartTypeArguments* DartTypeDb::FindOrAdd(dart::TypeArgumentsPtr typeArgsPtr)
+diff --git a/blutter/src/ElfHelper.cpp b/blutter/src/ElfHelper.cpp
+index 030c0a2..0fc1c74 100644
+--- a/blutter/src/ElfHelper.cpp
++++ b/blutter/src/ElfHelper.cpp
+@@ -86,8 +86,13 @@ LibAppInfo ElfHelper::findSnapshots(const uint8_t* elf)
+ 			// we want only .dynstr for .dynsym
+ 			const char* strtab = (const char*)elf + section->file_offset;
+ 			const char* last = strtab + section->file_size;
++#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
++			const char* s_first = kSnapshotDataAsmSymbol;
++			const char* s_last = s_first + strlen(kSnapshotDataAsmSymbol) + 1;
++#else
+ 			const char* s_first = kVmSnapshotDataAsmSymbol;
+ 			const char* s_last = s_first + strlen(kVmSnapshotDataAsmSymbol) + 1;
++#endif
+ 			//if (memmem(strtab, section->s_size, kVmSnapshotDataAsmSymbol, strlen(kVmSnapshotDataAsmSymbol))) {
+ 			if (std::search(strtab, last, s_first, s_last) != last) {
+ 				// found it
+@@ -105,6 +110,38 @@ LibAppInfo ElfHelper::findSnapshots(const uint8_t* elf)
+ 	}
+ 
+ 	// find the required symbol addresses
++#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
++	// Dart 3.13 merged the VM and isolate snapshots into a single data/text pair
++	const uint8_t* snapshot_data = nullptr;
++	const uint8_t* snapshot_text = nullptr;
++	for (; dynsym < dynsym_end; dynsym++) {
++		if (dynsym->info == 0)
++			continue;
++
++		const char* name = dynstr + dynsym->name;
++		if (strcmp(name, kSnapshotDataAsmSymbol) == 0) {
++			snapshot_data = elf + dynsym->value;
++		}
++		else if (strcmp(name, kSnapshotTextAsmSymbol) == 0) {
++			snapshot_text = elf + dynsym->value;
++		}
++	}
++
++	if (snapshot_data == nullptr)
++		throw std::invalid_argument("ELF: Cannot find Dart Snapshot Data");
++	if (snapshot_text == nullptr)
++		throw std::invalid_argument("ELF: Cannot find Dart Snapshot Text");
++
++	return LibAppInfo{
++		.lib = elf,
++		// no separate VM snapshot in this Dart version
++		.vm_snapshot_data = nullptr,
++		.vm_snapshot_instructions = nullptr,
++		// keep the old field names, the single snapshot is the isolate one
++		.isolate_snapshot_data = snapshot_data,
++		.isolate_snapshot_instructions = snapshot_text,
++	};
++#else
+ 	const uint8_t* vm_snapshot_data = nullptr;
+ 	const uint8_t* vm_snapshot_instructions = nullptr;
+ 	const uint8_t* isolate_snapshot_data = nullptr;
+@@ -145,6 +182,7 @@ LibAppInfo ElfHelper::findSnapshots(const uint8_t* elf)
+ 		.isolate_snapshot_data = isolate_snapshot_data,
+ 		.isolate_snapshot_instructions = isolate_snapshot_instructions,
+ 	};
++#endif
+ }
+ 
+ LibAppInfo ElfHelper::MapLibAppSo(const char* path)
+diff --git a/blutter/src/FridaWriter.cpp b/blutter/src/FridaWriter.cpp
+index 405f9c6..96d941d 100644
+--- a/blutter/src/FridaWriter.cpp
++++ b/blutter/src/FridaWriter.cpp
+@@ -115,7 +115,11 @@ void FridaWriter::Create(const char* filename)
+ 				of << "{id:" << dartCls->Id() << ",";
+ 				of << "name:\"Closure\",";
+ 				of << "fnOffset:" << AOT_Closure_function_offset << ",";
++#ifndef BLUTTER_DART_SINGLE_SNAPSHOT
++				// Dart 3.13 has no fixed Closure context offset (moved into elements[]);
++				// the Frida template does not use contextOffset anyway
+ 				of << "contextOffset:" << AOT_Closure_context_offset << ",";
++#endif
+ 				of << "epOffset:" << AOT_Closure_entry_point_offset << "},\n";
+ 				break;
+ 			case dart::kTypedDataUint8ArrayCid:
+diff --git a/blutter/src/pch.h b/blutter/src/pch.h
+index 6fe72e9..3731253 100644
+--- a/blutter/src/pch.h
++++ b/blutter/src/pch.h
+@@ -37,6 +37,14 @@ PRAGMA_WARNING(push, 0)
+ #include <vm/compiler/runtime_offsets_extracted.h>
+ PRAGMA_WARNING(pop)
+ 
++// Dart 3.13 (May 2026) removed the VM isolate. As a result the snapshot symbols were
++// merged from 4 (_kDartVm*/_kDartIsolate*) into 2 (_kDartSnapshotData/_kDartSnapshotText),
++// OBJECT_STORE_STUB_CODE_LIST was folded into VM_STUB_CODE_LIST, and Dart_InitializeParams
++// no longer carries the VM snapshot. kSnapshotDataAsmSymbol is defined only on that new model.
++#ifdef kSnapshotDataAsmSymbol
++#  define BLUTTER_DART_SINGLE_SNAPSHOT 1
++#endif
++
+ #ifdef OLD_MAP_SET_NAME
+ namespace dart {
+ 	using Map = LinkedHashMap;
+diff --git a/extract_dart_info.py b/extract_dart_info.py
+index 60e4cf2..e49b03d 100644
+--- a/extract_dart_info.py
++++ b/extract_dart_info.py
+@@ -15,9 +15,13 @@
+ def extract_snapshot_hash_flags(libapp_file):
+     with open(libapp_file, 'rb') as f:
+         elf = ELFFile(f)
+-        # find "_kDartVmSnapshotData" symbol
++        # find the snapshot data symbol
++        # Dart >= 3.11 (May 2026) dropped the VM isolate and renamed the symbols,
++        # so "_kDartVmSnapshotData" became "_kDartSnapshotData"
+         dynsym = elf.get_section_by_name('.dynsym')
+-        sym = dynsym.get_symbol_by_name('_kDartVmSnapshotData')[0]
++        syms = dynsym.get_symbol_by_name('_kDartVmSnapshotData') or dynsym.get_symbol_by_name('_kDartSnapshotData')
++        assert syms is not None, "Cannot find Dart snapshot data symbol"
++        sym = syms[0]
+         #section = elf.get_section(sym['st_shndx'])
+         assert sym['st_size'] > 128
+         f.seek(sym['st_value']+20)
+diff --git a/scripts/CMakeLists.txt b/scripts/CMakeLists.txt
+index e755ad8..282d0dc 100644
+--- a/scripts/CMakeLists.txt
++++ b/scripts/CMakeLists.txt
+@@ -88,8 +88,10 @@ if (MSVC)
+ 	string(REPLACE "/EHsc" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+ 	# remove compiler RTTI option
+ 	string(REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
++	# Dart 3.11+ uses __VA_OPT__ which needs the conforming preprocessor
++	# /utf-8 so MSVC reads the UTF-8 sources correctly on non-UTF-8 codepages (e.g. GBK)
+ 	set(cc_opts
+-		/Oy /GR- /EHs-c-
++		/Oy /GR- /EHs-c- /Zc:preprocessor /utf-8
+ 	)
+ else()
+ 	set(cc_opts
