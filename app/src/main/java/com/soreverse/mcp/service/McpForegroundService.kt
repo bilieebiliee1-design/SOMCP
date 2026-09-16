@@ -19,6 +19,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 package com.soreverse.mcp.service
 
 import android.animation.ValueAnimator
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -201,27 +202,32 @@ class McpForegroundService : Service() {
     // background, so startForeground() throws
     // ForegroundServiceStartNotAllowedException (mAllowStartForeground=false)
     // and used to crash on every backoff round (field crash 1.0.21(22):
-    // Android 16, Samsung SM-S9110). The IllegalStateException parent keeps
-    // the catch site class-safe below API 31; SecurityException covers a
+    // Android 16, Samsung SM-S9110). The concrete exception exists only on
+    // API 31+ — on older releases ART skips the unresolved catch arm and the
+    // IllegalStateException arm handles it; SecurityException covers a
     // revoked FGS permission.
-    private fun enterForeground(settings: SettingsStore): Boolean =
-        try {
-            createChannel()
-            // Avoid showing the bind wildcard 0.0.0.0 in the notification: users kept
-            // typing 0.0.0.0:8000/mcp as the client URL and it never connects. When
-            // bound to all interfaces, surface a real reachable address (LAN IP if
-            // available, otherwise 127.0.0.1) plus the required /mcp path.
-            startForeground(1001, notification(buildNotificationText(settings.bindHost, settings.port)))
-            true
-        } catch (e: IllegalStateException) {
-            AppLog.e("startForeground rejected (background start); stopping service", e)
-            stopSelf()
-            false
-        } catch (e: SecurityException) {
-            AppLog.e("startForeground denied (missing FGS permission); stopping service", e)
-            stopSelf()
-            false
-        }
+    private fun enterForeground(settings: SettingsStore): Boolean = try {
+        createChannel()
+        // Avoid showing the bind wildcard 0.0.0.0 in the notification: users kept
+        // typing 0.0.0.0:8000/mcp as the client URL and it never connects. When
+        // bound to all interfaces, surface a real reachable address (LAN IP if
+        // available, otherwise 127.0.0.1) plus the required /mcp path.
+        startForeground(1001, notification(buildNotificationText(settings.bindHost, settings.port)))
+        true
+    } catch (e: ForegroundServiceStartNotAllowedException) {
+        // API 31+; see the note above for the pre-31 path.
+        AppLog.e("startForeground rejected (FGS not allowed); stopping service", e)
+        stopSelf()
+        false
+    } catch (e: IllegalStateException) {
+        AppLog.e("startForeground rejected (background start); stopping service", e)
+        stopSelf()
+        false
+    } catch (e: SecurityException) {
+        AppLog.e("startForeground denied (missing FGS permission); stopping service", e)
+        stopSelf()
+        false
+    }
 
     private fun maybeAutoStartTunnel(settings: SettingsStore) {
         if (!settings.tunnelAutoStart) return
