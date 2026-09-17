@@ -45,6 +45,12 @@
 - 验证方式（不涉及本地构建）：把工作流内嵌的 python 片段按 `PYEOF` heredoc 原样抽出并 `ast.parse` 做语法门禁，再以真实输入执行，断言 CI 行渲染为 `| 严重 | \`CI/CD\` | 0 |`。覆盖四种输入——CI 行被降级为 warning（PR #103 首轮）、CI 行 file/line 指向 `CHANGELOG.md:1`（PR #103 次轮）、approve + CI 红灯且模型未写 CI 行（降级路径）、CI 全绿——四例全部通过；同时确认 AGPL 合规行、`CHANGELOG` 范围行、代码行等非 CI 条目不被误判改写。
 - 新增 `tools/check_pr_review_ci_row.py`，把上述验证固化为仓库内可重复执行的冒烟测试。归一化规则此前只存在于 `pr-auto-review.yml` 的 YAML 块标量里（`python3 - <<'PYEOF'` heredoc），整棵树没有任何地方能 import 或运行它，改动一次就可能静默失效、直到某次真实审查输出错误的归因而被发现。脚本从工作流中提取该 heredoc，先 `ast.parse` 做语法门禁——heredoc 被破坏时在本地立即失败，而不是等 CI 运行到该步骤才报错——再以冻结夹具执行，断言**整张表格逐行相等**。用例扩到 7 个：PR #103 两次审查的真实 issues 数组、approve + CI 红灯且模型未写 CI 行（须补行、把判定降级为 `request_changes` 并写下 `ci-downgraded` 标记）、CI 全绿时不得出现 CI 行、模型输出干扰（`issues` 里混入非字典条目、缺失 `severity`/`file`/`line`）、comment 提到 CI 但非失败时不得改写归因、多行 comment 先压成一行再判定。零网络、零密钥、零构建，`python3 tools/check_pr_review_ci_row.py` 一键执行，7/7 通过；未接入 CI 工作流——该测试的定位是本地冒烟，接入会连带触发多套构建矩阵，需要时再单独提出。
 
+- 修复 `main` 上全部 push 型 CI 静默停跑的问题：`pr-auto-review.yml` 的自动合并调用 `pulls.merge` 时用的是本 run 的 `GITHUB_TOKEN`，而 GitHub 会抑制由该 token 触发的事件（例外只有 `workflow_dispatch` 与 `repository_dispatch`），因此被自动合并进 `main` 的提交，其 `push` 事件被静默丢弃——`Build & Sign APK`、`Test`、`Test v2` ~ `v7` 这些只监听 `on.push.branches: [main]` 的工作流一个 run 都不会被创建，界面上也没有红灯可看（不是失败，是压根没跑）。自 9/13 起 5 天内的 5 次合并（#100 ~ #104）全部没有跑过 APK 构建与测试矩阵，最后一次 `main` 上的构建还停留在 9/12。
+- 证据链：PR #97（9/12，`merged_by = Hello666cpu`，真人合并）触发了 8 条 push 运行；PR #101 / #103 / #104（9/13 之后，`merged_by = github-actions[bot]`）各自 0 条 push 运行；`?branch=main` 的最近 30 条运行里，9/13 之后只剩 `schedule` 与 `issue_comment` 事件；tag push（`Release`）不受影响。旁证就在同一个文件里——原代码已经针对 `GITHUB_TOKEN` 抑制 `closed` 事件做过补救（在本 run 内自行关闭 linked issues 并生成关闭说明），只是漏了 `push` 同样被抑制。
+- 修复方式为「补触发」：自动合并成功后依次对 `build.yml` / `test.yml` / `test-v2.yml` ~ `test-v7.yml` 调用 `actions.createWorkflowDispatch`（该接口正是官方例外之一，`GITHUB_TOKEN` 可以调用），触发分支取 `pr.base.ref`，单个工作流失败只记日志、不阻断合并流程。相应地 `permissions` 由 `actions: read` 提升为 `actions: write`，并给 7 个 test 工作流补上 `on.workflow_dispatch` 入口（`build.yml` 原本就有）。
+- 换成 PAT / GitHub App token 合并的治本方案本次未采纳：它能让 push 事件恢复正常语义、未来新增的 push 型工作流也无需逐个补入口，但需要引入一个要人工轮换的仓库 Secret。两种路径的取舍已写进工作流注释，需要时可单独提出。
+- 验证方式（不涉及本地构建）：对全部 13 个工作流文件跑严格重复键解析（PyYAML + 遇重复键即报错的 mapping 构造器），确认新增的 `workflow_dispatch` 没有破坏 `on` 段结构——13/13 通过；另把 `pr-auto-review.yml` 内嵌的 `actions/github-script` 脚本原样抽出跑 `node --check` 做语法门禁，避免改动在工作流运行时才报错。
+
 ## 1.0.17
 
 本节仅记录 `1.0.16` 发布后到 `1.0.17` 发布之间的变化。
