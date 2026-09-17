@@ -26,7 +26,9 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  # `actions: write`（而不是 read）是自动合并后补触发 push 型 workflow 所需的：
+  # 见下方 auto-merge 分支里的 createWorkflowDispatch。
+  actions: write
   checks: read
   issues: write
   pull-requests: write
@@ -840,6 +842,28 @@ jobs:
                     }
                   } catch (e) {
                     console.log('Branch deletion skipped (protected / not found): ' + e.message);
+                  }
+                  // M2: 本次自动合并用的是本 run 的 GITHUB_TOKEN，而 GitHub 会
+                  // 抑制由它触发的事件（例外只有 workflow_dispatch 与
+                  // repository_dispatch）。于是这个提交的 push 事件被静默丢弃：
+                  // base 分支上所有 `on.push` 的工作流（APK 构建、Test 矩阵）都
+                  // 不会跑，界面上也不会出现红灯——因为压根没有 run。这里显式
+                  // 补触发一遍；被触发的每个工作流都必须自己声明
+                  // `on.workflow_dispatch`。
+                  const pushTriggered = [
+                    'build.yml',
+                    'test.yml', 'test-v2.yml', 'test-v3.yml', 'test-v4.yml',
+                    'test-v5.yml', 'test-v6.yml', 'test-v7.yml',
+                  ];
+                  for (const wf of pushTriggered) {
+                    try {
+                      await github.rest.actions.createWorkflowDispatch({
+                        owner, repo, workflow_id: wf, ref: pr.base.ref,
+                      });
+                      console.log(`Re-dispatched ${wf} on ${pr.base.ref} (push event is suppressed for GITHUB_TOKEN merges).`);
+                    } catch (e) {
+                      console.log(`workflow_dispatch ${wf} failed (ignored): ` + e.message);
+                    }
                   }
                 }
               } else {
