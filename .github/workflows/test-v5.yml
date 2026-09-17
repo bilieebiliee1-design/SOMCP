@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  # 见 test.yml：自动合并（GITHUB_TOKEN）不会触发 push 事件，由
+  # pr-auto-review.yml 在合并后 dispatch 补触发。
+  workflow_dispatch:
 
 permissions:
   contents: read
