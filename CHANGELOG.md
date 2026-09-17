@@ -43,6 +43,7 @@
 - 落点有三处：一是系统提示词明确要求 CI 相关 issue 的 `severity` 必须是 `critical`、`file` 固定填 `CI/CD`、`line` 填 0（不得指向 diff 中的具体文件）；二是 post-processing 增加归一化步骤，凡 `comment` 同时命中 CI 关键词（`CI` / `GitHub Actions` / `check-run`）与失败关键词（`failure` / `失败` / `未通过` / `红灯` / `错误` / `报错`）的条目，一律改写为 `critical` / `CI/CD` / 0 —— 只纠正归因字段，模型给出的具体分析文字（例如 PR #77 那条「确认是否存在编译错误」的提示）原样保留；三是 CI 红灯而 `issues` 中没有任何 CI 条目时补一行，确保失败项不会在表格里彻底消失。原先写在 CI 降级分支里的那条补行（`file` 为空串，渲染出来是一对空的代码反引号）随之删除，改由同一次归一化统一产出。
 - 归一化可能把个别条目的严重程度从 `warning` 提升为 `critical`，因此随后追加一次 `critical > warning > info` 的稳定排序，以维持提示词里「issues 按严重程度从高到低排列」的约定。
 - 验证方式（不涉及本地构建）：把工作流内嵌的 python 片段按 `PYEOF` heredoc 原样抽出并 `ast.parse` 做语法门禁，再以真实输入执行，断言 CI 行渲染为 `| 严重 | \`CI/CD\` | 0 |`。覆盖四种输入——CI 行被降级为 warning（PR #103 首轮）、CI 行 file/line 指向 `CHANGELOG.md:1`（PR #103 次轮）、approve + CI 红灯且模型未写 CI 行（降级路径）、CI 全绿——四例全部通过；同时确认 AGPL 合规行、`CHANGELOG` 范围行、代码行等非 CI 条目不被误判改写。
+- 新增 `tools/check_pr_review_ci_row.py`，把上述验证固化为仓库内可重复执行的冒烟测试。归一化规则此前只存在于 `pr-auto-review.yml` 的 YAML 块标量里（`python3 - <<'PYEOF'` heredoc），整棵树没有任何地方能 import 或运行它，改动一次就可能静默失效、直到某次真实审查输出错误的归因而被发现。脚本从工作流中提取该 heredoc，先 `ast.parse` 做语法门禁——heredoc 被破坏时在本地立即失败，而不是等 CI 运行到该步骤才报错——再以冻结夹具执行，断言**整张表格逐行相等**。用例扩到 7 个：PR #103 两次审查的真实 issues 数组、approve + CI 红灯且模型未写 CI 行（须补行、把判定降级为 `request_changes` 并写下 `ci-downgraded` 标记）、CI 全绿时不得出现 CI 行、模型输出干扰（`issues` 里混入非字典条目、缺失 `severity`/`file`/`line`）、comment 提到 CI 但非失败时不得改写归因、多行 comment 先压成一行再判定。零网络、零密钥、零构建，`python3 tools/check_pr_review_ci_row.py` 一键执行，7/7 通过；未接入 CI 工作流——该测试的定位是本地冒烟，接入会连带触发多套构建矩阵，需要时再单独提出。
 
 ## 1.0.17
 
