@@ -334,6 +334,8 @@ jobs:
             7) CI 检查结果：审查信息末尾会附上该 PR 的 CI 检查结果，请结合 CI 结果综合判定——
                若 CI 存在失败项，务必在 summary 与 issues 中指出，并更倾向于 request_changes 而非 approve；
                若 CI 全部通过，可在 summary 中简要说明。
+               CI 检查失败属于严重问题：该条 issue 的 severity 必须为 "critical"，file 必须固定填 "CI/CD"
+               （不要指向 diff 中的具体文件，CI 失败不是某个源码文件的问题），line 必须填 0。
             必须只输出一个 JSON 对象（不要 Markdown 代码块，不要任何多余文字），格式：
             {"verdict": "approve" 或 "request_changes" 或 "reject", "summary": "总体评价（与 PR 作者相同的语言，2-4 句）", "issues": [{"severity": "critical" 或 "warning" 或 "info", "file": "受影响文件路径", "line": 行号(整数，未知填0), "comment": "问题描述（与 PR 作者相同的语言）"}]}
             判定规则：
@@ -448,12 +450,32 @@ jobs:
               # M5: 标记该 request_changes 是 CI 红灯被代码级降级所致，不计入
               # 警告计数（避免环境问题导致的失败误伤作者）。
               open('/tmp/ci-downgraded.txt', 'w', encoding='utf-8').write('1')
-              issues = list(issues) + [{'severity': 'critical', 'file': '', 'line': 0,
-                  'comment': 'CI 检查存在失败项（共 %d 项未通过），因此不批准合并，请先修复 CI 失败项。' % ci_failing}]
               if summary:
                   summary = summary + ' 此外，该 PR 的 CI 检查未通过，本次判定已改为“需要修改”，修复 CI 后再行合并。'
               else:
                   summary = '该 PR 的 CI 检查未通过，本次判定为“需要修改”，请先修复 CI 失败项。'
+
+          # CI 检查失败的行统一以固定格式呈现：严重 / `CI/CD` / 0。file 与 line
+          # 由下面的确定性归一化决定，不能交给模型自由填写——实测模型会把 CI
+          # 失败记到 diff 里恰好出现的文件上（如 `CHANGELOG.md` 第 12 行），并
+          # 有时降级为 warning。若 CI 红灯而 issues 里完全没有 CI 条目，则补一
+          # 行，确保失败项必然出现在表格中。
+          ci_kw_re = re.compile(r'\bCI\b|GitHub Actions|check-?runs?', re.I)
+          ci_bad_re = re.compile(r'fail|failure|失败|未通过|红灯|报错|错误', re.I)
+          issues = [it for it in issues if isinstance(it, dict)]
+          ci_issues = [it for it in issues
+                       if ci_kw_re.search(str(it.get('comment') or ''))
+                       and ci_bad_re.search(str(it.get('comment') or ''))]
+          for it in ci_issues:
+              it['severity'] = 'critical'
+              it['file'] = 'CI/CD'
+              it['line'] = 0
+          if ci_state == 'fail' and not ci_issues:
+              issues.append({'severity': 'critical', 'file': 'CI/CD', 'line': 0,
+                  'comment': 'CI 检查结果为 failure（共 %d 项未通过），因此不批准合并，请修复 CI 失败项后重新触发 CI 并通过。' % ci_failing})
+          # 归一化可能把 CI 行提升为 critical，保持"按严重程度从高到低"的排序约定。
+          issues.sort(key=lambda it: {'critical': 0, 'warning': 1, 'info': 2}.get(
+              str(it.get('severity') or 'info'), 3))
 
           verdict_cn = {'approve': '通过（可以合并）',
                         'request_changes': '需要修改',
