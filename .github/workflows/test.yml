@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+  # GITHUB_TOKEN 会抑制它自己触发的 push 事件（GitHub 官方规则，例外只有
+  # workflow_dispatch / repository_dispatch），因此由 pr-auto-review.yml 自动
+  # 合并进 main 的提交不会自动跑本工作流。该工作流在合并成功后用 dispatch
+  # 补触发一遍，这里保留入口。
+  workflow_dispatch:
 
 permissions:
   contents: read
