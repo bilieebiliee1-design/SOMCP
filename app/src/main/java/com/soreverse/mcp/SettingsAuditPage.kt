@@ -231,11 +231,12 @@ internal fun SettingsAuditPage(t: UiText, settings: SettingsStore) {
             GroupDivider()
             Text(
                 if (t.zh) {
-                    "上报服务器地址。开启后，未捕获崩溃与捕获型错误会连同设备型号、系统版本、CPU 架构、应用版本等基础信息发往该地址；不含个人文件、账号或输入。"
+                    "上报服务器地址。开启后，未捕获崩溃与捕获型错误会连同设备型号、系统版本、CPU 架构、应用版本、" +
+                        "匿名设备标识、分发渠道等基础信息发往该地址；不含个人文件、账号或输入。"
                 } else {
                     "Reporting server URL. Once enabled, uncaught crashes and captured errors are sent here " +
-                        "along with basic device details (model, OS version, CPU architecture, app version); " +
-                        "files, accounts, and input are not included."
+                        "along with basic device details (model, OS version, CPU architecture, app version, " +
+                        "anonymous device identifier, distribution channel); files, accounts, and input are not included."
                 },
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodySmall,
