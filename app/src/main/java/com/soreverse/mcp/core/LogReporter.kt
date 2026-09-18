@@ -17,9 +17,11 @@
 //
 package com.soreverse.mcp.core
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import com.soreverse.mcp.BuildConfig
 import com.soreverse.mcp.nativecore.SignatureVerifier
@@ -62,6 +64,9 @@ object LogReporter {
     private const val READ_TIMEOUT = 15_000
     private const val MAX_QUEUE_FILES = 50
     private const val MAX_LOG_CHARS = 2 * 1024 * 1024 // 与后端 LRP_MAX_LOG_BYTES 对齐
+
+    /** 兜底设备标识的存储键（仅在 [Settings.Secure.ANDROID_ID] 不可用时使用）。 */
+    private const val KEY_INSTALL_ID = "installId"
 
     /** [sendBlocking] 的返回码：连接 / IO 层失败，服务器根本没应答。 */
     private const val SEND_TRANSPORT_ERROR = -1
@@ -161,6 +166,10 @@ object LogReporter {
         json.put("app_version_name", versionName(ctx))
         json.put("app_version_code", versionCode(ctx).toString())
         json.put("package_name", ctx?.packageName ?: BuildConfig.APPLICATION_ID)
+        // 分发渠道：构建期常量（release=github / debug=dev，见 app/build.gradle.kts），
+        // 自建渠道包可用 -PappChannel / APP_CHANNEL 覆盖。
+        json.put("app_channel", BuildConfig.APP_CHANNEL.ifBlank { "unknown" })
+        json.put("device_id", deviceId(ctx))
         json.put("log_content", content.take(MAX_LOG_CHARS))
 
         // ---- 可选字段 ----
@@ -185,6 +194,31 @@ object LogReporter {
     private fun deviceName(): String {
         val manufacturer = Build.MANUFACTURER?.replaceFirstChar { it.uppercase() } ?: ""
         return "$manufacturer ${Build.MODEL}".trim().ifEmpty { "unknown" }
+    }
+
+    /**
+     * 设备标识：优先 [Settings.Secure.ANDROID_ID]——64 位十六进制，按「应用签名 + 用户」隔离，
+     * 不随卸载重装变化（恢复出厂设置或更换签名后变化），与主流崩溃上报 SDK 的取值一致。
+     * 少数机型 / 受管设备上该值可能为 null 或空串，此时退化为**首次运行生成并持久化**的随机 UUID：
+     * 保证字段非空，但该退化值随卸载重装变化，不具备 ANDROID_ID 的跨重装稳定性。
+     *
+     * 该标识单独存于 `log-report` 偏好文件，不经过 [SettingsStore]，因此不会出现在设置快照
+     * 与 MCP `app_config` 中。
+     */
+    @SuppressLint("HardwareIds", "ApplySharedPref")
+    private fun deviceId(ctx: Context?): String {
+        val androidId = runCatching {
+            ctx?.let { Settings.Secure.getString(it.contentResolver, Settings.Secure.ANDROID_ID) }
+        }.getOrNull()
+        if (!androidId.isNullOrBlank()) return androidId
+        val context = ctx ?: return "unknown"
+        val prefs = context.getSharedPreferences("log-report", Context.MODE_PRIVATE)
+        prefs.getString(KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }?.let { return it }
+        val generated = UUID.randomUUID().toString()
+        // 用 commit() 而非 apply()：崩溃路径上进程随时可能结束，必须同步落盘，
+        // 否则下次启动会重新生成一个标识，把同一台设备统计成两台。
+        prefs.edit().putString(KEY_INSTALL_ID, generated).commit()
+        return generated
     }
 
     private fun architecture(): String {
