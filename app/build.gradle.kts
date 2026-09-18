@@ -24,6 +24,16 @@ val releaseKeystoreProperties = Properties().apply {
     if (file.isFile) file.inputStream().use(::load)
 }
 
+// Distribution channel, reported as the `app_channel` field by LogReporter.
+// Defaults to "github" for release builds and "dev" for debug builds; a
+// re-packaged channel build can override it with -PappChannel=<value> or the
+// APP_CHANNEL environment variable. Values are filtered to [A-Za-z0-9._-] so a
+// malformed override cannot break the generated string literal.
+val appChannelOverride = ((findProperty("appChannel") as String?) ?: System.getenv("APP_CHANNEL"))
+    ?.trim()
+    ?.filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
+    ?.takeIf { it.isNotEmpty() }
+
 android {
     namespace = "com.soreverse.mcp"
     compileSdk = 36
@@ -116,6 +126,7 @@ android {
     buildTypes {
         debug {
             isJniDebuggable = true
+            buildConfigField("String", "APP_CHANNEL", "\"${appChannelOverride ?: "dev"}\"")
         }
         release {
             isMinifyEnabled = true
@@ -123,6 +134,7 @@ android {
             isDebuggable = false
             isJniDebuggable = false
             signingConfig = signingConfigs.getByName("release")
+            buildConfigField("String", "APP_CHANNEL", "\"${appChannelOverride ?: "github"}\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

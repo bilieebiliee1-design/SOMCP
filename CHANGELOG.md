@@ -4,6 +4,9 @@
 
 ## 1.0.21
 
+- 修复崩溃 / 错误上报缺少 `app_channel` 与 `device_id` 两个字段（平台侧这两列始终为空）：`LogReporter.buildPayload()` 此前只组装 16 个字段，两个字段从未写入 payload。现在 `app_channel` 取自构建期常量 `BuildConfig.APP_CHANNEL`（release 构建为 `github`、debug 构建为 `dev`；重新打包的渠道包可用 `-PappChannel=<值>` 或 `APP_CHANNEL` 环境变量覆盖，取值经 `[A-Za-z0-9._-]` 过滤，避免非法字符破坏生成的 Kotlin 字符串字面量），`device_id` 取 `Settings.Secure.ANDROID_ID`（64 位十六进制，按「应用签名 + 用户」隔离，不随卸载重装变化，恢复出厂或更换签名后变化）。`ANDROID_ID` 在少数机型 / 受管设备上可能为 null 或空串，此时退化为**首次运行生成并持久化**的随机 UUID 以保证字段非空——持久化用 `commit()` 而非 `apply()`，因为崩溃路径上进程随时可能结束，异步落盘会导致下次启动换一个新标识、把同一台设备统计成两台；该 UUID 存于独立的 `log-report` 偏好文件，不经 `SettingsStore`，因此不会出现在设置快照与 MCP `app_config` 中。两处 Android lint 提示（`HardwareIds` / `ApplySharedPref`）以 `@SuppressLint` 显式豁免并注明理由，避免在既有 lint 基线上新增噪声。
+- 同步隐私告知与设置页采集范围文案：`privacy_consent_body`（中英两套 strings）与审计页「崩溃与错误自动上报」分组说明各新增「匿名设备标识 / anonymous device identifier」与「分发渠道 / distribution channel」两项。设备标识属新增采集项，若不同步告知，新增字段就会落在 #100 建立的知情同意范围之外。
+- 验证方式（不涉及本地构建）：改动文件过 ktlint 1.8.0（`--relative`）零违规；行宽按 **字符数**（而非字节数）复核，最长新增行 122 字符，未超 `.editorconfig` 的 160 上限——注意 `awk length()` 按字节计数，对中文会虚高约 3 倍，判定行宽必须用字符计数。
 - APK MCP 桥接的「持续自动探测」改为默认开启：存储默认值由 `false` 翻转为 `true`，并新增一次性 `apkAutoProbeDefaultMigrated_v2` 迁移把升级用户的旧默认（曾被 1.0.x 强制关闭）重新翻回开启；用户仍可在设置页手动关闭。
 - 修复 CI：`build.yml` 的「Set up Go」步骤里残留了一行 `uses: actions/setup-go@v5`，与升级后的 `@v7` 在同一 mapping 内构成 YAML 重复键，整个工作流文件因此无法解析，`main` 上每次 push 触发的运行都在启动阶段就失败（0 个 job，运行名退化成文件路径 `.github/workflows/build.yml`）。删掉残留行后 push 触发恢复正常。
 - 修复 Unidbg 动态模拟完全不可用的问题（issue #91）：APK 里打包的 `libunicorn.so` 从来都不是 unidbg unicorn2 后端需要的那个库。unicorn2 后端（`com.github.unidbg.arm.backend.Unicorn2Backend` 调用 `com.github.unidbg.arm.backend.unicorn.Unicorn`）是 JNI 绑定，要求 `libunicorn.so` 导出 `Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*`；而此前编出来的是「原始 unicorn 引擎」，只导出 `uc_*` C API。雪上加霜的是 `-DUNICORN_ARCH=arm,aarch64` 用了逗号——CMake 架构列表的分隔符是分号，于是 `arm-softmmu` / `aarch64-softmmu` 两个后端根本没参与编译，产物只有约 54 KB，是一个「只有 API 外壳、没有模拟核心」的空库。
