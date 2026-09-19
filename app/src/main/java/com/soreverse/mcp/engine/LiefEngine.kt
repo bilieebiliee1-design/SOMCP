@@ -2,6 +2,7 @@ package com.soreverse.mcp.engine
 
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
+import java.util.AbstractList
 import kotlin.math.min
 import org.json.JSONArray
 import org.json.JSONObject
@@ -159,7 +160,7 @@ class LiefEngine {
         val relocations = parseRelocations(obj.optJSONArray("relocations") ?: JSONArray())
         val programHeaders = parseProgramHeaders(obj.optJSONArray("programHeaders") ?: JSONArray())
         val dynamicEntries = parseDynamicEntries(obj.optJSONArray("dynamicEntries") ?: JSONArray())
-        val strings = extractStrings(data, sections)
+        val strings = lazyStrings { extractStrings(data, sections) }
 
         return ElfFile(
             data, bits, littleEndian, type, machine, entry,
@@ -256,19 +257,24 @@ class LiefEngine {
 
     private fun extractStrings(data: ByteArray, sections: List<SectionInfo>): List<StringInfo> {
         val out = mutableListOf<StringInfo>()
-        val seen = HashSet<String>()
+        // Dedup keyed on (offset, byte length, encoding) packed into a single
+        // long. The old "UTF-8:<offset>:<text>" key string kept a second full
+        // copy of every extracted string alive for the whole scan.
+        val seen = HashSet<Long>()
         for (sec in sections) {
             if (!shouldScanStrings(sec)) continue
-            val bytes = sectionBytes(data, sec)
-            extractUtf8Strings(bytes, sec.offset, sec.name, out, seen)
-            if (shouldScanUtf16Strings(
-                    sec
-                )
-            ) {
-                extractUtf16LeStrings(bytes, sec.offset, sec.name, out, seen)
+            if (sec.offset < 0 || sec.size <= 0) continue
+            // Scan the input in place: copying each section out first duplicated
+            // up to a whole .rodata (tens of MiB) for every parse.
+            val from = sec.offset.toInt().coerceIn(0, data.size)
+            val to = min(data.size, from + sec.size.toInt()).coerceAtLeast(from)
+            if (from >= to) continue
+            extractUtf8Strings(data, from, to, sec.offset, sec.name, out, seen)
+            if (shouldScanUtf16Strings(sec)) {
+                extractUtf16LeStrings(data, from, to, sec.offset, sec.name, out, seen)
             }
         }
-        extractUtf8Strings(data, 0, "<file>", out, seen)
+        extractUtf8Strings(data, 0, data.size, 0L, "<file>", out, seen)
         return out
     }
 
@@ -297,19 +303,43 @@ class LiefEngine {
             section.name.contains("utf16", ignoreCase = true)
     }
 
-    private fun sectionBytes(data: ByteArray, section: SectionInfo): ByteArray {
-        if (section.offset < 0 || section.size <= 0) return ByteArray(0)
-        val start = section.offset.toInt().coerceIn(0, data.size)
-        val end = min(data.size, start + section.size.toInt())
-        return data.copyOfRange(start, end)
+    /**
+     * Packs (file offset, byte length, encoding) of one string candidate into a
+     * single long, so the dedup set holds 8 bytes per hit instead of a string
+     * that re-states the extracted text. Offsets and lengths are `ByteArray`
+     * indices, so both fit in 31 bits each, plus one bit for the encoding.
+     */
+    private fun dedupKey(offset: Long, length: Int, utf16: Boolean): Long = (offset shl 32) or ((length.toLong() shl 1) or if (utf16) 1L else 0L)
+
+    /**
+     * Hands out [provider]'s result on first element access instead of eagerly.
+     *
+     * String extraction walks every string-bearing section *and* the whole file,
+     * so it dominates both the CPU time and the transient heap of one [parse] —
+     * yet several callers never read [ElfFile.strings] at all: the probe parse
+     * that only checks whether a section table survived hardening, the
+     * scan-time metadata fallback (architecture / bits only), and the pre/post
+     * parses that just diff or verify symbols. Deferring removes that cost from
+     * every such parse while keeping [ElfFile.strings] identical for the callers
+     * that do read it.
+     *
+     * The provider reads the parsed bytes, so a caller that intentionally
+     * mutates an already-parsed array in place must read `strings` before doing
+     * so (the open/analyze summary does, which forces the list at open time).
+     */
+    private fun lazyStrings(provider: () -> List<StringInfo>): List<StringInfo> = object : AbstractList<StringInfo>() {
+        private val values: List<StringInfo> by lazy(LazyThreadSafetyMode.SYNCHRONIZED, provider)
+        override val size: Int get() = values.size
+        override fun get(index: Int): StringInfo = values[index]
     }
 
-    private fun extractUtf8Strings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
+    private fun extractUtf8Strings(data: ByteArray, from: Int, to: Int, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<Long>) {
+        val length = to - from
         var start = 0
         var i = 0
-        while (i <= bytes.size) {
-            if (i == bytes.size || bytes[i] == 0.toByte()) {
-                emitUtf8StringCandidate(bytes, start, i, base, section, out, seen)
+        while (i <= length) {
+            if (i == length || data[from + i] == 0.toByte()) {
+                emitUtf8StringCandidate(data, from + start, from + i, base + start, section, out, seen)
                 start = i + 1
             }
             i++
@@ -317,21 +347,21 @@ class LiefEngine {
     }
 
     private fun emitUtf8StringCandidate(
-        bytes: ByteArray,
-        start: Int,
-        end: Int,
-        base: Long,
+        data: ByteArray,
+        segStart: Int,
+        segEnd: Int,
+        offset: Long,
         section: String,
         out: MutableList<StringInfo>,
-        seen: MutableSet<String>
+        seen: MutableSet<Long>
     ) {
-        if (end - start < 4) return
-        val raw = bytes.copyOfRange(start, end)
+        val length = segEnd - segStart
+        if (length < 4) return
         val text = runCatching {
             Charsets.UTF_8.newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(raw))
+                .decode(ByteBuffer.wrap(data, segStart, length))
                 .toString()
         }.getOrNull() ?: return
         val clean = text.takeWhile {
@@ -359,65 +389,65 @@ class LiefEngine {
             useful && mostlyText -> 0.8
             else -> 0.5
         }
-        if (useful && mostlyText && confidence >= 0.5 && seen.add("UTF-8:${base + start}:$clean")) {
+        if (useful && mostlyText && confidence >= 0.5 && seen.add(dedupKey(offset, length, utf16 = false))) {
             out +=
-                StringInfo(base + start, clean.take(1024), raw.size, section, "UTF-8", confidence)
+                StringInfo(offset, clean.take(1024), length, section, "UTF-8", confidence)
         }
     }
 
-    private fun extractUtf16LeStrings(bytes: ByteArray, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<String>) {
+    private fun extractUtf16LeStrings(data: ByteArray, from: Int, to: Int, base: Long, section: String, out: MutableList<StringInfo>, seen: MutableSet<Long>) {
+        val length = to - from
         var start = -1
         var i = 0
-        while (i + 1 < bytes.size) {
-            val zeroTerminated = bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte()
+        while (i + 1 < length) {
+            val zeroTerminated = data[from + i] == 0.toByte() && data[from + i + 1] == 0.toByte()
             if (zeroTerminated) {
                 if (start >=
                     0
                 ) {
-                    emitUtf16LeStringCandidate(bytes, start, i, base, section, out, seen)
+                    emitUtf16LeStringCandidate(data, from + start, from + i, base + start, section, out, seen)
                 }
                 start = -1
                 i += 2
                 continue
             }
-            if (start < 0 && looksLikeUtf16LeCodeUnit(bytes, i)) start = i
+            if (start < 0 && looksLikeUtf16LeCodeUnit(data, from + i)) start = i
             i += 2
         }
     }
 
-    private fun looksLikeUtf16LeCodeUnit(bytes: ByteArray, i: Int): Boolean {
-        if (i + 1 >= bytes.size) return false
-        val code = (bytes[i].toInt() and 0xff) or ((bytes[i + 1].toInt() and 0xff) shl 8)
+    private fun looksLikeUtf16LeCodeUnit(data: ByteArray, i: Int): Boolean {
+        if (i + 1 >= data.size) return false
+        val code = (data[i].toInt() and 0xff) or ((data[i + 1].toInt() and 0xff) shl 8)
         if (code == 0) return false
         val c = code.toChar()
         return c == '\t' || c == '\n' || c == '\r' || !c.isISOControl()
     }
 
     private fun emitUtf16LeStringCandidate(
-        bytes: ByteArray,
-        start: Int,
-        end: Int,
-        base: Long,
+        data: ByteArray,
+        segStart: Int,
+        segEnd: Int,
+        offset: Long,
         section: String,
         out: MutableList<StringInfo>,
-        seen: MutableSet<String>
+        seen: MutableSet<Long>
     ) {
         if (section in setOf(".dynstr", ".strtab", ".shstrtab")) return
-        val len = end - start
-        if (len < 8 || len % 2 != 0) return
-        if (len > 512) return
-        val raw = bytes.copyOfRange(start, end)
-        val units = raw.size / 2
+        val length = segEnd - segStart
+        if (length < 8 || length % 2 != 0) return
+        if (length > 512) return
+        val units = length / 2
         if (units < 3 || units > 128) return
-        val asciiHighZero = (0 until units).count { raw[it * 2 + 1] == 0.toByte() }
+        val asciiHighZero = (0 until units).count { data[segStart + it * 2 + 1] == 0.toByte() }
         val asciiLowPrintable = (0 until units).count {
-            val low = raw[it * 2].toInt() and 0xff
+            val low = data[segStart + it * 2].toInt() and 0xff
             low == 0x09 || low == 0x0a || low == 0x0d || low in 0x20..0x7e
         }
         val likelyAsciiUtf16 = asciiHighZero >= units * 7 / 8 && asciiLowPrintable >= units * 7 / 8
         val likelyMisalignedAscii = asciiHighZero == 0 && asciiLowPrintable >= units * 3 / 4
         if (likelyMisalignedAscii) return
-        val text = runCatching { raw.toString(Charsets.UTF_16LE) }.getOrNull() ?: return
+        val text = runCatching { String(data, segStart, length, Charsets.UTF_16LE) }.getOrNull() ?: return
         val clean = text.takeWhile {
             it == '\t' || it == '\n' || it == '\r' || !it.isISOControl()
         }.trimEnd()
@@ -454,10 +484,10 @@ class LiefEngine {
             hasStrongTextSignal &&
             !entropyPenalty &&
             confidence >= 0.7 &&
-            seen.add("UTF-16LE:${base + start}:$clean")
+            seen.add(dedupKey(offset, length, utf16 = true))
         ) {
             out +=
-                StringInfo(base + start, clean.take(256), raw.size, section, "UTF-16LE", confidence)
+                StringInfo(offset, clean.take(256), length, section, "UTF-16LE", confidence)
         }
     }
 
