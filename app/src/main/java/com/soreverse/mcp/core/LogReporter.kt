@@ -24,7 +24,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import com.soreverse.mcp.BuildConfig
-import com.soreverse.mcp.nativecore.SignatureVerifier
+import com.soreverse.mcp.nativecore.NativeProbe
 import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -43,7 +43,7 @@ import org.json.JSONObject
  * 设计要点：
  * - 零第三方依赖，仅使用 [HttpURLConnection]，不引入新 Gradle 依赖。
  * - 上报开关与服务器地址来自 [SettingsStore]；API Key 由构建期注入 **native 层**
- *   （`key_generated.h`，经 [SignatureVerifier.getReportingApiKey] 读取），仅作为 `X-API-Key`
+ *   （`key_generated.h`，经 [NativeProbe.reportingKey] 读取），仅作为 `X-API-Key`
  *   请求头发送，不进源码 / 设置 / 快照 / 日志。未开启或地址为空时完全静默（fail-closed），
  *   不会把任何数据发出去，也不会产生任何副作用。
  * - 崩溃时**先落盘到本地队列**（保证崩溃日志不丢），再尽力即时上报；进程可能在发送前就被系统杀掉，
@@ -267,7 +267,7 @@ object LogReporter {
                 // 仅作为请求头发送；绝不打印到日志，也不进入上报 body / SettingsStore / 快照。
                 // 只在 release 构建附带：debug 包可能被自由分发，不把生产密钥带进调试包。
                 if (!BuildConfig.DEBUG) {
-                    val apiKey = SignatureVerifier.getReportingApiKey()
+                    val apiKey = NativeProbe.reportingKey()
                     if (apiKey.isNotBlank()) setRequestProperty("X-API-Key", apiKey)
                 }
             }
