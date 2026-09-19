@@ -597,10 +597,17 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
     // Own-artifact protection: never open/view/modify SOMCP's own APK or the
     // native libraries it bundles, whether reached directly (local_file /
     // build_output) or through an APK-embedded reference.
-    val selfCandidate = if (src.source == "apk") src.apkPath else src.path
-    if (!selfCandidate.isNullOrBlank() && SelfArtifactGuard.isSelfArtifact(context, selfCandidate)) {
+    //
+    // Both forms a work-directory source carries are checked: the full
+    // reference (`apk:<rel>!lib/<abi>/x.so`) — which names one of SOMCP's own
+    // bundled libraries and is matched by entry name — and the APK path. The
+    // paths are work-directory-relative, so the judges that need a readable file
+    // cannot fire here; the bytes that are actually read are checked below.
+    val selfHit = listOfNotNull(src.path, src.apkPath)
+        .firstOrNull { it.isNotBlank() && SelfArtifactGuard.isSelfArtifact(context, it) }
+    if (selfHit != null) {
         throw IllegalArgumentException(
-            "SELF_ANALYSIS_FORBIDDEN: SOMCP cannot open, view, or modify its own artifact $selfCandidate"
+            "SELF_ANALYSIS_FORBIDDEN: SOMCP cannot open, view, or modify its own artifact $selfHit"
         )
     }
     val key = sourceKey(src).ifBlank { keyFallback }
@@ -621,6 +628,16 @@ internal fun EngineRuntime.openWorkspace(path: String, temporary: Boolean): Work
             workDir
                 ?: error("No work directory selected")
             ).readSource(src)
+    }
+    // Identity by content: a copy of one of SOMCP's own libraries that was
+    // extracted from the APK and renamed carries neither a path nor an entry
+    // name this process can classify, and the work directory is read through
+    // SAF documents rather than the filesystem. The bytes that are about to be
+    // analyzed are therefore checked as well.
+    if (containsPackageIdentifier(original)) {
+        throw IllegalArgumentException(
+            "SELF_ANALYSIS_FORBIDDEN: SOMCP cannot open, view, or modify its own artifact ${src.path}"
+        )
     }
     require(
         original.size >= 4 &&

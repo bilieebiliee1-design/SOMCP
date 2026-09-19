@@ -24,6 +24,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /** Context-free coverage of [SelfArtifactGuard] path detection and arg scanning. */
@@ -32,6 +33,11 @@ class SelfArtifactGuardTest {
     private val runningApk = "/data/app/~~somcp==/com.soreverse.mcp-1/base.apk"
     private val nativeLib = "/data/app/~~somcp==/com.soreverse.mcp-1/lib/arm64"
     private val ownLibs = setOf("libsomcp_core.so", "liblief_elf.so")
+
+    @Before
+    fun resetQuarantine() {
+        SelfArtifactGuard.clearQuarantine()
+    }
 
     @Test
     fun detectsRunningApkPathExactly() {
@@ -120,6 +126,27 @@ class SelfArtifactGuardTest {
     }
 
     @Test
+    fun scanFlagsOwnLibInsideWorkDirectoryReference() {
+        // The shape the work-directory scanner produces for an APK-embedded SO:
+        // a relative APK path behind the `apk:` prefix. The entry name is what
+        // identifies it — the relative APK path alone names no readable file.
+        val ref = "apk:SOMCP_1.0.21.apk!lib/arm64-v8a/liblief_elf.so"
+        val args = JSONObject().put("path", ref)
+        assertEquals(
+            ref,
+            SelfArtifactGuard.findSelfArgAgainst(listOf(runningApk), nativeLib, args, ownLibNames = ownLibs)
+        )
+        assertNull(
+            SelfArtifactGuard.findSelfArgAgainst(
+                listOf(runningApk),
+                nativeLib,
+                JSONObject().put("apkPath", "SOMCP_1.0.21.apk"),
+                ownLibNames = ownLibs
+            )
+        )
+    }
+
+    @Test
     fun scanAllowsThirdPartyLibEntryReference() {
         val outside = "target.apk!lib/arm64-v8a/libexample.so"
         val args = JSONObject().put("filePath", outside)
@@ -194,4 +221,83 @@ class SelfArtifactGuardTest {
             )
         )
     }
+
+    @Test
+    fun flagsBridgedResultThatOpenedOwnPackage() {
+        // Shape of a bridged mt_apk_open answer: the identity of the archive is
+        // only visible in the result, never in the arguments.
+        val verdict = SelfArtifactGuard.ownArtifactFromBridgedResult(
+            bridgedResult(
+                JSONObject()
+                    .put("workspaceId", "rqyyw6q")
+                    .put("apkFileName", "SOMCP_1.0.21.apk")
+                    .put("packageName", BuildConfig.APPLICATION_ID)
+                    .put("signature", JSONObject().put("sha256", "00"))
+            )
+        )
+        assertEquals(BuildConfig.APPLICATION_ID, verdict?.value)
+        assertTrue(verdict!!.identifiers.contains("rqyyw6q"))
+    }
+
+    @Test
+    fun flagsBridgedResultWhoseTextIsNotJson() {
+        // The bridge parks an unparsable remote body under a plain string field,
+        // so a text that is not JSON but still names the package must be caught.
+        val result = JSONObject().put(
+            "content",
+            JSONArray().put(
+                JSONObject()
+                    .put("type", "text")
+                    .put("text", "open failed for ${BuildConfig.APPLICATION_ID}")
+            )
+        )
+        assertEquals(
+            BuildConfig.APPLICATION_ID,
+            SelfArtifactGuard.ownArtifactFromBridgedResult(result)?.value
+        )
+    }
+
+    @Test
+    fun allowsBridgedResultForThirdPartyPackage() {
+        val verdict = SelfArtifactGuard.ownArtifactFromBridgedResult(
+            bridgedResult(
+                JSONObject()
+                    .put("workspaceId", "other1")
+                    .put("packageName", "com.example.other")
+            )
+        )
+        assertNull(verdict)
+        assertNull(SelfArtifactGuard.ownArtifactFromBridgedResult(null))
+    }
+
+    @Test
+    fun quarantinedWorkspaceIsRefusedOnFollowUpCalls() {
+        SelfArtifactGuard.quarantine(listOf("rqyyw6q"))
+        val followUp = JSONObject()
+            .put("workspaceId", "rqyyw6q")
+            .put("locator", "dex_class:Lho3;")
+            .put("limit", 200)
+        assertEquals(
+            "rqyyw6q",
+            SelfArtifactGuard.findSelfArgAgainst(listOf(runningApk), nativeLib, followUp)
+        )
+        // A call that embeds the same handle in an archive reference is refused too.
+        val embedded = "apk:rqyyw6q!lib/arm64-v8a/libexample.so"
+        assertEquals(
+            embedded,
+            SelfArtifactGuard.findSelfArgAgainst(
+                listOf(runningApk),
+                nativeLib,
+                JSONObject().put("filePath", embedded)
+            )
+        )
+        SelfArtifactGuard.clearQuarantine()
+        assertNull(SelfArtifactGuard.findSelfArgAgainst(listOf(runningApk), nativeLib, followUp))
+    }
+
+    /** Wraps [inner] the way the bridge forwards a remote tool result. */
+    private fun bridgedResult(inner: JSONObject): JSONObject = JSONObject().put(
+        "content",
+        JSONArray().put(JSONObject().put("type", "text").put("text", inner.toString()))
+    )
 }
