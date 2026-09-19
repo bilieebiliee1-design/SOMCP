@@ -5,6 +5,14 @@
 ## 1.0.22
 修改版本为1.0.22，版本号为23
 
+- Release 工作流新增 Dex2C 加固步骤（`Harden release APKs with Dex2C (dcc)`，`release.yml`）：每个 release APK 在「Verify and ensure v2/v3 APK signing」之前过一遍 dcc，`tools/dex2c/filter.txt` 选中的方法被翻译成 C、编译进 `lib/<abi>/libnc.so`，dex 中对应方法改为 `native`，原逻辑不再出现在发布包里。工具链全部钉死：dcc 用固定提交 `17de4fd`（master 会移动）、apktool 固定 2.12.1（保留 dcc 编写时所依赖的 2.x CLI，且本仓库的 dex 是 038，用不上 3.x 的 smali）、NDK 复用工作流里已安装的 29.0.14206865。
+- `APP_ABI` 与 `APP_PLATFORM` 从 APK 自身推导，而不是沿用 dcc 的模板：dcc 要求 APK 中**每一个** `lib/<abi>/` 目录都存在 libnc.so（`copy_compiled_libs` 缺一个就抛 `ABI x is not supported`），而它 2019 年的 `Application.mk` 只编 android-19 + arm64-v8a/armeabi-v7a，android-19 在 NDK 29 上已不受支持。四个 ABI 分包各自只编自己那一个 ABI，universal 包编四个。
+- 加固后必须重签，否则会发出 testkey 包：apktool 重建 APK 时 gradle 的签名已失效，而 dcc 固定用它自带的 testkey 签名。步骤内以 `zipalign -f -p 4` + `apksigner sign`（v1–v4）用 release 密钥重签，并覆盖回 `app/build/outputs/apk/release/`，因此下游的签名校验、重命名、SHA256SUMS 与上传拿到的都是加固后的产物；testkey 包既无法覆盖安装，也会撞上应用自身的签名 pin。
+- 加固失败一律让 release 失败，不接受「静默发出未加固包」：过滤规则一条都没命中时 dcc 不产出 APK（它只打印 `no compiled methods` 直接返回），此时以及 `compiled_methods.txt` 中找不到目标类时，步骤以退出码 1 终止。
+- 本次加固范围只有 `com.soreverse.mcp.core.BackupCrypto` 一个类。选它是因为 `proguard-rules.pro` 已完整保留该类的原名与成员名，过滤规则可稳定命中 R8 之后的发布 dex、无需依赖 `mapping.txt`；且它是自包含的加密逻辑（Argon2id 参数、AES-256-GCM 数据格式），转换后这些信息不再留在字节码里。
+- 配套改动：`BackupCrypto` 新增 `<clinit>` 中的 `runCatching { System.loadLibrary("nc") }`。转换后的方法在调用前必须先加载 libnc.so，而 `<clinit>` 被过滤规则排除、自身不会被转换；未加固的构建（debug、本地 release）没有这个库，加载失败被吞掉，Java 实现照常生效。
+- 验证方式（不涉及本地构建）：以 1.0.21 的 arm64-v8a release APK 为探针，确认包里只有 `classes.dex`（7.2 MB、dex 版本 038）、`Lcom/soreverse/mcp/core/BackupCrypto;` 及其成员名在 R8 之后仍是原名；再用钉死的 dcc 提交与本仓库的过滤文件对该真实 dex 跑前端（`--no-build`，不编译任何原生代码），`compiled_methods.txt` 命中 10/10 个方法（构造器与 `<clinit>` 按预期排除），C 源逐个生成。dcc 的依赖在 Python 3.13 下可正常安装、import 与运行，因此 CI 直接使用镜像自带的 `python3`。
+
 ## 1.0.21
 
 - 修复崩溃 / 错误上报缺少 `app_channel` 与 `device_id` 两个字段（平台侧这两列始终为空）：`LogReporter.buildPayload()` 此前只组装 16 个字段，两个字段从未写入 payload。现在 `app_channel` 取自构建期常量 `BuildConfig.APP_CHANNEL`（release 构建为 `github`、debug 构建为 `dev`；重新打包的渠道包可用 `-PappChannel=<值>` 或 `APP_CHANNEL` 环境变量覆盖，取值经 `[A-Za-z0-9._-]` 过滤，避免非法字符破坏生成的 Kotlin 字符串字面量），`device_id` 取 `Settings.Secure.ANDROID_ID`（64 位十六进制，按「应用签名 + 用户」隔离，不随卸载重装变化，恢复出厂或更换签名后变化）。`ANDROID_ID` 在少数机型 / 受管设备上可能为 null 或空串，此时退化为**首次运行生成并持久化**的随机 UUID 以保证字段非空——持久化用 `commit()` 而非 `apply()`，因为崩溃路径上进程随时可能结束，异步落盘会导致下次启动换一个新标识、把同一台设备统计成两台；该 UUID 存于独立的 `log-report` 偏好文件，不经 `SettingsStore`，因此不会出现在设置快照与 MCP `app_config` 中。两处 Android lint 提示（`HardwareIds` / `ApplySharedPref`）以 `@SuppressLint` 显式豁免并注明理由，避免在既有 lint 基线上新增噪声。

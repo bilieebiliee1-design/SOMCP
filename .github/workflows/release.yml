@@ -207,6 +207,148 @@ jobs:
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
 
+      - name: Harden release APKs with Dex2C (dcc)
+        timeout-minutes: 90
+        env:
+          # Absolute on purpose: the script below cd's into the cloned dcc tree.
+          STORE_FILE: ${{ github.workspace }}/release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Dex2C hardening (dcc, https://github.com/amimo/dcc): the methods
+          # selected by tools/dex2c/filter.txt are translated to C, compiled
+          # into lib/<abi>/libnc.so and turned into `native` declarations in the
+          # dex, so their logic is no longer present in the shipped bytecode.
+          #
+          # Everything is pinned on purpose: dcc is a single-author research
+          # project whose master branch moves, and its vendored androguard comes
+          # from the 2019 ecosystem. The filter lives in-repo, and the step fails
+          # loudly rather than shipping an APK that only claims to be hardened.
+          DCC_COMMIT="17de4fd3202bd0e46735974211a43cda39fca5f3"  # dcc master @ 2024-02-07
+          APKTOOL_VERSION="2.12.1"  # 2.x keeps the CLI dcc was written against
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          NDK_DIR="$ANDROID_HOME/ndk/29.0.14206865"
+          WORK="$RUNNER_TEMP/dex2c"
+          FILTER="$GITHUB_WORKSPACE/tools/dex2c/filter.txt"
+
+          # dcc builds libnc.so with ndk-build. Fail with an actionable message
+          # here rather than deep inside dcc if that layout ever changes.
+          test -x "$NDK_DIR/ndk-build" || {
+            echo "::error::ndk-build not found at $NDK_DIR/ndk-build; dcc needs it to build libnc.so"
+            exit 1
+          }
+          test -f "$FILTER" || {
+            echo "::error::Dex2C filter $FILTER is missing"
+            exit 1
+          }
+
+          git clone --quiet https://github.com/amimo/dcc.git "$WORK/dcc"
+          git -C "$WORK/dcc" checkout --quiet "$DCC_COMMIT"
+          python3 -m venv "$WORK/venv"
+          "$WORK/venv/bin/pip" install --quiet --disable-pip-version-check \
+            -r "$WORK/dcc/requirements.txt"
+          curl -fsSL --retry 3 -o "$WORK/dcc/tools/apktool.jar" \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+          # dcc resolves dcc.cfg, filter.txt and project/ relative to its own
+          # directory, so it is driven from there with absolute paths.
+          printf '{"apktool": "%s", "ndk_dir": "%s"}\n' \
+            "$WORK/dcc/tools/apktool.jar" "$NDK_DIR" > "$WORK/dcc/dcc.cfg"
+
+          # Small zip helpers: the runner's python is already required by dcc, so
+          # the ABI list and the libnc.so presence check need no extra tooling.
+          cat > "$WORK/abilist.py" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              abis = {n.split('/')[1] for n in z.namelist()
+                      if n.startswith('lib/') and n.count('/') >= 2}
+          print(' '.join(sorted(abis)))
+          PY
+          cat > "$WORK/zipcheck.py" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              names = set(z.namelist())
+          missing = [n for n in sys.argv[2:] if n not in names]
+          for n in missing:
+              print('missing entry: %s' % n)
+          sys.exit(1 if missing else 0)
+          PY
+
+          cd "$WORK/dcc"
+          for apk in "$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*.apk; do
+            base="$(basename "$apk")"
+
+            # dcc requires libnc.so for EVERY lib/<abi>/ directory present in the
+            # APK (copy_compiled_libs raises "ABI <abi> is not supported!"
+            # otherwise), while its 2019-era Application.mk builds android-19 with
+            # ONLY arm64-v8a/armeabi-v7a - a platform NDK 29 no longer accepts.
+            # Derive both from the APK itself: the ABI splits carry a single ABI,
+            # the universal APK all four. APP_PLATFORM moves to the app's minSdk.
+            abis="$("$WORK/venv/bin/python" "$WORK/abilist.py" "$apk")"
+            if [ -z "$abis" ]; then
+              echo "::error::$base has no lib/<abi>/ entries, so dcc cannot know which ABIs to build"
+              exit 1
+            fi
+            sed -i -e "s|^APP_ABI.*|APP_ABI := $abis|" \
+                   -e "s|^APP_PLATFORM.*|APP_PLATFORM := android-26|" \
+                   "$WORK/dcc/project/jni/Application.mk"
+
+            mkdir -p "$WORK/out"
+            out="$WORK/out/$base"
+            # --source-dir keeps the generated C sources for the log/evidence and
+            # is what dcc builds libnc.so from; it also makes dcc skip its
+            # project-source.zip archiving.
+            src="$WORK/src/$base"
+            "$WORK/venv/bin/python" dcc.py "$apk" -o "$out" \
+              --filter "$FILTER" --source-dir "$src"
+
+            # dcc writes no output APK when the filter matched nothing (the
+            # class was renamed or removed by R8), and a partial conversion is
+            # equally unacceptable: both fail the release instead of publishing
+            # an APK that is presented as hardened but is not.
+            test -f "$out" || {
+              echo "::error::dcc produced no hardened APK for $base: tools/dex2c/filter.txt matched no method"
+              exit 1
+            }
+            converted="$src/jni/nc/compiled_methods.txt"
+            grep -q '^Lcom/soreverse/mcp/core/BackupCrypto;' "$converted" || {
+              echo "::error::$base: BackupCrypto methods missing from the converted set ($converted)"
+              exit 1
+            }
+            echo "[dex2c] $base: $(wc -l < "$converted" | tr -d ' ') method(s) converted"
+            sed 's/^/    /' "$converted"
+
+            for abi in $abis; do
+              "$WORK/venv/bin/python" "$WORK/zipcheck.py" "$out" "lib/$abi/libnc.so" || {
+                echo "::error::$base is missing lib/$abi/libnc.so after Dex2C"
+                exit 1
+              }
+            done
+
+            # apktool rebuilt the APK (so gradle's signature is gone) and dcc
+            # signed the rebuild with its bundled TEST key. Re-align and re-sign
+            # with the release key: a test-key asset could not upgrade an
+            # installed SOMCP and would also trip the app's own signer pin.
+            # Sign to a scratch path first so a failure cannot destroy the
+            # gradle-built APK.
+            "$BUILD_TOOLS/zipalign" -f -p 4 "$out" "$WORK/aligned-$base"
+            "$BUILD_TOOLS/apksigner" sign \
+              --ks "$STORE_FILE" \
+              --ks-pass "pass:$STORE_PASSWORD" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --key-pass "pass:$KEY_PASSWORD" \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              --v4-signing-enabled true \
+              --out "$WORK/signed-$base" \
+              "$WORK/aligned-$base"
+            mv -f "$WORK/signed-$base" "$apk"
+            echo "[dex2c] $base hardened, re-aligned and re-signed with the release key"
+          done
+          echo "Dex2C hardening applied to every release APK."
+
       - name: Verify and ensure v2/v3 APK signing
         env:
           STORE_FILE: release/so-reverse-mcp-release.jks
