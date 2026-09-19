@@ -19,7 +19,7 @@ package com.soreverse.mcp.core
 
 import android.content.Context
 import com.soreverse.mcp.BuildConfig
-import com.soreverse.mcp.nativecore.SignatureVerifier
+import com.soreverse.mcp.nativecore.NativeProbe
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONArray
@@ -98,12 +98,12 @@ object SelfArtifactGuard {
      * certificate matches SOMCP's pinned release signer, no matter where the
      * copy lives or is renamed to.
      */
-    fun isSelfSignedApkCopy(context: Context, path: String): Boolean {
+    fun isOwnApkCopy(context: Context, path: String): Boolean {
         val lower = path.lowercase()
         if (!lower.endsWith(".apk") && !lower.endsWith(".zip")) return false
         val f = runCatching { File(path) }.getOrNull() ?: return false
         if (!f.isFile) return false
-        return signatureCache.getOrPut(path) { SignatureVerifier.isSelfSignedApkV234(path) }
+        return identityCache.getOrPut(path) { NativeProbe.isOwnApkV234(path) }
     }
 
     /**
@@ -131,7 +131,7 @@ object SelfArtifactGuard {
      */
     fun isSelfArtifact(context: Context, path: String): Boolean = isSelfApkPath(context, path) ||
         isSelfBundledSo(context, path) ||
-        isSelfSignedApkCopy(context, path) ||
+        isOwnApkCopy(context, path) ||
         isSelfLibEntry(context, path) ||
         isSelfFileByContent(path)
 
@@ -206,7 +206,7 @@ object SelfArtifactGuard {
         runningApkPaths(context),
         nativeLibraryDir(context),
         args,
-        signatureCheck = { path -> isSelfSignedApkCopy(context, path) },
+        identityCheck = { path -> isOwnApkCopy(context, path) },
         ownLibNames = ownLibraryNames(context),
         contentCheck = ::isSelfFileByContent
     )
@@ -220,12 +220,12 @@ object SelfArtifactGuard {
         runningApks: List<String>,
         nativeLib: String?,
         args: JSONObject,
-        signatureCheck: ((String) -> Boolean)? = null,
+        identityCheck: ((String) -> Boolean)? = null,
         ownLibNames: Set<String> = emptySet(),
         contentCheck: ((String) -> Boolean)? = null
     ): String? {
         val holder = PathHolder()
-        scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, args, holder)
+        scanValue(runningApks, nativeLib, identityCheck, ownLibNames, contentCheck, args, holder)
         return holder.path
     }
 
@@ -236,7 +236,7 @@ object SelfArtifactGuard {
     private fun scanValue(
         runningApks: List<String>,
         nativeLib: String?,
-        signatureCheck: ((String) -> Boolean)?,
+        identityCheck: ((String) -> Boolean)?,
         ownLibNames: Set<String>,
         contentCheck: ((String) -> Boolean)?,
         value: Any?,
@@ -248,19 +248,19 @@ object SelfArtifactGuard {
                 val keys = value.keys()
                 while (keys.hasNext() && holder.path == null) {
                     val k = keys.next()
-                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, value.opt(k), holder)
+                    scanValue(runningApks, nativeLib, identityCheck, ownLibNames, contentCheck, value.opt(k), holder)
                 }
             }
 
             is JSONArray -> {
                 for (i in 0 until value.length()) {
                     if (holder.path != null) break
-                    scanValue(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, value.opt(i), holder)
+                    scanValue(runningApks, nativeLib, identityCheck, ownLibNames, contentCheck, value.opt(i), holder)
                 }
             }
 
             is String -> {
-                val found = selfReference(runningApks, nativeLib, signatureCheck, ownLibNames, contentCheck, value)
+                val found = selfReference(runningApks, nativeLib, identityCheck, ownLibNames, contentCheck, value)
                 if (found != null) holder.path = found
             }
 
@@ -271,7 +271,7 @@ object SelfArtifactGuard {
     private fun selfReference(
         runningApks: List<String>,
         nativeLib: String?,
-        signatureCheck: ((String) -> Boolean)?,
+        identityCheck: ((String) -> Boolean)?,
         ownLibNames: Set<String>,
         contentCheck: ((String) -> Boolean)?,
         value: String
@@ -287,7 +287,7 @@ object SelfArtifactGuard {
         if (contentCheck != null && contentCheck(value)) return value
         // Signature-based copy detection is only enabled when a live native
         // verifier is available; in JVM unit tests it is omitted entirely.
-        if (signatureCheck != null && signatureCheck(value)) return value
+        if (identityCheck != null && identityCheck(value)) return value
         return null
     }
 
@@ -310,7 +310,7 @@ object SelfArtifactGuard {
         badValue = path
     )
 
-    private val signatureCache = ConcurrentHashMap<String, Boolean>()
+    private val identityCache = ConcurrentHashMap<String, Boolean>()
 
     private val libEntryPattern = Regex("(?:^|[^A-Za-z0-9])lib/[^/]+/[^/]+\\.so$", RegexOption.IGNORE_CASE)
 

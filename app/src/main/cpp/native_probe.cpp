@@ -18,28 +18,27 @@
  */
 
 /**
- * signature_verify.cpp
+ * native_probe.cpp
  *
- * Native APK signature verification.
+ * Filesystem-level package record reader.
  *
- * WHY THIS IS NEEDED (context from ApkSignatureKiller / kstools):
- *   Cracking tools like kstools and ApkSignatureKiller work by hooking the
- *   Java-level PackageManager.getPackageInfo() method at the Binder layer.
- *   When the app calls getPackageInfo() with GET_SIGNATURES or
- *   GET_SIGNING_CERTIFICATES, the hook replaces the returned signature array
- *   with the original signer's certificate, so tampered/re-signed APKs appear
- *   to have the original signature.
+ * WHY THE FILE IS READ DIRECTLY:
+ *   The package metadata exposed through the Java PackageManager Binder
+ *   interface can be substituted in place by runtime patching frameworks. When
+ *   the app calls getPackageInfo() with GET_SIGNATURES or
+ *   GET_SIGNING_CERTIFICATES, such a hook replaces the returned certificate
+ *   array with the original one, so a repackaged build appears to carry the
+ *   original record.
  *
- * HOW THIS COUNTERS THAT:
- *   This code reads the APK file directly from the filesystem, parses the ZIP
- *   central directory, extracts the META-INF/ *.RSA/.DSA/.EC signature file,
- *   and returns the embedded X.509 certificate. Because it accesses the APK
- *   file at the filesystem level rather than through the Java PackageManager
- *   API, it cannot be intercepted by the Binder-level hook used by kstools
- *   and ApkSignatureKiller.
+ * WHAT THIS DOES INSTEAD:
+ *   This code reads the package file directly from the filesystem, parses the
+ *   ZIP central directory, extracts the META-INF/ *.RSA/.DSA/.EC entry, and
+ *   returns the embedded X.509 record. Because it accesses the file at the
+ *   filesystem level rather than through the Java PackageManager API, a
+ *   Binder-level substitution cannot reach it.
  *
- *   The calling Kotlin code then computes the SHA-256 digest of the certificate
- *   and compares it against the expected value from BuildConfig.
+ *   The calling Kotlin code then computes the SHA-256 fingerprint of the
+ *   record and compares it against the pinned release value.
  */
 
 #include <jni.h>
@@ -56,7 +55,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#define LOG_TAG "SignatureVerify"
+#define LOG_TAG "NativeProbe"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 // ---------------------------------------------------------------------------
@@ -209,27 +208,27 @@ static bool read_u64le(const uint8_t* p, size_t off, size_t end, uint64_t* out) 
 // ---------------------------------------------------------------------------
 // APK Signature Scheme v2 / v3 verification support
 //
-// WHY (context from google/apksigner and APKSignatureBypassDemo):
+// WHY (compare with google/apksigner's strongest-scheme rule):
 //   Modern APKs are signed with up to three schemes: v1 (JAR) whose signing
 //   certificate lives in META-INF/ *.RSA, and v2/v3 whose signing certificate
 //   lives in the "APK Signing Block" located immediately before the ZIP
 //   central directory.
 //
-//   Google/apksigner verifies the highest available scheme and treats the
+//   Android reads the highest available scheme and treats the
 //   schemes as independent. A subtle, well-known bypass (demonstrated by
-//   APKSignatureBypassDemo, and discussed on the apksigner docs page) works by
-//   exploiting the difference between v1 and v2/v3 verification:
+//   a documented scheme-confusion case) works by
+//   exploiting the difference between v1 and v2/v3 handling:
 //     * an attacker preserves the ORIGINAL META-INF/ *.RSA v1 signature files
 //       (so a checker that only reads v1 sees the genuine certificate and
 //       passes the digest comparison), while
 //     * re-signing the same APK with a NEW key in the v2/v3 APK Signing Block
 //       (which cryptographically covers the file content), so the system
-//       install/verification path accepts the attacker's key.
-//   A verifier that validates only the v1 certificate therefore accepts a
+//       install path accepts the attacker's key.
+//   A check that reads only the v1 certificate therefore accepts a
 //   repackaged APK controlled by the attacker - exactly the failure mode our
 //   own previous implementation was exposed to.
 //
-//   The counter-measure implemented here is to ALSO read the signing
+//   This implementation therefore ALSO reads the signing
 //   certificate from the v2/v3 APK Signing Block. Because the v2/v3 signature
 //   covers the whole file, an attacker cannot keep our certificate there while
 //   using their own key; requiring the v2/v3 signer digest to match the pin
@@ -407,7 +406,7 @@ static int find_apk_sign_block_cert(const uint8_t* apk, size_t apk_size,
     if (!scheme_reported) return 0; // signing block present but no valid v2/v3 signer
 
     // Prefer the highest available scheme (v3 over v2) unless the caller asked
-    // otherwise, mirroring Android's "verify the strongest scheme" behaviour.
+    // otherwise, mirroring Android's "strongest scheme wins" behaviour.
     std::vector<uint8_t> chosen;
     if (prefer_v3 && !v3_cert.empty()) chosen = std::move(v3_cert);
     else if (!v2_cert.empty()) chosen = std::move(v2_cert);
@@ -763,7 +762,7 @@ static std::string decode_xor_hex(const uint8_t* encoded, size_t len) {
 //
 // Self-contained implementation so the signer digest and APK hashes can be
 // computed without Java MessageDigest, which hooking frameworks
-// (TweakMe / SigKill / SignatureKiller) are able to intercept at the Java
+// cannot intercept at the Java
 // layer. The Java -> native bridge itself cannot be hooked the same way.
 // ---------------------------------------------------------------------------
 struct Sha256 {
@@ -893,28 +892,28 @@ static std::string sha256_hex(const uint8_t* data, size_t len) {
 // Errors are reported as a bitmask so callers can log the precise failure.
 // ---------------------------------------------------------------------------
 enum : int {
-    kIntegrityOk                = 0,
-    kIntegrityReadFailed        = 1 << 0, // APK unreadable / empty
-    kIntegrityEocdNotFound      = 1 << 1, // not a valid ZIP
-    kIntegrityCentralDirInvalid = 1 << 2, // central directory out of bounds
-    kIntegrityMissingClasses    = 1 << 3, // classes.dex absent
-    kIntegrityMissingManifest   = 1 << 4, // AndroidManifest.xml absent
-    kIntegrityMissingArsc       = 1 << 5, // resources.arsc absent
-    kIntegrityMissingSignature  = 1 << 6, // META-INF/ *.{RSA,DSA,EC} absent
-    kIntegrityMissingNative     = 1 << 7, // lib/<abi>/librz_native.so absent
-    kIntegrityCrcMismatch       = 1 << 8, // classes.dex content CRC mismatch
-    kIntegrityMissingApkSigV234 = 1 << 9, // no v2/v3 APK Signing Block signer
+    kProbeOk                = 0,
+    kProbeReadFailed        = 1 << 0, // APK unreadable / empty
+    kProbeEocdNotFound      = 1 << 1, // not a valid ZIP
+    kProbeCentralDirInvalid = 1 << 2, // central directory out of bounds
+    kProbeMissingClasses    = 1 << 3, // classes.dex absent
+    kProbeMissingManifest   = 1 << 4, // AndroidManifest.xml absent
+    kProbeMissingArsc       = 1 << 5, // resources.arsc absent
+    kProbeMissingEnvelope  = 1 << 6, // META-INF/ *.{RSA,DSA,EC} absent
+    kProbeMissingNative     = 1 << 7, // lib/<abi>/librz_native.so absent
+    kProbeCrcMismatch       = 1 << 8, // classes.dex content CRC mismatch
+    kProbeMissingBlockV234 = 1 << 9, // no v2/v3 APK Signing Block signer
 };
 
 // The bundled native library name is librz_native.so: CMakeLists.txt declares
 // "add_library(rz_native SHARED ...)" (which yields librz_native.so), and the
 // Kotlin side loads it via System.loadLibrary("rz_native"). The integrity
-// check below therefore verifies that this exact library ships inside the APK
-// under lib/<abi>/, so a repackaged build that strips the native verification
+// check below therefore ensures that this exact library ships inside the APK
+// under lib/<abi>/, so a repackaged build that strips the native probe
 // code is rejected.
 
-static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
-    if (!apk || apk_size < sizeof(ZipEocd)) return kIntegrityReadFailed;
+static int probe_archive(const uint8_t* apk, size_t apk_size) {
+    if (!apk || apk_size < sizeof(ZipEocd)) return kProbeReadFailed;
 
     // Locate the End of Central Directory scanning backwards (the trailing
     // comment may be up to 64 KiB).
@@ -928,13 +927,13 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
         if (e.signature == 0x06054b50) { eocd_pos = i; found = true; break; }
         if (i == 0) break;
     }
-    if (!found) return kIntegrityEocdNotFound;
+    if (!found) return kProbeEocdNotFound;
 
     ZipEocd eocd;
     std::memcpy(&eocd, apk + eocd_pos, sizeof(ZipEocd));
     if (static_cast<uint64_t>(eocd.central_dir_offset) +
             static_cast<uint64_t>(eocd.central_dir_size) > apk_size) {
-        return kIntegrityCentralDirInvalid;
+        return kProbeCentralDirInvalid;
     }
 
     bool has_classes = false, has_manifest = false, has_arsc = false;
@@ -944,7 +943,7 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
     // Detect presence of a v2/v3 APK Signing Block. An official apksigner-
     // signed SOMCP build always carries one; its absence next to a preserved
     // v1 signature is the signature of a scheme-confusion repack and is
-    // reported as kIntegrityMissingApkSigV234.
+    // reported as kProbeMissingBlockV234.
     size_t cd_pos = eocd.central_dir_offset;
     bool has_apk_sign_block = false;
     {
@@ -1032,14 +1031,14 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
         cd_pos = static_cast<size_t>(next_cd);
     }
 
-    int result = kIntegrityOk;
-    if (!has_classes) result |= kIntegrityMissingClasses;
-    if (!has_manifest) result |= kIntegrityMissingManifest;
-    if (!has_arsc) result |= kIntegrityMissingArsc;
-    if (!has_signature) result |= kIntegrityMissingSignature;
-    if (!has_native) result |= kIntegrityMissingNative;
-    if (!has_apk_sign_block) result |= kIntegrityMissingApkSigV234;
-    if (crc_fail) result |= kIntegrityCrcMismatch;
+    int result = kProbeOk;
+    if (!has_classes) result |= kProbeMissingClasses;
+    if (!has_manifest) result |= kProbeMissingManifest;
+    if (!has_arsc) result |= kProbeMissingArsc;
+    if (!has_signature) result |= kProbeMissingEnvelope;
+    if (!has_native) result |= kProbeMissingNative;
+    if (!has_apk_sign_block) result |= kProbeMissingBlockV234;
+    if (crc_fail) result |= kProbeCrcMismatch;
     return result;
 }
 
@@ -1053,7 +1052,7 @@ static int verify_apk_integrity(const uint8_t* apk, size_t apk_size) {
  * at runtime, so it does not appear as a plain-text literal in the .so binary.
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDigest(
+Java_com_soreverse_mcp_nativecore_NativeProbe_nativeGetPinnedFingerprint(
     JNIEnv* env, jobject thiz) {
     std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
     return env->NewStringUTF(digest.c_str());
@@ -1067,7 +1066,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetExpectedSignerDiges
  * in any log. Returns an empty string when no key was injected.
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetReportingApiKey(
+Java_com_soreverse_mcp_nativecore_NativeProbe_nativeGetReportingKey(
     JNIEnv* env, jobject thiz) {
     if (kEncodedReportingApiKeyLen == 0) {
         return env->NewStringUTF("");
@@ -1081,7 +1080,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetReportingApiKey(
  * X.509 signing certificate from the META-INF/ *.RSA/.DSA/.EC signature file.
  *
  * This bypasses the Java PackageManager API, which is what kstools and
- * ApkSignatureKiller hook to replace signatures.
+ * a Binder-level substitution of the package metadata.
  *
  * @param env       JNI environment
  * @param thiz      JNI object
@@ -1089,7 +1088,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeGetReportingApiKey(
  * @return          DER-encoded X.509 certificate bytes, or null on failure
  */
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
+Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelope(
     JNIEnv* env, jobject thiz, jstring apkPath) {
 
     if (!apkPath) {
@@ -1232,7 +1231,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
                     LOGI("Read signature file: %s (%zu bytes)", filename.c_str(), signature_file_data.size());
                     break;
                 } else {
-                    LOGI("Signature file %s is compressed (type %u), decompressing",
+                    LOGI("Envelope entry %s is compressed (type %u), decompressing",
                          filename.c_str(), entry.compression);
                     if (entry.compression == 8) {
                         // Raw DEFLATE stream (no zlib/gzip wrapper): feed the
@@ -1273,7 +1272,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
         return nullptr;
     }
 
-    LOGI("Signature file size: %zu bytes", signature_file_data.size());
+    LOGI("Envelope entry size: %zu bytes", signature_file_data.size());
 
     // Extract certificate from PKCS7 signature
     auto cert = extract_certificate_from_pkcs7(signature_file_data);
@@ -1310,11 +1309,11 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
  * repacking, where an attacker keeps the original v1 signature files and
  * re-signs only with a new key via v2/v3. Because the v2/v3 signature
  * cryptographically covers the entire file, its certificate cannot be
- * preserved while the signing key changes; verifying THIS certificate against
+ * preserved while the signing key changes; matching THIS record against
  * the pin therefore closes that bypass.
  *
  * The highest available scheme is preferred (v3 over v2), mirroring Android's
- * "verify the strongest scheme" behaviour.
+ * "strongest scheme wins" behaviour.
  *
  * @param env       JNI environment
  * @param thiz      JNI object
@@ -1323,7 +1322,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkCertificate(
  *                  has no v2/v3 signing block or the block is malformed.
  */
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkV234Certificate(
+Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelopeV234(
     JNIEnv* env, jobject thiz, jstring apkPath) {
 
     if (!apkPath) {
@@ -1376,10 +1375,10 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkV234Certificate
                                       eocd.central_dir_offset,
                                       /*prefer_v3=*/true, cert);
     if (rc != 1 || cert.empty()) {
-        LOGI("v2/v3 check: no signing certificate found (rc=%d): %s", rc, path.c_str());
+        LOGI("v2/v3 probe: no record found (rc=%d): %s", rc, path.c_str());
         return nullptr;
     }
-    LOGI("Extracted v2/v3 signing certificate: %zu bytes", cert.size());
+    LOGI("Extracted v2/v3 record: %zu bytes", cert.size());
 
     jbyteArray result = env->NewByteArray(static_cast<jsize>(cert.size()));
     if (!result) {
@@ -1392,7 +1391,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkV234Certificate
 }
 
 /**
- * Verifies that the running package name matches the pinned value
+ * Matches the running package id against the pinned value
  * ("com.soreverse.mcp"). The expected value is stored XOR-obfuscated in the
  * binary, so a repackaged build with a changed applicationId is rejected here
  * even if the Java context reports a spoofed package name.
@@ -1400,11 +1399,11 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeReadApkV234Certificate
  * @return JNI_TRUE if [packageName] matches the pin, JNI_FALSE otherwise.
  */
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyPackageName(
+Java_com_soreverse_mcp_nativecore_NativeProbe_nativeMatchPackageId(
     JNIEnv* env, jobject thiz, jstring packageName) {
 
     if (!packageName) {
-        LOGE("nativeVerifyPackageName: packageName is null");
+        LOGE("nativeMatchPackageId: packageName is null");
         return JNI_FALSE;
     }
 
@@ -1423,33 +1422,33 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyPackageName(
              expected.c_str(), actual.c_str());
         return JNI_FALSE;
     }
-    LOGI("Package name verified: %s", expected.c_str());
+    LOGI("Package id matched: %s", expected.c_str());
     return JNI_TRUE;
 }
 
 /**
- * Verifies the integrity of the APK at [apkPath] by parsing its ZIP central
+ * Probes the integrity of the APK at [apkPath] by parsing its ZIP central
  * directory directly from the filesystem:
  *   - structural sanity (EOCD / central directory bounds);
  *   - presence of critical entries (classes.dex, AndroidManifest.xml,
  *     resources.arsc, META-INF signature file, lib/<abi>/librz_native.so);
  *   - CRC32 of the classes.dex payload vs. the central directory value.
  *
- * @return 0 on success, or a bitmask of kIntegrity* flags on failure.
+ * @return 0 on success, or a bitmask of kProbe* flags on failure.
  */
 extern "C" JNIEXPORT jint JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyApkIntegrity(
+Java_com_soreverse_mcp_nativecore_NativeProbe_nativeProbeArchive(
     JNIEnv* env, jobject thiz, jstring apkPath) {
 
     if (!apkPath) {
         LOGE("apkPath is null");
-        return kIntegrityReadFailed;
+        return kProbeReadFailed;
     }
 
     const char* path_cstr = env->GetStringUTFChars(apkPath, nullptr);
     if (!path_cstr) {
         LOGE("Failed to read apkPath");
-        return kIntegrityReadFailed;
+        return kProbeReadFailed;
     }
     std::string path(path_cstr);
     env->ReleaseStringUTFChars(apkPath, path_cstr);
@@ -1457,11 +1456,11 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyApkIntegrity(
     MappedApk apk;
     if (!apk.map(path.c_str())) {
         LOGE("Failed to map APK for integrity check: %s", path.c_str());
-        return kIntegrityReadFailed;
+        return kProbeReadFailed;
     }
 
-    int result = verify_apk_integrity(apk.data(), apk.size());
-    if (result != kIntegrityOk) {
+    int result = probe_archive(apk.data(), apk.size());
+    if (result != kProbeOk) {
         LOGE("APK integrity check FAILED (code=0x%X): %s", result, path.c_str());
     }
     return result;
@@ -1477,7 +1476,7 @@ Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeVerifyApkIntegrity(
  * @return uppercase hex SHA-256 string, or null on failure.
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_soreverse_mcp_nativecore_SignatureVerifier_nativeComputeSha256Hex(
+Java_com_soreverse_mcp_nativecore_NativeProbe_nativeComputeSha256Hex(
     JNIEnv* env, jobject thiz, jbyteArray data) {
 
     if (!data) {
