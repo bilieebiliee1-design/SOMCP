@@ -118,11 +118,11 @@ class MainActivity : ComponentActivity() {
 private fun IntegrityGate(content: @Composable () -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
-    var result by remember { mutableStateOf(IntegrityGuard.verify(context.applicationContext)) }
+    var result by remember { mutableStateOf(IntegrityGuard.inspect(context.applicationContext)) }
     LaunchedEffect(result.trusted) {
         while (result.trusted) {
             delay(3_000)
-            result = IntegrityGuard.verify(context.applicationContext)
+            result = IntegrityGuard.inspect(context.applicationContext)
         }
     }
     if (result.trusted) {

@@ -90,7 +90,7 @@ class SelfArtifactGuardTest {
     }
 
     @Test
-    fun scanFlagsRenamedSelfSignedApkCopyWhenSignatureMatches() {
+    fun scanFlagsRenamedOwnApkCopyWhenIdentityMatches() {
         val copy = "/sdcard/Download/copy-of-somcp.apk"
         val args = JSONObject().put("apkPath", copy)
         val checker: (String) -> Boolean = { it == copy }
@@ -101,7 +101,7 @@ class SelfArtifactGuardTest {
     }
 
     @Test
-    fun scanIgnoresRenamedApkWhenSignatureDoesNotMatch() {
+    fun scanIgnoresRenamedApkWhenIdentityDoesNotMatch() {
         val args = JSONObject().put("apkPath", "/sdcard/Download/not-somcp.apk")
         val checker: (String) -> Boolean = { false }
         assertNull(
