@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Copyright (C) 2026 bilieebiliee1-design
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+# Dex2C (dcc) method-selection table, consumed by the "Harden release APKs with
+# Dex2C (dcc)" step in .github/workflows/release.yml.
+#
+# Syntax (amimo/dcc, MethodFilter._load_filter_configure):
+#   <regex>    compile matching methods
+#   !<regex>   never compile matching methods
+#   =<name>    exact full match
+#   #...       comment
+# A regex is re.search()ed against the concatenation
+# "<class descriptor><method name><method descriptor>", e.g.
+#   Lcom/soreverse/mcp/core/BackupCrypto;encrypt(Ljava/lang/String;Ljava/lang/String;)[B
+
+# Constructors and static initializers are never valid targets: the
+# System.loadLibrary("nc") call that makes the converted methods resolvable
+# lives in BackupCrypto's <clinit>, so converting it would be self-defeating.
+!<clinit|init>
+
+# Scope: BackupCrypto only (first Dex2C target; see CHANGELOG 1.0.22).
+#
+# R8 minifies the release dex, so a class can only be listed here while it still
+# carries its original name after shrinking. proguard-rules.pro already keeps
+# BackupCrypto (and its member names) intact for other reasons, therefore this
+# line matches the shipped dex without going through mapping.txt. Verified
+# against the 1.0.21 release dex: all 10 methods are matched and generate C.
+# Every class added here needs the same guarantee - either an existing -keep
+# rule, or the R8-renamed name read back from build/outputs/mapping/release/.
+Lcom/soreverse/mcp/core/BackupCrypto;

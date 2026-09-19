@@ -47,6 +47,17 @@ import org.json.JSONObject
  * Plaintext backups (no password) are unchanged — raw JSON.
  */
 object BackupCrypto {
+    init {
+        // Dex2C (see the "Harden release APKs with Dex2C (dcc)" step in
+        // .github/workflows/release.yml): in the hardened release APKs the
+        // methods below are `native` and their bodies live in libnc.so, so the
+        // library has to be loaded before the first call. Builds that were not
+        // hardened (debug, local release) simply have no such library - the
+        // load fails and the Java implementations stay in effect, which is why
+        // the failure is swallowed instead of being fatal.
+        runCatching { System.loadLibrary("nc") }
+    }
+
     // Binary format constants
     private const val MAGIC = "SOMCP_ENC"
     private const val BIN_VERSION: Byte = 1
