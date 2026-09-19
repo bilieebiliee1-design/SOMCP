@@ -4,6 +4,10 @@
 
 ## 1.0.22
 - 修改版本为1.0.22，版本号为23
+- 降低静态分析的字符串抽取开销（`LiefEngine`，两处，1 个文件 +84/−52）：字符串抽取此前按节把数据整段 `copyOfRange` 出来再扫，`.rodata` / `.data` 单节可达数十 MiB，每进行一次解析都要复制一遍；现改为在原数组上用 `[from, to)` 窗口就地扫描，越界节的地址基准与跳过条件与旧实现逐条对齐。
+- 字符串去重集合由 `"UTF-8:<偏移>:<文本>"` 字符串键改为把（偏移、字节长度、编码）打包进一个 `long`。旧键等于给每一条抽出的字符串再保留一份完整文本副本，且在整个扫描期间一直被引用——加固 SO 的整文件扫描下，这份副本与字符串列表本身同量级。新旧键语义等价：偏移与长度都是 `ByteArray` 下标（各 31 位），编码占 1 位，同址同长必然同文本。
+- 字符串抽取改为按需触发：`elf.strings` 现在在首次读取时才计算。此前每次 `lief.parse` 都会执行「所有含字符串的节 + 整个文件」的全量扫描，而多处调用方根本不读 `strings`——`prepareAnalysisInput` 中只用于判断节表是否存活的探测解析、工作目录扫描的元数据兜底解析（只取架构/位数）、以及只做符号比对或变更校验的补丁 / 构建前后解析。丢失节表的加固 SO 上，探测解析会把一次整文件扫描的结果直接丢弃，是这条路径上最大的一笔浪费。读取 `strings` 的调用方行为不变（列表内容、顺序、字段与改动前一致），且打开/概览响应仍会在打开时读取它，因此「先解析、再原地改写数据」的既有顺序不受影响。
+- 验证方式（不涉及本地构建）：改动文件过 ktlint 1.8.0 零违规（运行前已用探针确认该工具确实会报错，避免「静默通过」）；行宽按**字符数**复核，最长新增行 159 字符（上限 160）。窗口扫描与原 `copyOfRange` 的边界语义逐条核对：越界节（`offset < 0` / `offset > 文件大小`）产出为空、地址基准仍取未钳制的 `sec.offset`，与旧实现一致；`size` 超过 31 位时旧实现会抛异常并触发 `ElfParser` 回退，新实现按空范围跳过（保留 LIEF 的解析结果，不降级）。
 - Release 工作流新增 Dex2C 加固步骤（`Harden release APKs with Dex2C (dcc)`，`release.yml`）：每个 release APK 在「Verify and ensure v2/v3 APK signing」之前过一遍 dcc，`tools/dex2c/filter.txt` 选中的方法被翻译成 C、编译进 `lib/<abi>/libnc.so`，dex 中对应方法改为 `native`，原逻辑不再出现在发布包里。工具链全部钉死：dcc 用固定提交 `17de4fd`（master 会移动）、apktool 固定 2.12.1（保留 dcc 编写时所依赖的 2.x CLI，且本仓库的 dex 是 038，用不上 3.x 的 smali）、NDK 复用工作流里已安装的 29.0.14206865。
 - `APP_ABI` 与 `APP_PLATFORM` 从 APK 自身推导，而不是沿用 dcc 的模板：dcc 要求 APK 中**每一个** `lib/<abi>/` 目录都存在 libnc.so（`copy_compiled_libs` 缺一个就抛 `ABI x is not supported`），而它 2019 年的 `Application.mk` 只编 android-19 + arm64-v8a/armeabi-v7a，android-19 在 NDK 29 上已不受支持。四个 ABI 分包各自只编自己那一个 ABI，universal 包编四个。
 - 加固后必须重签，否则会发出 testkey 包：apktool 重建 APK 时 gradle 的签名已失效，而 dcc 固定用它自带的 testkey 签名。步骤内以 `zipalign -f -p 4` + `apksigner sign`（v1–v4）用 release 密钥重签，并覆盖回 `app/build/outputs/apk/release/`，因此下游的签名校验、重命名、SHA256SUMS 与上传拿到的都是加固后的产物；testkey 包既无法覆盖安装，也会撞上应用自身的签名 pin。
