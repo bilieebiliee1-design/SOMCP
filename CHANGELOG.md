@@ -2,6 +2,9 @@
 
 # 更新日志
 
+## 1.0.22
+修改版本为1.0.22，版本号为23
+
 ## 1.0.21
 
 - 修复崩溃 / 错误上报缺少 `app_channel` 与 `device_id` 两个字段（平台侧这两列始终为空）：`LogReporter.buildPayload()` 此前只组装 16 个字段，两个字段从未写入 payload。现在 `app_channel` 取自构建期常量 `BuildConfig.APP_CHANNEL`（release 构建为 `github`、debug 构建为 `dev`；重新打包的渠道包可用 `-PappChannel=<值>` 或 `APP_CHANNEL` 环境变量覆盖，取值经 `[A-Za-z0-9._-]` 过滤，避免非法字符破坏生成的 Kotlin 字符串字面量），`device_id` 取 `Settings.Secure.ANDROID_ID`（64 位十六进制，按「应用签名 + 用户」隔离，不随卸载重装变化，恢复出厂或更换签名后变化）。`ANDROID_ID` 在少数机型 / 受管设备上可能为 null 或空串，此时退化为**首次运行生成并持久化**的随机 UUID 以保证字段非空——持久化用 `commit()` 而非 `apply()`，因为崩溃路径上进程随时可能结束，异步落盘会导致下次启动换一个新标识、把同一台设备统计成两台；该 UUID 存于独立的 `log-report` 偏好文件，不经 `SettingsStore`，因此不会出现在设置快照与 MCP `app_config` 中。两处 Android lint 提示（`HardwareIds` / `ApplySharedPref`）以 `@SuppressLint` 显式豁免并注明理由，避免在既有 lint 基线上新增噪声。
