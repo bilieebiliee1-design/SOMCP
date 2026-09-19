@@ -2,10 +2,10 @@
 """
 generate_header.py
 Generates key_generated.h containing XOR-encoded arrays and the rotating
-multi-byte XOR key for use in signature_verify.cpp.
+multi-byte XOR key for use in native_probe.cpp.
 
 The encoded arrays contain:
-  - kEncodedExpectedSha256: SHA-256 of the official release signing certificate
+  - kEncodedExpectedSha256: SHA-256 of the official release build record
   - kEncodedMD5: MD5 hash for reference
   - kEncodedSHA1: SHA-1 hash for reference
   - kEncodedSHA512: SHA-512 hash for reference

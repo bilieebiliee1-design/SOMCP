@@ -27,7 +27,7 @@ import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.nativecore.NativeEngine
-import com.soreverse.mcp.nativecore.SignatureVerifier
+import com.soreverse.mcp.nativecore.NativeProbe
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -285,7 +285,7 @@ internal fun EngineRuntime.analyzeApk(path: String, entryLimit: Int = 500): JSON
         return@guarded err("APK_INVALID", "Input is not a ZIP/APK file", "path", path)
     }
     if (isSelfApkBytes(bytes) ||
-        (local.isFile && SignatureVerifier.isSelfSignedApk(local.absolutePath))
+        (local.isFile && NativeProbe.isOwnApk(local.absolutePath))
     ) {
         return@guarded selfForbidden("apk:$path")
     }

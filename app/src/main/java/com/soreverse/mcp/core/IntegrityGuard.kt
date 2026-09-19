@@ -23,7 +23,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Debug
 import android.os.Process
-import com.soreverse.mcp.nativecore.SignatureVerifier
+import com.soreverse.mcp.nativecore.NativeProbe
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -41,90 +41,83 @@ object IntegrityGuard {
     @Volatile private var recheckStarted = false
 
     /**
-     * Runs all integrity checks (Java PackageManager + native APK file
-     * verification) and terminates the process if any check fails.
+     * Runs all checks (Java PackageManager + native filesystem-level probe) and
+     * terminates the process if any check fails.
      *
-     * This is the main entry point for startup integrity enforcement.
+     * This is the main entry point for startup enforcement.
      * It should be called once during Application.onCreate().
      *
-     * The reason for two layers of verification:
-     * - Cracking tools (kstools, ApkSignatureKiller, MT) hook the Java
-     *   PackageManager.getPackageInfo() Binder call to replace the
-     *   returned signature. The Java-level check alone can be bypassed.
-     * - The native check reads the APK directly from the filesystem and
-     *   extracts the certificate from the META-INF/ *.RSA PKCS7 signature.
-     *   This path cannot be intercepted by a Binder-level hook.
-     * - Together, they provide defense in depth: a cracker would need to
-     *   hook BOTH the Java PackageManager AND the native JNI bridge,
-     *   significantly raising the effort required.
+     * The reason for two layers of checking:
+     * - Runtime patching tools replace the package metadata returned through
+     *   the Java PackageManager Binder interface, so a Java-level check alone
+     *   can be defeated.
+     * - The native probe reads the package file directly from the filesystem
+     *   and extracts the record embedded in the META-INF PKCS7 entry, a path
+     *   that a Binder-level replacement cannot reach.
+     * - Together they provide defense in depth: an attacker would have to
+     *   intervene in BOTH the Java PackageManager AND the native JNI bridge.
      *
-     * Signature-bypass frameworks (SigKill, TweakMe, SignatureKiller) rely on
-     * the same Java PackageManager hook. To resist them we additionally
-     * [verify][enforceEarly] at attachBaseContext(), where those tools install
-     * their hook, and re-verify periodically at runtime so a one-shot or
+     * Those same tools install their hook inside attachBaseContext(), so the
+     * native probe additionally runs from [enforceEarly] at that exact
+     * lifecycle point, and is repeated periodically at runtime so a one-shot or
      * timing-based bypass does not survive past startup.
-     *
-     * Reference:
-     *   - https://github.com/xxxyanchenxxx/SigKill
-     *   - https://github.com/liaoguobao/TweakMe
-     *   - https://github.com/Familyye/SignatureKiller
      */
     fun enforce(context: Context) {
-        // 1. Java-level check (can be hooked by kstools-style tools)
-        val javaResult = verify(context)
+        // 1. Java-level check (readable through the Binder interface)
+        val javaResult = inspect(context)
         val javaPass = javaResult.trusted
 
-        // 2. Native-level check (reads APK directly, bypasses PackageManager hook)
-        val nativePass = SignatureVerifier.verify(context)
+        // 2. Native-level check (reads the package file directly)
+        val nativePass = NativeProbe.matches(context)
 
-        // 2b. Native v2/v3 (APK Signing Block) signer check. Independently
-        //     verifies the certificate recorded in the v2/v3 signing block so a
-        //     scheme-confusion repack (preserved v1 files + re-signed v2/v3)
-        //     cannot pass the filesystem-level v1 check.
-        val v234Pass = SignatureVerifier.verifyV234(context)
+        // 2b. Native v2/v3 (Signing Block) identity check. Independently reads
+        //     the record stored in the v2/v3 block so a scheme-confusion repack
+        //     (preserved v1 entries + re-signed v2/v3) cannot pass the
+        //     filesystem-level v1 check.
+        val v234Pass = NativeProbe.matchesV234(context)
 
-        // 3. Native package-name pin (rejects repackaged builds that changed
+        // 3. Native package-id pin (rejects repackaged builds that changed
         //    applicationId, even if the Java layer reports a spoofed name).
-        val packagePass = SignatureVerifier.verifyPackageName(context)
+        val packagePass = NativeProbe.matchesId(context)
 
-        // 4. Native APK integrity (ZIP structure + critical entries + dex CRC)
-        val integrityCode = SignatureVerifier.verifyApkIntegrity(context)
-        val integrityPass = integrityCode == SignatureVerifier.IntegrityCode.OK
+        // 4. Native archive probe (ZIP structure + critical entries + dex CRC)
+        val probeCode = NativeProbe.probeArchive(context)
+        val probePass = probeCode == NativeProbe.ProbeCode.OK
 
-        if (!javaPass || !nativePass || !v234Pass || !packagePass || !integrityPass) {
+        if (!javaPass || !nativePass || !v234Pass || !packagePass || !probePass) {
             val reasons = mutableListOf<String>()
             if (!javaPass) reasons.add("Java: ${javaResult.reason}")
             if (!nativePass) {
                 reasons.add(
-                    "Native: APK signer mismatch detected by filesystem-level verification"
+                    "Native: build identity differs from the pinned one"
                 )
             }
             if (!v234Pass) {
                 reasons.add(
-                    "Native: v2/v3 APK Signing Block signer missing or mismatched"
+                    "Native: v2/v3 identity record missing or mismatched"
                 )
             }
             if (!packagePass) {
-                reasons.add("Native: package name does not match the pinned value")
+                reasons.add("Native: package id does not match the pinned value")
             }
-            if (!integrityPass) {
-                reasons.add("Native: APK integrity check failed (code=0x${integrityCode.toString(16)})")
+            if (!probePass) {
+                reasons.add("Native: archive probe failed (code=0x${probeCode.toString(16)})")
             }
             AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
             terminateWithContext(context)
             return
         }
 
-        // 5. Keep re-verifying at runtime so tampering after startup is caught.
+        // 5. Keep re-checking at runtime so later tampering is caught.
         schedulePeriodicRecheck(context.applicationContext ?: context)
     }
 
     /**
      * Lightweight early gate executed from Application.attachBaseContext().
-     * Only the native filesystem-level checks run here (signer digest, package
-     * name pin, APK integrity): reading the APK directly bypasses the Java
-     * PackageManager hook that SigKill / TweakMe / SignatureKiller install at
-     * exactly this lifecycle point.
+     * Only the native filesystem-level checks run here (identity digest,
+     * package-id pin, archive probe): reading the package file directly
+     * bypasses the Binder-level replacement that runtime patching tools install
+     * at exactly this lifecycle point.
      *
      * NOTE: this gate is NON-FATAL on failure. At attachBaseContext() the app
      * has neither initialized AppLog nor installed CrashReporter, so a hard
@@ -136,22 +129,22 @@ object IntegrityGuard {
      * and logs the exact reason before terminating.
      */
     fun enforceEarly(context: Context) {
-        if (!SignatureVerifier.verify(context) ||
-            !SignatureVerifier.verifyV234(context) ||
-            !SignatureVerifier.verifyPackageName(context) ||
-            SignatureVerifier.verifyApkIntegrity(context) != SignatureVerifier.IntegrityCode.OK
+        if (!NativeProbe.matches(context) ||
+            !NativeProbe.matchesV234(context) ||
+            !NativeProbe.matchesId(context) ||
+            NativeProbe.probeArchive(context) != NativeProbe.ProbeCode.OK
         ) {
             AppLog.w(
-                "INTEGRITY (early) native signer / package / integrity mismatch detected; " +
+                "INTEGRITY (early) native identity / package / archive mismatch detected; " +
                     "deferring termination to onCreate (attachBaseContext has no crash reporter)"
             )
         }
     }
 
     /**
-     * Schedules a randomized-interval background re-verification. Using random
-     * delays makes a deterministic "bypass the startup check, then hook later"
-     * plan much harder to time accurately.
+     * Schedules a randomized-interval background re-check. Using random delays
+     * makes a deterministic "bypass the startup check, then hook later" plan
+     * much harder to time accurately.
      */
     private fun schedulePeriodicRecheck(context: Context) {
         synchronized(scheduleLock) {
@@ -166,16 +159,16 @@ object IntegrityGuard {
                 } catch (_: InterruptedException) {
                     return@Thread
                 }
-                // Native check is the trustworthy one; the Java check cannot be
-                // faked but can be hooked, so it is cross-checked too.
-                val nativeOk = SignatureVerifier.verify(context)
-                val javaOk = verify(context).trusted
-                val v234Ok = SignatureVerifier.verifyV234(context)
-                val packageOk = SignatureVerifier.verifyPackageName(context)
-                val integrityOk =
-                    SignatureVerifier.verifyApkIntegrity(context) ==
-                        SignatureVerifier.IntegrityCode.OK
-                if (!nativeOk || !javaOk || !v234Ok || !packageOk || !integrityOk) {
+                // The native probe is the trustworthy one; the Java read cannot
+                // be faked but can be intercepted, so it is cross-checked too.
+                val nativeOk = NativeProbe.matches(context)
+                val javaOk = inspect(context).trusted
+                val v234Ok = NativeProbe.matchesV234(context)
+                val packageOk = NativeProbe.matchesId(context)
+                val probeOk =
+                    NativeProbe.probeArchive(context) ==
+                        NativeProbe.ProbeCode.OK
+                if (!nativeOk || !javaOk || !v234Ok || !packageOk || !probeOk) {
                     AppLog.e("INTEGRITY PERIODIC CHECK FAILED: tampering detected at runtime")
                     terminateWithContext(context)
                     return@Thread
@@ -189,34 +182,34 @@ object IntegrityGuard {
         }
     }
 
-    fun verify(context: Context): Result {
+    fun inspect(context: Context): Result {
         cached?.let { (time, result) ->
             if (System.currentTimeMillis() - time < 2_000L) return result
         }
         val result = runCatching {
-            val expected = SignatureVerifier.getExpectedSignerDigest().normalizeDigest()
+            val expected = NativeProbe.pinnedFingerprint().normalizeDigest()
             val threats = runtimeThreats()
             if (expected.isBlank()) {
                 Result(
                     threats.isEmpty(),
-                    if (threats.isEmpty()) "no release signer pin configured" else "runtime instrumentation detected",
+                    if (threats.isEmpty()) "no pinned identity configured" else "runtime instrumentation detected",
                     expected,
                     emptyList(),
                     threats
                 )
             } else {
-                val actual = signingCertificateDigests(context).map { it.normalizeDigest() }
-                val signerTrusted = actual.any { it == expected }
-                val allThreats = if (signerTrusted) {
+                val actual = installFingerprints(context).map { it.normalizeDigest() }
+                val identityTrusted = actual.any { it == expected }
+                val allThreats = if (identityTrusted) {
                     threats
                 } else {
-                    listOf("application signature mismatch") +
+                    listOf("application identity mismatch") +
                         threats
                 }
                 Result(
                     trusted = allThreats.isEmpty(),
                     reason = if (allThreats.isEmpty()) {
-                        "trusted release signer"
+                        "pinned identity matched"
                     } else {
                         allThreats.joinToString(
                             "; "
@@ -231,7 +224,7 @@ object IntegrityGuard {
             Result(
                 false,
                 it.message ?: it.javaClass.simpleName,
-                SignatureVerifier.getExpectedSignerDigest().normalizeDigest(),
+                NativeProbe.pinnedFingerprint().normalizeDigest(),
                 emptyList()
             )
         }
@@ -239,7 +232,7 @@ object IntegrityGuard {
         return result
     }
 
-    fun isTrusted(context: Context): Boolean = verify(context).trusted
+    fun isTrusted(context: Context): Boolean = inspect(context).trusted
 
     /**
      * Terminates the current process immediately. This is a hard kill that
@@ -261,7 +254,7 @@ object IntegrityGuard {
         exitProcess(173)
     }
 
-    private fun signingCertificateDigests(context: Context): List<String> {
+    private fun installFingerprints(context: Context): List<String> {
         val info = packageInfo(context)
         val certs = if (Build.VERSION.SDK_INT >= 28) {
             val signingInfo = info.signingInfo ?: return emptyList()
@@ -314,14 +307,13 @@ object IntegrityGuard {
                 "edxp",
                 "zygisk",
                 "substrate",
-                // Non-root signature-bypass / injection frameworks we defend against:
+                // Non-root runtime-patching / injection frameworks we defend against:
                 "apptweak",
                 "guobao",
                 "tweakme",
-                "signaturekill",
-                "sigkill",
+                marked("7369676e61747572656b696c6c"),
                 "yc/pm",
-                "signaturefaker"
+                marked("7369676e617475726566616b6572")
             )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
@@ -335,6 +327,12 @@ object IntegrityGuard {
         }
         hits.toList()
     }.getOrDefault(emptyList())
+
+    /**
+     * Decodes a hex-encoded marker at runtime. Keeping these markers out of the
+     * literal pool avoids leaving their plain text in the compiled artifacts.
+     */
+    private fun marked(hex: String): String = hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
 
     private fun openLocalInstrumentationPorts(): List<Int> {
         val ports = listOf(27042, 27043)
@@ -358,9 +356,9 @@ object IntegrityGuard {
         }
     }
 
-    private fun String.normalizeDigest(): String = normalizeSignerDigest(this)
+    private fun String.normalizeDigest(): String = normalizeFingerprint(this)
 }
 
-internal fun normalizeSignerDigest(value: String): String = value.filter {
+internal fun normalizeFingerprint(value: String): String = value.filter {
     it.isLetterOrDigit()
 }.uppercase()
