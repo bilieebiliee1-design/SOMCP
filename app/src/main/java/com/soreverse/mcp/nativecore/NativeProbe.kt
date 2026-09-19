@@ -61,6 +61,7 @@ object NativeProbe {
     private external fun nativeProbeArchive(apkPath: String): Int
     private external fun nativeComputeSha256Hex(data: ByteArray): String?
     private external fun nativeGetReportingKey(): String
+    private external fun nativeVerifyBlock(apkPath: String): Int
 
     /**
      * Returns the log-report-platform API key injected into the native library
@@ -345,4 +346,68 @@ object NativeProbe {
             ProbeCode.READ_FAILED
         }
     }
+
+    /**
+     * Error-code bitmask returned by [verifyBlock].
+     * Mirrors the kBlock* constants in cpp/native_probe.cpp.
+     */
+    object BlockCode {
+        const val OK = 0
+        const val READ_FAILED = 1 shl 0
+        const val NOT_FOUND = 1 shl 1
+        const val MALFORMED = 1 shl 2
+        const val CERT_MISMATCH = 1 shl 3
+        const val SIG_ALGO_UNSUPPORTED = 1 shl 4
+        const val SIG_INVALID = 1 shl 5
+        const val CONTENT_MISMATCH = 1 shl 6
+        const val DIGEST_UNSUPPORTED = 1 shl 7
+    }
+
+    /**
+     * Verifies the v2/v3 signature record cryptographically: the signature is
+     * checked against the public key of the pinned signing certificate and the
+     * APK content digest is recomputed (1 MiB chunks, apksig framing) and
+     * compared with the digest recorded in the block.
+     *
+     * Why this exists next to [matchesV234]: comparing the certificate in the
+     * block only proves that the block *names* the pinned signer. The block
+     * also carries the digests it signs, so a repack that edits the file
+     * content and leaves the original signature record untouched (installable
+     * wherever the installer's own signature verification is bypassed) still
+     * passes that comparison. Only the signature check plus a recomputed
+     * content digest reject it.
+     *
+     * The native side terminates the process on [BlockCode.SIG_INVALID] and
+     * [BlockCode.CONTENT_MISMATCH] before returning, so a hook that rewrites
+     * the value returned here cannot turn a rejection into a pass.
+     *
+     * @return a [BlockCode] bitmask.
+     */
+    fun verifyBlock(context: Context): Int {
+        if (!loaded) return BlockCode.READ_FAILED
+        val apkPath = try {
+            context.packageCodePath
+        } catch (e: Exception) {
+            AppLog.e("NativeProbe: cannot get packageCodePath", e)
+            return BlockCode.READ_FAILED
+        }
+        return try {
+            nativeVerifyBlock(apkPath)
+        } catch (e: Exception) {
+            AppLog.e("NativeProbe: nativeVerifyBlock failed", e)
+            BlockCode.READ_FAILED
+        }
+    }
+
+    /**
+     * True when a [verifyBlock] result proves tampering: the pinned signer is
+     * present, but the signature or the content digest does not match it.
+     *
+     * Every other code means "could not verify" (missing block, unparsable
+     * record, algorithm this build does not implement). Those states are
+     * already rejected by the certificate-pin checks in the caller, and
+     * treating them as tampering here would turn an unknown future signing
+     * scheme into an unrecoverable startup kill.
+     */
+    fun isTamper(code: Int): Boolean = code == BlockCode.SIG_INVALID || code == BlockCode.CONTENT_MISMATCH
 }
