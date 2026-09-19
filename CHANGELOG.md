@@ -3,8 +3,7 @@
 # 更新日志
 
 ## 1.0.22
-修改版本为1.0.22，版本号为23
-
+- 修改版本为1.0.22，版本号为23
 - Release 工作流新增 Dex2C 加固步骤（`Harden release APKs with Dex2C (dcc)`，`release.yml`）：每个 release APK 在「Verify and ensure v2/v3 APK signing」之前过一遍 dcc，`tools/dex2c/filter.txt` 选中的方法被翻译成 C、编译进 `lib/<abi>/libnc.so`，dex 中对应方法改为 `native`，原逻辑不再出现在发布包里。工具链全部钉死：dcc 用固定提交 `17de4fd`（master 会移动）、apktool 固定 2.12.1（保留 dcc 编写时所依赖的 2.x CLI，且本仓库的 dex 是 038，用不上 3.x 的 smali）、NDK 复用工作流里已安装的 29.0.14206865。
 - `APP_ABI` 与 `APP_PLATFORM` 从 APK 自身推导，而不是沿用 dcc 的模板：dcc 要求 APK 中**每一个** `lib/<abi>/` 目录都存在 libnc.so（`copy_compiled_libs` 缺一个就抛 `ABI x is not supported`），而它 2019 年的 `Application.mk` 只编 android-19 + arm64-v8a/armeabi-v7a，android-19 在 NDK 29 上已不受支持。四个 ABI 分包各自只编自己那一个 ABI，universal 包编四个。
 - 加固后必须重签，否则会发出 testkey 包：apktool 重建 APK 时 gradle 的签名已失效，而 dcc 固定用它自带的 testkey 签名。步骤内以 `zipalign -f -p 4` + `apksigner sign`（v1–v4）用 release 密钥重签，并覆盖回 `app/build/outputs/apk/release/`，因此下游的签名校验、重命名、SHA256SUMS 与上传拿到的都是加固后的产物；testkey 包既无法覆盖安装，也会撞上应用自身的签名 pin。
