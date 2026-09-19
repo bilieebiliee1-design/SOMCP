@@ -84,7 +84,18 @@ object IntegrityGuard {
         val probeCode = NativeProbe.probeArchive(context)
         val probePass = probeCode == NativeProbe.ProbeCode.OK
 
-        if (!javaPass || !nativePass || !v234Pass || !packagePass || !probePass) {
+        // 5. Native cryptographic verification of the v2/v3 signature record.
+        //    Steps 2/2b only prove that the signing block *names* the pinned
+        //    signer: the block is a blob, so editing the file content and
+        //    leaving the original signature record (and the digests recorded in
+        //    it) in place passes both - it installs wherever the installer's own
+        //    signature verification is bypassed. This step verifies the
+        //    signature with the pinned signer's key and recomputes the signed
+        //    content digest, which rejects exactly that repack.
+        val blockCode = NativeProbe.verifyBlock(context)
+        val blockPass = !NativeProbe.isTamper(blockCode)
+
+        if (!javaPass || !nativePass || !v234Pass || !packagePass || !probePass || !blockPass) {
             val reasons = mutableListOf<String>()
             if (!javaPass) reasons.add("Java: ${javaResult.reason}")
             if (!nativePass) {
@@ -103,12 +114,18 @@ object IntegrityGuard {
             if (!probePass) {
                 reasons.add("Native: archive probe failed (code=0x${probeCode.toString(16)})")
             }
+            if (!blockPass) {
+                reasons.add(
+                    "Native: v2/v3 signature or content digest mismatch " +
+                        "(code=0x${blockCode.toString(16)})"
+                )
+            }
             AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
             terminateWithContext(context)
             return
         }
 
-        // 5. Keep re-checking at runtime so later tampering is caught.
+        // 6. Keep re-checking at runtime so later tampering is caught.
         schedulePeriodicRecheck(context.applicationContext ?: context)
     }
 
@@ -168,7 +185,11 @@ object IntegrityGuard {
                 val probeOk =
                     NativeProbe.probeArchive(context) ==
                         NativeProbe.ProbeCode.OK
-                if (!nativeOk || !javaOk || !v234Ok || !packageOk || !probeOk) {
+                // Signature + content-digest verification is the only check that
+                // notices content edited under a preserved signature record, so
+                // it runs on every re-check as well.
+                val blockOk = !NativeProbe.isTamper(NativeProbe.verifyBlock(context))
+                if (!nativeOk || !javaOk || !v234Ok || !packageOk || !probeOk || !blockOk) {
                     AppLog.e("INTEGRITY PERIODIC CHECK FAILED: tampering detected at runtime")
                     terminateWithContext(context)
                     return@Thread
@@ -232,7 +253,22 @@ object IntegrityGuard {
         return result
     }
 
-    fun isTrusted(context: Context): Boolean = inspect(context).trusted
+    /**
+     * Gate used by the service and boot entry points.
+     *
+     * [inspect] alone reads the package metadata through PackageManager, which a
+     * runtime patching framework can substitute; the native identity checks read
+     * the package file itself, so they are required here too. The full
+     * cryptographic verification (with its content-digest pass over the whole
+     * file) is deliberately not part of this path - it runs at startup and on
+     * every periodic re-check.
+     */
+    fun isTrusted(context: Context): Boolean = inspect(context).trusted &&
+        runCatching {
+            NativeProbe.matches(context) &&
+                NativeProbe.matchesV234(context) &&
+                NativeProbe.matchesId(context)
+        }.getOrDefault(false)
 
     /**
      * Terminates the current process immediately. This is a hard kill that
