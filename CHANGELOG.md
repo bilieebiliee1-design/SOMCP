@@ -3,6 +3,19 @@
 # 更新日志
 
 ## 1.0.22
+- **加强签名校验：v2/v3 从「证书比对」升级为「真实签名验证 + 内容摘要比对」**（`app/src/main/cpp/native_probe.cpp` +947、`nativecore/NativeProbe.kt` +65、`core/IntegrityGuard.kt` +40/−4）。
+- 原设计的实际缺口（本次修复的对象）：`matchesV234` 做的是「把签名块里的证书取出来，算 SHA-256，与 pin 比字符串」。这只证明块里**写着**发布签名者，不证明任何签名、也不碰文件内容。签名块是个普通 blob：改掉 `lib/` 或 `classes.dex` 里的字节、把原签名块原样留在文件里（此时它的签名只是过期），在装包方自身的签名校验被绕过的设备上（CorePatch 一类「去签名校验」模块、root 下改写安装校验）照样能装上、能运行，而证书比对依旧通过。`kProbeCrcMismatch` 也拦不住：它比的是「磁盘载荷 CRC vs 中央目录 CRC」，重打包时两个 CRC 都会被重算。
+- 新增真实验证（两层，缺一不可）：
+  1. **验签**：用 pin 住的那张证书的公钥，对块里 `signed data` 字段的原始字节做 RSASSA-PKCS1-v1_5 校验。公钥从**证书自身**的 SPKI 取（不是块里冗余的 `public key` 字段），这样「pin 证书」与「验签用密钥」是同一个对象，不会脱钩。支持 `0x0103`（RSA-PKCS1-SHA256）与 `0x0104`（RSA-PKCS1-SHA512，本仓库 4096 位发布密钥实际使用的算法）。
+  2. **比内容摘要**：按 google/apksig 的定义重算整包摘要，与块里记录的同算法摘要逐字节比对。三者缺一会漏：只验签不比重算摘要，攻击者可以保留真实的 `signed data`（含真实摘要）而改内容；只比重算摘要不验签，可以伪造一个带原证书、摘要自洽的块。两者都在，改一个字节就过不去。
+- 内容摘要按 apksig 的真实规则实现（本项目此前没有这一步，规则来自 `com.android.tools.build:apksig:8.7.3` 的 `ApkSigningBlockUtils.computeOneMbChunkContentDigests`，并已用 1.0.21 release APK 逐字节对齐）：内容分三段依次摘要——签名块之前的全部字节、ZIP 中央目录、EOCD（其中「中央目录偏移」字段被改写为签名块偏移）；每段按 1 MiB 连续分块（空段不产生块）；**块摘要 = H(0xA5 ‖ uint32_le(块长) ‖ 块字节)**；**总摘要 = H(0x5A ‖ uint32_le(块数) ‖ 各块摘要首尾相接)**。那两个 0xA5/0x5A 前缀是它与「普通哈希」的全部区别，漏掉就永远对不上（本实现先按无前缀版本试算，对不上才发现）。
+- 新增的密码学部件全部自带、无新依赖：SHA-512（FIPS 180-4）、32 位 limb 的 Montgomery(CIOS) 模幂、PKCS#1 v1.5 的 `DigestInfo` 前缀比对（SHA-256/SHA-512）、证书 SPKI → (n, e) 解析。选 CIOS 而不是「小学乘法 + 取模」是因为它不需要除法；用 32 位 limb 而不是 `__int128` 是因为 armeabi-v7a / x86 上没有 `__int128`（`native_probe.cpp` 同目录的 unicorn 构建就吃过这个亏）。模幂只需公开指数（65537，17 位），开销可忽略。
+- 判定与终止策略（关键设计，避免「不可恢复的启动自杀」）：`SIG_INVALID` 与 `CONTENT_MISMATCH` 视为**确凿篡改**，native 侧在**返回之前**就 `_exit(173)`——这样用 Frida 改返回值（`Interceptor.attach` + `retval.replace`）救不回来，因为决定早已做出。其余结果（没有签名块、块结构不合法、签名算法不是本实现支持的 RSA）**只记日志、不当篡改**：这些状态本来就被调用链里的证书 pin 校验拦下，把它们也算成篡改，会在将来更换签名算法（比如换成 EC 密钥）时让应用在所有设备上直接无法启动。
+- 调用链接入：`IntegrityGuard.enforce()` 与周期复查（45–135 s 随机间隔）都跑该检查；`isTrusted()`（MCP 服务启动 / 开机自启的门禁）补上 `matches` / `matchesV234` / `matchesId` 三个便宜的 native 身份校验——此前它只看 `inspect()`，而 `inspect()` 经 PackageManager 读，正是「去签名校验」类 hook 的作用面。整包摘要检查（37 MB 一次 SHA-512）不进这条热路径。
+- 代价：启动与每次周期复查各多一次整包读取 + SHA-512。x86_64 / MinGW -O2 实测 0.39 s（含读盘），armeabi-v7a 预计 0.6–1 s。
+- 验证方式（**不涉及本项目构建**，未跑 Gradle / NDK / CI 的任何构建）：把新增代码**按行切片**抽成独立翻译单元（`gen_harness.py`，逐段校验切片首行标记，不做任何转写），用本机 `D:\mingw64` 的 g++ 15.2 以 `-std=c++17 -O2 -Wall -Wextra` 编译，连同仓库既有 helper（ZIP 结构体、边界读、DER 解析、SHA-256）与一个本地文件版 `MappedApk` 替代品，形成三个独立 harness：(1) 验证器 harness——对 1.0.21 的 armeabi-v7a release APK 跑通（`code=0x0`，日志 `v2/v3 signature and content digest verified (v3)`）；(2) 自检 harness——SHA-512 空串/`abc`/112 字节三组 FIPS 标准向量全对，新增的 `sha256_update_bulk` 与既有逐字节 `sha256_update` 在 0/1/55/64/65/1000/100000 字节下结果一致；(3) JNI harness——用 stub 的 jni 类型编译并运行 JNI 入口本身。篡改用例（构造 5 份样本）：未改动 → `0x0`；内容翻 1 个字节 → `0x40` 且 native 终止（进程退出码 173）；签名翻 1 个字节 → `0x20` 且终止；换成别的签名者 → `0x8`（非致命，由既有证书 pin 链路终止）；删掉整个签名块只留 v1 → `0x2`（同上）。Kotlin 侧 ktlint 1.8.0 零违规，新增行最长 106 字符（`.editorconfig` 上限 160）；`external fun` 与 C++ `Java_..._NativeProbe_*` 符号脚本比对 8:8 全等（新增 `nativeVerifyBlock` 两边一致，JNI 不会在运行期断链）。
+- 这次 harness 抓到一个真 bug：签名块起点原本写成 `magic_off - 8 - block_size`，比正确值 `magic_off + 8 - block_size` 少 16 字节（声明长度算的是「首部 8 字节长度字段之后的全部内容」，含尾部长度字段与 16 字节 magic）。真实 APK 上表现为 `0x4`（结构不合法），改这一行后即 `0x0`。
+- 未改动、但已知不足（属独立决策）：`nativeReadEnvelope` 的 v1 路径仍只取 `META-INF/*.RSA` 里的证书、不验 PKCS#7 签名与 MANIFEST 摘要（v1 的存在意义只剩「块里没有 v2/v3 时」的兜底，而那种情况本来就被判失败）；`kProbeCrcMismatch` 的自洽 CRC 比对对抗不了有意重打包（本次未删，避免动到 `ProbeCode` 语义与既有测试）。
 - 修改版本为1.0.22，版本号为23
 - 降低静态分析的字符串抽取开销（`LiefEngine`，两处，1 个文件 +84/−52）：字符串抽取此前按节把数据整段 `copyOfRange` 出来再扫，`.rodata` / `.data` 单节可达数十 MiB，每进行一次解析都要复制一遍；现改为在原数组上用 `[from, to)` 窗口就地扫描，越界节的地址基准与跳过条件与旧实现逐条对齐。
 - 字符串去重集合由 `"UTF-8:<偏移>:<文本>"` 字符串键改为把（偏移、字节长度、编码）打包进一个 `long`。旧键等于给每一条抽出的字符串再保留一份完整文本副本，且在整个扫描期间一直被引用——加固 SO 的整文件扫描下，这份副本与字符串列表本身同量级。新旧键语义等价：偏移与长度都是 `ByteArray` 下标（各 31 位），编码占 1 位，同址同长必然同文本。
