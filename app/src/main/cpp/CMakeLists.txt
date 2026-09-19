@@ -155,16 +155,16 @@ endif()
 
 message(STATUS "[xor-key] using header: ${KEY_GENERATED}")
 
-# Make the generated header available to signature_verify.cpp
+# Make the generated header available to native_probe.cpp
 target_include_directories(rz_native PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-# Native APK signature verification — reads the APK directly from the
-# filesystem to bypass Java-level PackageManager hooks (used by kstools
-# and ApkSignatureKiller). Linked into the main rz_native library.
-target_sources(rz_native PRIVATE signature_verify.cpp)
+# Filesystem-level package record reader — reads the package file directly
+# so Java-level PackageManager substitutions cannot reach it. Linked into the
+# main rz_native library.
+target_sources(rz_native PRIVATE native_probe.cpp)
 
 add_library(blutter_bridge SHARED blutter_bridge.cpp)
 target_link_libraries(blutter_bridge PRIVATE dl log)
@@ -302,7 +302,7 @@ else()
                     "Rizin backend will be unavailable at runtime. "
                     "Run the meson cross-compile first.")
     # Keep the link set in sync with the Rizin branches (m/dl/c kept for
-    # forward compatibility; signature_verify/rizin_stub currently only use
+    # forward compatibility; native_probe/rizin_stub currently only use
     # zlib -> z).
     target_link_libraries(rz_native PRIVATE log m z dl c)
 endif()
