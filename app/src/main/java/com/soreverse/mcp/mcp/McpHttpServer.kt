@@ -655,7 +655,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     "SOMCP refuses to forward bridged APK tool '$name' that targets its own artifact"
                 )
             } else {
-                apkBridge.callTool(
+                bridgedCall(
                     name,
                     args
                 )
@@ -690,6 +690,30 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return JSONObject()
             .put("isError", payload.optBoolean("ok", true).not())
             .put("content", JSONArray().put(JSONObject().put("type", "text").put("text", rendered)))
+    }
+
+    /**
+     * Forwards a bridged APK-MCP call and refuses the answer when it turns out
+     * to describe SOMCP's own artifact.
+     *
+     * A remote APK MCP server resolves relative paths against a directory of its
+     * own: an `mt_apk_open` naming a copy of SOMCP's APK as a bare file name is
+     * not a path this process can classify, and every follow-up call names only
+     * the workspace the open returned. The result itself names the package it
+     * opened, so the decision is taken there — the payload is replaced by the
+     * standard refusal and the workspace id is quarantined, which also refuses
+     * every later call (read / xref / edit / build) that mentions it.
+     */
+    private fun bridgedCall(name: String, args: JSONObject): JSONObject {
+        val forwarded = apkBridge.callTool(name, args)
+        val verdict = SelfArtifactGuard.ownArtifactFromBridgedResult(forwarded)
+        if (verdict == null) return forwarded
+        SelfArtifactGuard.quarantine(verdict.identifiers)
+        AppLog.w("Self-artifact protection: refused bridged $name on own artifact ${verdict.value}")
+        return SelfArtifactGuard.forbidden(
+            verdict.value,
+            "SOMCP refuses to forward bridged APK tool '$name' that targets its own artifact"
+        )
     }
 
     private fun io.ktor.server.application.ApplicationCall.authorized(): Boolean {
