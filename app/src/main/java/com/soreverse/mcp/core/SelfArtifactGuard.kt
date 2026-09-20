@@ -276,7 +276,12 @@ object SelfArtifactGuard {
         contentCheck: ((String) -> Boolean)?,
         value: String
     ): String? {
-        if (value.isBlank() || !isPathLike(value)) return null
+        if (value.isBlank()) return null
+        // A workspace id or file name already proven to be SOMCP's own artifact
+        // (the open that produced it was refused, but the caller may still hold
+        // the id) stays refused from here on.
+        if (isQuarantined(value)) return value
+        if (!isPathLike(value)) return null
         if (isSelfApkPathAgainst(runningApks, value)) return value
         if (isSelfBundledSoAgainst(nativeLib, value)) return value
         // APK-entry reference like `App.apk!lib/<abi>/<own>.so` — matches by the
@@ -299,6 +304,77 @@ object SelfArtifactGuard {
     }
 
     // ---------------------------------------------------------------------
+    // Bridged-result identity and quarantine
+    // ---------------------------------------------------------------------
+
+    /**
+     * Identifiers proven to belong to SOMCP's own artifact: the workspace ids an
+     * already-forwarded bridged call turned out to describe.
+     *
+     * The argument scan above cannot cover every bridged call. An external APK
+     * server (MT Manager) resolves a relative path against a directory of its
+     * own — `SOMCP_1.0.21.apk` is not a file in this process, so no path check
+     * can classify it — and every follow-up call names only the workspace the
+     * open returned, never the archive again. The identity therefore has to be
+     * taken from the result: once it names SOMCP's own package, that value is
+     * remembered here and every later call mentioning it is refused, so the
+     * artifact that was opened cannot be read, xref-ed or rebuilt afterwards.
+     */
+    private val quarantined = ConcurrentHashMap.newKeySet<String>()
+
+    /** Remembers [values] as own-artifact identifiers. */
+    fun quarantine(values: Collection<String>) {
+        values.map { it.trim() }.filter { it.isNotEmpty() }.forEach(quarantined::add)
+    }
+
+    /** Drops every remembered identifier. */
+    fun clearQuarantine() {
+        quarantined.clear()
+    }
+
+    /** True when [value] names or embeds a remembered own-artifact identifier. */
+    fun isQuarantined(value: String): Boolean {
+        val v = value.trim()
+        if (v.isEmpty() || quarantined.isEmpty()) return false
+        if (quarantined.contains(v)) return true
+        val base = baseName(v)
+        if (base != v && quarantined.contains(base)) return true
+        // Embedded forms, e.g. `…/SOMCP_1.0.21.apk!lib/arm64-v8a/liblief_elf.so`.
+        return quarantined.any { v.contains(it) }
+    }
+
+    /**
+     * Own-artifact verdict for an already-forwarded bridged tool result.
+     *
+     * [value] is the signal that identified SOMCP's own package (the package
+     * name, or the signer digest) and is used for the refusal message;
+     * [identifiers] are the handles a later call can still name — the workspace
+     * ids and digests — and are what gets quarantined.
+     */
+    class BridgedVerdict(val value: String, val identifiers: List<String>)
+
+    /**
+     * Inspects an already-forwarded bridged tool result and returns the verdict
+     * when it describes SOMCP's own package, or null for a third-party artifact.
+     */
+    fun ownArtifactFromBridgedResult(result: JSONObject?): BridgedVerdict? {
+        if (result == null) return null
+        val scan = BridgedResultScan(
+            ownPackage = BuildConfig.APPLICATION_ID,
+            pinned = runCatching { normalizeFingerprint(NativeProbe.pinnedFingerprint()) }.getOrDefault("")
+        )
+        scan.walk(result)
+        val offending = scan.offending ?: return null
+        // A result that identifies the package but names no handle (no workspace
+        // id, no file name) still gets refused; quarantine the signal itself so
+        // a repeat of the same call is refused too.
+        return BridgedVerdict(
+            offending,
+            scan.identifiers.filter { it != offending }.ifEmpty { listOf(offending) }
+        )
+    }
+
+    // ---------------------------------------------------------------------
     // Standardized forbidden result
     // ---------------------------------------------------------------------
 
@@ -314,9 +390,89 @@ object SelfArtifactGuard {
 
     private val libEntryPattern = Regex("(?:^|[^A-Za-z0-9])lib/[^/]+/[^/]+\\.so$", RegexOption.IGNORE_CASE)
 
+    /**
+     * Recursive walk over a bridged tool result looking for SOMCP's own package
+     * identity: the package name the remote server reports, or the pinned
+     * release signer digest. Both are exact, so a third-party artifact cannot
+     * match by accident. Every workspace id encountered on the way is collected
+     * for quarantine. Nested text fields (the remote's `content[].text` carries
+     * a JSON document as a string) are parsed and walked as well; an unparsable
+     * text still counts when it literally contains the package id.
+     */
+    private class BridgedResultScan(private val ownPackage: String, private val pinned: String) {
+        val identifiers = LinkedHashSet<String>()
+        var offending: String? = null
+
+        fun walk(value: Any?) {
+            when (value) {
+                is JSONObject -> {
+                    val keys = value.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        inspect(key, value.opt(key))
+                    }
+                }
+
+                is JSONArray -> for (i in 0 until value.length()) walk(value.opt(i))
+
+                is String -> walkText(value)
+
+                else -> Unit
+            }
+        }
+
+        private fun inspect(key: String, value: Any?) {
+            if (value !is String) {
+                walk(value)
+                return
+            }
+            val v = value.trim()
+            when {
+                key in ID_KEYS && v.isNotEmpty() -> identifiers.add(v)
+
+                key.equals(PACKAGE_KEY, true) && ownPackage.isNotBlank() && v == ownPackage -> mark(v)
+
+                key in DIGEST_KEYS && pinned.isNotBlank() && normalizeFingerprint(v) == pinned -> mark(v)
+
+                // Any other string may itself be a nested document: the remote
+                // carries its payload as a JSON string under `content[].text`
+                // (and the bridge parks an unparsable body under `raw`), so a
+                // plain string value still has to be looked into.
+                else -> walkText(v)
+            }
+        }
+
+        private fun walkText(text: String) {
+            val parsed = if (text.trim().startsWith("{")) {
+                runCatching { JSONObject(text.trim()) }.getOrNull()
+            } else {
+                null
+            }
+            when {
+                parsed != null -> walk(parsed)
+                ownPackage.isNotBlank() && text.contains(ownPackage) -> mark(ownPackage)
+                else -> Unit
+            }
+        }
+
+        private fun mark(value: String) {
+            if (offending == null) offending = value
+            if (value != ownPackage) identifiers.add(value)
+        }
+
+        private companion object {
+            const val PACKAGE_KEY = "packageName"
+            val ID_KEYS = setOf("workspaceId", "workspace_id")
+            val DIGEST_KEYS = setOf("sha256", "certSha256", "signerSha256", "certificateSha256", "signerDigest")
+        }
+    }
+
     private fun canonical(path: String): String = try {
         File(path).canonicalPath
     } catch (_: Exception) {
         path
     }
 }
+
+/** Last path segment of [value], for either separator. */
+private fun baseName(value: String): String = value.trim().substringAfterLast('/').substringAfterLast('\\')
