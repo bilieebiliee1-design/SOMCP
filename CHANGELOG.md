@@ -54,6 +54,11 @@
 - 已知未覆盖（属独立决策，本次不做）：把某个**纯依赖库**从 APK 解出并改名后，既无条目名也无包标识，无法与第三方 SO 区分；要覆盖它必须为每个自带库登记摘要并逐次比对，而 `openWorkspace` 已各做一次全量 SHA-256 与 LIEF 解析，收益不抵开销，故不引入。
 - 验证方式（不涉及本项目构建）：新增单测 `scanFlagsOwnLibInsideWorkDirectoryReference` 钉住「带 `apk:` 前缀的相对引用按条目名被认领」，并同时断言**相对 APK 路径单独不足以识别**（正是旧候选清单的缺口）；字节判据本身由既有 `SelfAnalysisDetectionTest`（ASCII / UTF-16LE / 反例 / 空输入）覆盖，未新增；ktlint 1.8.0 对改动文件零违规。
 
+- **修复 PR 自动审查的评论顺序错乱**（`.github/workflows/pr-auto-review.yml` +7）：被判定为严重缺陷（`verdict = reject`）而自动关闭 PR 时，「PR 已被自动关闭」的通告评论会显示在「LLM 自动审查结果」的 review 之上，读起来像"先关闭、后审查"。
+- 根因（实测数据，不是猜测）：GitHub 的 PR 时间线按**秒级**时间戳排序，同一秒内的 review 与 issue comment 由内部 id 决定先后。`pr-auto-review.yml` 本身是先 `createReview`、再 `createComment`，指令顺序没有问题，问题在于两次 API 调用落进了同一秒——PR #112 的 review（`submitted_at`）与关闭评论（`created_at`）同为 `2026-09-19T14:46:12Z`，评论的 id 恰好排在前面；对照 PR #89 两条相隔 1 秒（`14:48:32Z` / `14:48:33Z`），顺序即正确。
+- 修复：`createReview` 成功后等待 3 秒再继续，使关闭评论的时间戳严格晚于该 review。等待点放在 review 提交之后、其余步骤之前，因此 `reject` 直接关闭与「连续 7 天累计 5 次警告」关闭这两条评论路径同时生效。
+- 验证方式（**不涉及本项目构建**，未跑 Gradle / NDK，也未查询 CI）：直接读 GitHub API 的 `issues/{n}/timeline`，逐条比对 PR #112（同秒 → 评论排在 review 之前）与 PR #89（相隔 1 秒 → review 排在评论之前）的事件顺序与时间戳，用真实数据确认判据是秒级时间戳、且工作流改变等待时间即可改变顺序。
+
 ## 1.0.21
 
 - 修复崩溃 / 错误上报缺少 `app_channel` 与 `device_id` 两个字段（平台侧这两列始终为空）：`LogReporter.buildPayload()` 此前只组装 16 个字段，两个字段从未写入 payload。现在 `app_channel` 取自构建期常量 `BuildConfig.APP_CHANNEL`（release 构建为 `github`、debug 构建为 `dev`；重新打包的渠道包可用 `-PappChannel=<值>` 或 `APP_CHANNEL` 环境变量覆盖，取值经 `[A-Za-z0-9._-]` 过滤，避免非法字符破坏生成的 Kotlin 字符串字面量），`device_id` 取 `Settings.Secure.ANDROID_ID`（64 位十六进制，按「应用签名 + 用户」隔离，不随卸载重装变化，恢复出厂或更换签名后变化）。`ANDROID_ID` 在少数机型 / 受管设备上可能为 null 或空串，此时退化为**首次运行生成并持久化**的随机 UUID 以保证字段非空——持久化用 `commit()` 而非 `apply()`，因为崩溃路径上进程随时可能结束，异步落盘会导致下次启动换一个新标识、把同一台设备统计成两台；该 UUID 存于独立的 `log-report` 偏好文件，不经 `SettingsStore`，因此不会出现在设置快照与 MCP `app_config` 中。两处 Android lint 提示（`HardwareIds` / `ApplySharedPref`）以 `@SuppressLint` 显式豁免并注明理由，避免在既有 lint 基线上新增噪声。
