@@ -596,6 +596,13 @@ jobs:
                   owner, repo, pull_number, event, body
                 });
                 console.log(`Submitted ${event} review on PR #${pull_number}.`);
+                // GitHub 的 PR 时间线按秒级时间戳排序；review 与评论落在同一秒
+                // 时由内部 id 决定先后，可能把关闭通告排到审查结果之上。实测
+                // PR #112：review 的 submitted_at 与「PR 已被自动关闭」评论的
+                // created_at 同为 14:46:12Z，评论排在前面；对照 PR #89 两条相隔
+                // 1 秒，顺序即正确。这里等过这一秒，保证后续任何关闭评论的
+                // 时间戳都严格晚于本 review。
+                await new Promise(resolve => setTimeout(resolve, 3000));
               } catch (e) {
                 console.log('createReview failed (ignored): ' + e.message);
               }
