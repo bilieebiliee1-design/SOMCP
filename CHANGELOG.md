@@ -59,6 +59,8 @@
 - 修复：`createReview` 成功后等待 3 秒再继续，使关闭评论的时间戳严格晚于该 review。等待点放在 review 提交之后、其余步骤之前，因此 `reject` 直接关闭与「连续 7 天累计 5 次警告」关闭这两条评论路径同时生效。
 - 验证方式（**不涉及本项目构建**，未跑 Gradle / NDK，也未查询 CI）：直接读 GitHub API 的 `issues/{n}/timeline`，逐条比对 PR #112（同秒 → 评论排在 review 之前）与 PR #89（相隔 1 秒 → review 排在评论之前）的事件顺序与时间戳，用真实数据确认判据是秒级时间戳、且工作流改变等待时间即可改变顺序。
 
+- **忽略仓库内 `.tmp/` 目录**（`.gitignore` +1）：原有的 `*.tmp` 只匹配文件，`/tmp` 之类目录下的临时文件仍会进入 `git status`；补一条 `.tmp/` 使整个临时目录被忽略。
+
 ## 1.0.21
 
 - 修复崩溃 / 错误上报缺少 `app_channel` 与 `device_id` 两个字段（平台侧这两列始终为空）：`LogReporter.buildPayload()` 此前只组装 16 个字段，两个字段从未写入 payload。现在 `app_channel` 取自构建期常量 `BuildConfig.APP_CHANNEL`（release 构建为 `github`、debug 构建为 `dev`；重新打包的渠道包可用 `-PappChannel=<值>` 或 `APP_CHANNEL` 环境变量覆盖，取值经 `[A-Za-z0-9._-]` 过滤，避免非法字符破坏生成的 Kotlin 字符串字面量），`device_id` 取 `Settings.Secure.ANDROID_ID`（64 位十六进制，按「应用签名 + 用户」隔离，不随卸载重装变化，恢复出厂或更换签名后变化）。`ANDROID_ID` 在少数机型 / 受管设备上可能为 null 或空串，此时退化为**首次运行生成并持久化**的随机 UUID 以保证字段非空——持久化用 `commit()` 而非 `apply()`，因为崩溃路径上进程随时可能结束，异步落盘会导致下次启动换一个新标识、把同一台设备统计成两台；该 UUID 存于独立的 `log-report` 偏好文件，不经 `SettingsStore`，因此不会出现在设置快照与 MCP `app_config` 中。两处 Android lint 提示（`HardwareIds` / `ApplySharedPref`）以 `@SuppressLint` 显式豁免并注明理由，避免在既有 lint 基线上新增噪声。
