@@ -50,6 +50,7 @@ rizin-sdk/
 # Logs, temporary files and local analysis output
 *.log
 *.tmp
+.tmp/
 *.bak
 *.swp
 *.hprof
