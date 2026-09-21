@@ -65,7 +65,9 @@ object NativeProbe {
 
     /**
      * Returns the log-report-platform API key injected into the native library
-     * at build time (XOR-obfuscated in key_generated.h). The key lives only in
+     * at build time (encrypted under a SHA-256-CTR keystream in
+     * key_generated.h, decoded on demand in reporting_key.h and wiped right
+     * after use). The key lives only in
      * the native layer; it is never a user setting and is never logged. Returns
      * an empty string when no key was injected or the native library is
      * unavailable.
