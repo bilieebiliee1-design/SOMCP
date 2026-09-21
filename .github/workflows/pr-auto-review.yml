@@ -81,8 +81,10 @@ jobs:
           # L4: 手动补跑时 context.issue.number 为 0，用 PR_NUMBER 兜底。
           PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
           # Comma-separated maintainer/whitelisted usernames whose PRs are
-          # exempt from the 5-warning auto-close. The repo owner is always
-          # exempt. Configurable via the repo variable LLM_REVIEW_EXEMPT_USERS.
+          # exempt from the 5-warning auto-close. The repo owner and every user
+          # with write access (author_association OWNER/MEMBER/COLLABORATOR/
+          # COLLABORATOR_ON_BEHALF_OF) are always exempt. Configurable via the
+          # repo variable LLM_REVIEW_EXEMPT_USERS.
           EXEMPT_USERS: ${{ vars.LLM_REVIEW_EXEMPT_USERS }}
           # Set the repo variable LLM_AUTO_CLOSE to "false" to disable the
           # destructive auto-close / auto-delete (restriction + 5-warning).
@@ -101,7 +103,15 @@ jobs:
             const author = ((prObj || {}).user || {}).login || '';
             const authorKey = author.toLowerCase();
             const exemptRaw = (process.env.EXEMPT_USERS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey);
+            // 维护者豁免判据：仓库所有者登录名全等，或 PR 作者具备写权限
+            // （author_association 取 OWNER/MEMBER/COLLABORATOR/
+            //   COLLABORATOR_ON_BEHALF_OF）。此前只比对仓库所有者登录名，
+            // 拥有写权限的维护者（association = COLLABORATOR）会被当作普通
+            // 提交者，PR 触发限制后连同分支一起被删（与 issues-auto-reply.yml
+            // 的重复 issue 误关闭同源，本次一并补齐）。
+            const MAINTAINER_ASSOC = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'COLLABORATOR_ON_BEHALF_OF']);
+            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey) ||
+              MAINTAINER_ASSOC.has(String((prObj || {}).author_association || ''));
             const RESTRICT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
             const restrictPrefix = `llm-restricted-${authorKey}-`;
             const restrictRe = new RegExp('^' + restrictPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$');
@@ -520,8 +530,10 @@ jobs:
         uses: actions/github-script@v7
         env:
           # Comma-separated maintainer/whitelisted usernames whose PRs are
-          # exempt from the 5-warning auto-close. The repo owner is always
-          # exempt. Configurable via the repo variable LLM_REVIEW_EXEMPT_USERS.
+          # exempt from the 5-warning auto-close. The repo owner and every user
+          # with write access (author_association OWNER/MEMBER/COLLABORATOR/
+          # COLLABORATOR_ON_BEHALF_OF) are always exempt. Configurable via the
+          # repo variable LLM_REVIEW_EXEMPT_USERS.
           EXEMPT_USERS: ${{ vars.LLM_REVIEW_EXEMPT_USERS }}
           # Kill switches (repo variables, default on): set LLM_AUTO_MERGE to
           # "false" to disable auto-merge + branch deletion; set LLM_AUTO_CLOSE
@@ -548,7 +560,13 @@ jobs:
               ((prManual || {}).user || {}).login || '';
             const authorKey = author.toLowerCase();
             const exemptRaw = (process.env.EXEMPT_USERS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey);
+            // 维护者豁免判据（与上方 restriction 检查、issues-auto-reply.yml 一致）：
+            // 所有者登录名全等，或作者具备写权限。手动补跑时 author_association
+            // 取自 resolve 步骤抓的 PR 对象（/tmp/manual-pr.json 是完整 API 响应）。
+            const MAINTAINER_ASSOC = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'COLLABORATOR_ON_BEHALF_OF']);
+            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey) ||
+              MAINTAINER_ASSOC.has(String((context.payload.pull_request || {}).author_association ||
+                (prManual || {}).author_association || ''));
 
             // M5: 该 request_changes 是否由 CI 红灯被代码级降级所致（不计警告）。
             const ciDowngraded = fs.existsSync('/tmp/ci-downgraded.txt') &&

@@ -84,8 +84,11 @@ jobs:
         if: github.event_name == 'issues'
         env:
           # Comma-separated exempt usernames whose duplicate-issue warning
-          # auto-close is bypassed. The repo owner is always exempt. Configure
-          # via the repo variable LLM_ISSUE_EXEMPT_USERS.
+          # auto-close is bypassed. The repo owner and every user with write
+          # access (author_association OWNER/MEMBER/COLLABORATOR/
+          # COLLABORATOR_ON_BEHALF_OF, same set as the job-level commenter
+          # filter above) are always exempt. Configure extra names via the repo
+          # variable LLM_ISSUE_EXEMPT_USERS.
           EXEMPT_USERS: ${{ vars.LLM_ISSUE_EXEMPT_USERS }}
           # Kill switch (repo variable, default on): set LLM_ISSUE_AUTO_CLOSE to
           # "false" to disable the destructive duplicate close / restriction
@@ -104,7 +107,28 @@ jobs:
 
             const authorKey = author.toLowerCase();
             const exemptRaw = (process.env.EXEMPT_USERS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey);
+            // 维护者豁免判据：仓库所有者登录名全等，或 issue 作者具备写权限
+            // （author_association 取 OWNER/MEMBER/COLLABORATOR/
+            //   COLLABORATOR_ON_BEHALF_OF，与 job 级评论过滤同一组值）。
+            // 此前只比对仓库所有者登录名，拥有写权限的维护者（association =
+            // COLLABORATOR）自建的独立 issue 会被当作重复工单自动关闭并累加
+            // 警告/限制（历史 bug：#117–#128 被相互判重后整批关闭）。
+            const MAINTAINER_ASSOC = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'COLLABORATOR_ON_BEHALF_OF']);
+            const isExempt = authorKey === owner.toLowerCase() || exemptRaw.includes(authorKey) ||
+              MAINTAINER_ASSOC.has(String(issue.author_association || ''));
+
+            // 豁免必须闸住**关闭动作本身**。此前 isExempt 只用在"已在限制期内"
+            // （步骤 1）与"触发 7 天限制"（步骤 5）两处，记警告 + 评论 + 关闭这段
+            // 处置完全没查豁免，因此连仓库所有者账号自建的 issue 也会被关。
+            // 维护者直接跳过整套重复处置，但仍标记 duplicate=false，让后续
+            // LLM 回复步骤照常运行。
+            if (isExempt) {
+              console.log('Author ' + author + ' is a maintainer (owner/author_association); skip duplicate-issue enforcement.');
+              core.setOutput('restricted', 'false');
+              core.setOutput('duplicate', 'false');
+              return;
+            }
+
             const autoClose = process.env.AUTO_CLOSE !== 'false';
             const nowMs = Date.now();
             const windowMs = 7 * 24 * 60 * 60 * 1000;
