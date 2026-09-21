@@ -61,6 +61,14 @@
 
 - **忽略仓库内 `.tmp/` 目录**（`.gitignore` +1）：原有的 `*.tmp` 只匹配文件，`/tmp` 之类目录下的临时文件仍会进入 `git status`；补一条 `.tmp/` 使整个临时目录被忽略。
 
+- **修复「重复 issue 自动关闭」对维护者生效**（`.github/workflows/issues-auto-reply.yml`、`.github/workflows/pr-auto-review.yml`）。
+- 实测现象：拥有写权限的维护者账号（`author_association = COLLABORATOR`）连续提交的 12 个主题互不相干的 issue（#117–#128）被相互判重后整批自动关闭，警告累计到 5 次还触发了 7 天限制。
+- 根因一，处置动作整段没有查豁免。`isExempt` 只用在了两处——「作者已在 7 天限制期内，直接关闭」（步骤 1）与「警告累计到 5 次，触发限制」（步骤 5）；而「记警告标签 + 发重复评论 + 关闭 issue」这一段处置（步骤 4）从头到尾没有引用 `isExempt`。也就是说**仓库所有者账号** `bilieebiliee1-design` 自建的 issue 同样会被关，代码注释里"仓库所有者始终豁免"与实际行为不符。
+- 根因二，豁免判据取错了字段。原有判据只有一条 `authorKey === owner.toLowerCase()`，即作者登录名与**仓库所有者**登录名全等。本仓库所有者为 `bilieebiliee1-design`，维护者账号是 `Hello666cpu`，两者永不相等，这条豁免一次都没命中。同一个工作流的 job 级评论过滤早就在用另一套判据——`author_association` 取 `OWNER` / `MEMBER` / `COLLABORATOR` / `COLLABORATOR_ON_BEHALF_OF`——只有重复检测这一处漏了。
+- 修复分两步，缺一不可：豁免判据增加 `author_association` 写权限判定（取值集合与 job 级过滤逐字一致），随后在判据之后直接 `return`，跳过整套重复处置并置 `duplicate=false`，让后续 LLM 回复步骤照常运行。`issues` 事件载荷自带该字段，不需要额外 API 调用。`pr-auto-review.yml` 里两处同源判据（开头的限制期快速失败检查、末尾的 5 次警告计数）同批补齐；手动补跑时该字段从 resolve 步骤抓取的完整 PR 对象读取。
+- 行为变化：维护者自己提交的 issue 不再被记警告、发重复评论或关闭；维护者推送的 PR 不再计入警告、不会被限制关闭并删分支。非维护者路径不变。
+- 验证方式（不涉及本项目构建，未查询 CI）：① 按缩进把两个工作流里的 8 个 `script: |` 块切出，交给 node 22 逐块做语法校验，8/8 通过；另用一份人为注入语法错误的探针副本复核该流程确实会报错。② 用 mock 的 `github` / `context` / `core` 直接执行抽取出的步骤脚本做行为验证，issue 侧三组——`COLLABORATOR` 维护者与 `OWNER` 所有者均为「标签 0 / 评论 0 / 关闭 0」，`NONE` 普通用户仍为「1 / 1 / 1」（重复处置未被关掉）；PR 侧两组——维护者在限制期内「评论 0 / 关闭 0 / 删分支 0」，普通用户「1 / 1 / 1」。**只补豁免判据不改处置段时，issue 侧三组全部返回 1 / 1 / 1，正是这组 mock 把被漏掉的步骤 4 暴露出来**，语法校验完全看不出这个问题。
+
 ## 1.0.21
 
 - 修复崩溃 / 错误上报缺少 `app_channel` 与 `device_id` 两个字段（平台侧这两列始终为空）：`LogReporter.buildPayload()` 此前只组装 16 个字段，两个字段从未写入 payload。现在 `app_channel` 取自构建期常量 `BuildConfig.APP_CHANNEL`（release 构建为 `github`、debug 构建为 `dev`；重新打包的渠道包可用 `-PappChannel=<值>` 或 `APP_CHANNEL` 环境变量覆盖，取值经 `[A-Za-z0-9._-]` 过滤，避免非法字符破坏生成的 Kotlin 字符串字面量），`device_id` 取 `Settings.Secure.ANDROID_ID`（64 位十六进制，按「应用签名 + 用户」隔离，不随卸载重装变化，恢复出厂或更换签名后变化）。`ANDROID_ID` 在少数机型 / 受管设备上可能为 null 或空串，此时退化为**首次运行生成并持久化**的随机 UUID 以保证字段非空——持久化用 `commit()` 而非 `apply()`，因为崩溃路径上进程随时可能结束，异步落盘会导致下次启动换一个新标识、把同一台设备统计成两台；该 UUID 存于独立的 `log-report` 偏好文件，不经 `SettingsStore`，因此不会出现在设置快照与 MCP `app_config` 中。两处 Android lint 提示（`HardwareIds` / `ApplySharedPref`）以 `@SuppressLint` 显式豁免并注明理由，避免在既有 lint 基线上新增噪声。
