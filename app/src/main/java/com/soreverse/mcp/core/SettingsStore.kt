@@ -128,7 +128,13 @@ class SettingsStore(context: Context) {
 
     var authEnabled: Boolean
         get() = prefs.getBoolean("authEnabled", false)
-        set(value) = prefs.edit().putBoolean("authEnabled", value).apply()
+        set(value) {
+            val wasEnabled = prefs.getBoolean("authEnabled", false)
+            prefs.edit().putBoolean("authEnabled", value).apply()
+            // Rotating on enable invalidates any accessToken that leaked while
+            // authentication was still off (e.g. via older app_config reads).
+            if (value && !wasEnabled) resetAccessToken()
+        }
 
     var accessToken: String
         get() {

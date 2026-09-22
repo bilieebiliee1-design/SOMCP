@@ -61,6 +61,9 @@
 
 - **忽略仓库内 `.tmp/` 目录**（`.gitignore` +1）：原有的 `*.tmp` 只匹配文件，`/tmp` 之类目录下的临时文件仍会进入 `git status`；补一条 `.tmp/` 使整个临时目录被忽略。
 
+- **加强自动上报 API Key 的构建期加密**（`app/generate_header.py`、`app/src/main/cpp/reporting_key.h`（新增）、`sha256_impl.h`（新增，自 `native_probe.cpp` 抽出 SHA-256 原语）、`native_probe.cpp` 的 `nativeGetReportingKey`）。旧方案的三个可静态破解点：① 生成的 `key_generated.h` 头部注释**以明文写出构建期 XOR 密钥**；② reporting key 与签名钉扎数组共用「`kXorKey` 连续 8 字节常量 + `encoded[i] ^ key[i%8]` 循环」模式，在 `.rodata` 里一次扫描即可还原；③ 解码出的 `std::string` 用后不清零，明文残留在 native 堆。本地开发兜底密钥为全零 `TM=0000000000000000` 时，XOR 等于不加密，密钥以"密文"形式原样进产物。
+- 新方案：reporting key 不再走旋转 XOR，改为**独立派生密钥 + SHA-256 计数器模式密钥流**——`master = SHA256(TM 密钥 ‖ salt(每构建随机 16B))`，`密钥流块 i = SHA256(master ‖ LE32(i))`，密文 = 明文 XOR 密钥流。`.so` 中不再存在短重复密钥模式与任何连续密钥表；`nativeGetReportingKey` 解码到栈缓冲区，创建 `jstring` 后立即以 volatile 写清零（`rk::secure_zero`，防编译器消除）。`generate_header.py` 生成头不再含任何密钥注释，并对两条弱路径直接失败构建：reporting key 超过 512 B、以及「TM 为全零兜底值 + 注入了真实 key」。明文可解性只依赖 (TM, LRP_API_KEY)，CI 重复构建结果一致。签名钉扎数组（`kEncodedExpectedSha256` 等）维持原 XOR 方案不动，本次范围只覆盖上报密钥。
+- 验证方式：新增宿主往返测试 `tools/test_reporting_key.py` + `tools/test_reporting_key.cpp`——把**生产解码器本身**（`reporting_key.h`/`sha256_impl.h`，零改动）用 NDK clang 编成 wasm32、node 执行，断言 python 加密 → C 解码逐字节还原（ascii 单块 / 65 字符跨 32B 块边界 / 未注入 key 三种情况），外加两条生成器防御断言（超长 key、全零 TM 均被拒）；`native_probe.cpp` 过 NDK clang `--target=aarch64-linux-android24 -Wall -Wextra -fsyntax-only`，无新增警告。
 - **修复「重复 issue 自动关闭」对维护者生效**（`.github/workflows/issues-auto-reply.yml`、`.github/workflows/pr-auto-review.yml`）。
 - 实测现象：拥有写权限的维护者账号（`author_association = COLLABORATOR`）连续提交的 12 个主题互不相干的 issue（#117–#128）被相互判重后整批自动关闭，警告累计到 5 次还触发了 7 天限制。
 - 根因一，处置动作整段没有查豁免。`isExempt` 只用在了两处——「作者已在 7 天限制期内，直接关闭」（步骤 1）与「警告累计到 5 次，触发限制」（步骤 5）；而「记警告标签 + 发重复评论 + 关闭 issue」这一段处置（步骤 4）从头到尾没有引用 `isExempt`。也就是说**仓库所有者账号** `bilieebiliee1-design` 自建的 issue 同样会被关，代码注释里"仓库所有者始终豁免"与实际行为不符。
