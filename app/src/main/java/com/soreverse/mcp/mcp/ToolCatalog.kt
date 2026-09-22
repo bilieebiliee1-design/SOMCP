@@ -903,12 +903,25 @@ object ToolCatalog {
                 e.capabilityRegistry().getJSONObject("backends").getJSONObject("rizin")
             )
 
-            "command" -> e.rzCommand(
-                a.str("workspaceId"),
-                a.str("editSessionId"),
-                a.str("command"),
-                a.bool("unsafe", false)
-            )
+            "command" -> {
+                // Server-side enforcement of the documented "unsafe requires
+                // authenticated MCP access" gate: with authEnabled=false every
+                // caller is unauthenticated, so unsafe must be refused here
+                // rather than passed through to the native blacklist.
+                if (a.bool("unsafe", false) && !s.authEnabled) {
+                    err(
+                        "AUTH_REQUIRED",
+                        "unsafe=true is refused while token authentication is disabled. Enable Settings > Service > Require access token, then call with Authorization: Bearer <token>."
+                    )
+                } else {
+                    e.rzCommand(
+                        a.str("workspaceId"),
+                        a.str("editSessionId"),
+                        a.str("command"),
+                        a.bool("unsafe", false)
+                    )
+                }
+            }
 
             "analyze" -> e.rzAnalyze(a.str("workspaceId"), a.str("editSessionId"))
 
@@ -2114,7 +2127,6 @@ object ToolCatalog {
                         "schema",
                         "reset_token"
                     )
-                    "maskSecrets" bool "Mask tokens in get output (default true)"
                     "allowSecrets" bool "Allow writing secret fields on set (default true)"
                     "config" str
                         "JSON object string or nested object for set (appearance/service/engine/tunnel/apkBridge or flat keys)"
@@ -2173,7 +2185,12 @@ object ToolCatalog {
                     )
                 }
 
-                else -> ok(settings.snapshot(maskSecrets = args.bool("maskSecrets", true)))
+                // Secrets are force-masked: an MCP caller must never read a
+                // plaintext accessToken / tunnel token / AI key. Plaintext
+                // export only exists behind the UI backup flow (explicit
+                // user action, encryption enforced) and reset_token below,
+                // which rotates instead of revealing.
+                else -> ok(settings.snapshot(maskSecrets = true))
             }
         }
     }

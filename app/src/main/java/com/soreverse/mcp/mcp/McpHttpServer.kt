@@ -34,6 +34,7 @@ import com.soreverse.mcp.core.str
 import com.soreverse.mcp.nativecore.NativeEngine
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.parseQueryString
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.cio.CIO
@@ -130,12 +131,15 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         engine = embeddedServer(CIO, host = host, port = port) {
             routing {
                 get("/") {
+                    if (call.rejectUntrustedOrigin()) return@get
                     call.respondText(serverDiscovery().toString(), ContentType.Application.Json)
                 }
                 get("/.well-known/mcp") {
+                    if (call.rejectUntrustedOrigin()) return@get
                     call.respondText(serverDiscovery().toString(), ContentType.Application.Json)
                 }
                 get("/health") {
+                    if (call.rejectUntrustedOrigin()) return@get
                     if (!call.authorized()) {
                         call.respondText(
                             authError().toString(),
@@ -150,6 +154,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     )
                 }
                 get("/mcp") {
+                    if (call.rejectUntrustedOrigin()) return@get
                     if (!call.authorized()) {
                         call.respondText(
                             authError().toString(),
@@ -166,6 +171,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     }
                 }
                 get("/sse") {
+                    if (call.rejectUntrustedOrigin()) return@get
                     if (!call.authorized()) {
                         call.respondText(
                             authError().toString(),
@@ -205,6 +211,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     }
 
     private suspend fun handleJsonRpcPost(call: ApplicationCall) {
+        if (call.rejectUntrustedOrigin()) return
         if (!call.authorized()) {
             call.respondText(
                 authError().toString(),
@@ -593,7 +600,28 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 if (reset) tunnel.resetTunnelStats()
                 ok(tunnel.tunnelStats())
             },
-            tunnelStartHook = { mode, port, token, publicUrl ->
+            tunnelStartHook = tunnelStart@{ mode, port, token, publicUrl ->
+                // A tunnel publishes the MCP surface to the public internet.
+                // Starting one over an unauthenticated tool channel (auth off)
+                // lets any LAN/rebinding attacker expose the device; refuse
+                // here — the app UI stays the consent path for that choice.
+                if (!settings.authEnabled) {
+                    return@tunnelStart err(
+                        "AUTH_REQUIRED",
+                        "tunnel_start is refused while token authentication is disabled: it would expose the service publicly with no token. Enable Settings > Service > Require access token first, or start the tunnel from the app UI."
+                    )
+                }
+                // MCP-initiated tunnels may only front the SOMCP service itself;
+                // arbitrary localhost ports would turn the tunnel into a proxy
+                // for other apps running on the device.
+                if (port > 0 && port != settings.port) {
+                    return@tunnelStart err(
+                        "PORT_NOT_ALLOWED",
+                        "Tunnel targetPort over MCP is restricted to the SOMCP service port (${settings.port}); omit targetPort to use the configured tunnel target.",
+                        "targetPort",
+                        port
+                    )
+                }
                 val resolvedMode = if (mode ==
                     "named"
                 ) {
@@ -724,8 +752,71 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         if (token.isBlank()) return false
         val auth = request.header("Authorization").orEmpty()
         val bearer = auth.removePrefix("Bearer").trim()
-        val queryToken = request.uri.substringAfter("token=", "").substringBefore('&')
+        // Exact query-parameter parsing: `substringAfter("token=")` also matched
+        // `xtoken=`, paths containing "token=", and leaked unrelated params.
+        val queryToken = parseQueryString(request.uri.substringAfter('?', ""))["token"].orEmpty()
         return constantTimeEquals(bearer, token) || constantTimeEquals(queryToken, token)
+    }
+
+    /**
+     * DNS-rebinding / drive-by-browser gate. The MCP endpoint is plain HTTP on
+     * the LAN, so "bound to the local network only" is defeated as soon as a
+     * malicious page's hostname rebinds onto this device. Requests must present
+     * a Host that is an IP literal, `localhost`, or this server's own active
+     * tunnel hostname; a browser-supplied Origin/Referer must agree with Host.
+     * Desktop MCP clients do not send Origin; browsers always do.
+     */
+    private fun ApplicationCall.hostTrusted(): Boolean {
+        val hostname = hostHeaderName(request.header("Host").orEmpty()) ?: return false
+        val localName = hostname == "localhost" || isIpLiteralHostname(hostname)
+        if (!localName && hostname !in tunnelPublicHosts()) return false
+        request.header("Origin")?.let { if (uriHostOrNull(it) != hostname) return false }
+        request.header("Referer")?.let { if (uriHostOrNull(it) != hostname) return false }
+        return true
+    }
+
+    private suspend fun ApplicationCall.rejectUntrustedOrigin(): Boolean {
+        if (hostTrusted()) return false
+        AppLog.w("Rejected request with untrusted Host/Origin: ${request.header("Host")}")
+        respondText(
+            JSONObject().put(
+                "error",
+                JSONObject().put("code", "FORBIDDEN_ORIGIN").put(
+                    "message",
+                    "Forbidden: Host/Origin is not localhost, a direct IP, or this server's tunnel hostname (DNS rebinding protection)."
+                )
+            ).toString(),
+            ContentType.Application.Json,
+            status = HttpStatusCode.Forbidden
+        )
+        return true
+    }
+
+    private fun hostHeaderName(hostHeader: String): String? {
+        val h = hostHeader.trim().lowercase()
+        if (h.isEmpty()) return null
+        if (h.startsWith('[')) {
+            val end = h.indexOf(']')
+            if (end < 0) return null
+            return h.substring(1, end).ifEmpty { null }
+        }
+        return h.substringBefore(':').ifEmpty { null }
+    }
+
+    private fun isIpLiteralHostname(name: String): Boolean {
+        if (name.contains(':')) return true // bracket-stripped IPv6 literal
+        val parts = name.split('.')
+        if (parts.size != 4) return false
+        return parts.all { it.length <= 3 && it.toIntOrNull()?.let { n -> n in 0..255 } == true }
+    }
+
+    private fun uriHostOrNull(raw: String): String? = runCatching { java.net.URI(raw).host?.lowercase() }.getOrNull()
+
+    private fun tunnelPublicHosts(): Set<String> {
+        val out = mutableSetOf<String>()
+        tunnel.status.publicUrl?.let { uriHostOrNull(it)?.let(out::add) }
+        uriHostOrNull(SettingsStore(context).tunnelNamedPublicUrl)?.let(out::add)
+        return out
     }
 
     private fun constantTimeEquals(candidate: String, secret: String): Boolean = tokenConstantTimeEquals(candidate, secret)
@@ -1176,7 +1267,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                         ).put(
                             "steps",
                             listOf(
-                                "system_control (action=tunnel_start, mode=quick)",
+                                "system_control (action=tunnel_start, mode=quick) — requires token authentication enabled",
                                 "read publicUrl from result",
                                 "client connects to publicUrl/mcp"
                             )
