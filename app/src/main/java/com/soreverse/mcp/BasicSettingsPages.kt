@@ -381,6 +381,8 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
             ToggleRow(if (t.zh) "启用访问 token" else "Require access token", authEnabled) {
                 authEnabled = it
                 settings.authEnabled = it
+                // Enabling rotates the stored token; show the fresh value.
+                accessToken = settings.accessToken
             }
         }
         GlassGroup(title = if (t.zh) "绑定地址" else "Bind address") {
@@ -396,6 +398,7 @@ internal fun SettingsAccessPage(t: UiText, settings: SettingsStore) {
                     if (it == "0.0.0.0" && !authEnabled) {
                         authEnabled = true
                         settings.authEnabled = true
+                        accessToken = settings.accessToken
                     }
                 }
             )

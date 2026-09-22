@@ -132,7 +132,8 @@ endif()
 
 # The reporting API key (log-report-platform X-API-Key) is read by
 # generate_header.py from the inherited $LRP_API_KEY environment variable and
-# XOR-encoded into key_generated.h, i.e. injected straight into the native
+# encrypted (SHA-256-CTR keystream; see reporting_key.h) into key_generated.h,
+# i.e. injected straight into the native
 # layer. It is deliberately NOT passed on any command line and never written to
 # the CMake cache, so the value cannot leak into build logs. Only its presence
 # is reported.
