@@ -175,6 +175,8 @@ internal fun SettingsServiceConfigPage(t: UiText, settings: SettingsStore) {
             ToggleRow(if (t.zh) "启用访问 Token" else "Require access token", authEnabled) {
                 authEnabled = it
                 settings.authEnabled = it
+                // Enabling rotates the stored token; show the fresh value.
+                accessToken = settings.accessToken
             }
             GroupDivider()
             Text(

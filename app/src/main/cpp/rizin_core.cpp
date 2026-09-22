@@ -1229,17 +1229,39 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDiff(
     return env->NewStringUTF(out.c_str());
 }
 
+// rz_core_cmd_str() splits the input on ';' and newlines and executes every
+// segment, so a whole-command prefix blacklist is bypassable ("pd 4;!!id").
+// Run the same prefix check on each separator-delimited segment instead.
+static bool rizinSegmentBlocked(const std::string& rawSegment) {
+    const size_t begin = rawSegment.find_first_not_of(" \t\r");
+    if (begin == std::string::npos) return false;
+    const std::string segment = rawSegment.substr(begin);
+    static const char* blocked[] = { "!", "!!", "o ", "oo", "w", "wx", "wa", "wc", "rm", "mv", "cp", "cat ", "ls " };
+    for (const char* b : blocked) {
+        if (segment.rfind(b, 0) == 0) return true;
+    }
+    // Backticks spawn a shell sub-command anywhere inside a segment.
+    return segment.find('`') != std::string::npos;
+}
+
+static bool rizinCommandBlocked(const std::string& cmd) {
+    size_t start = 0;
+    while (true) {
+        size_t end = cmd.find_first_of(";\n\r", start);
+        if (end == std::string::npos) end = cmd.size();
+        if (rizinSegmentBlocked(cmd.substr(start, end - start))) return true;
+        if (end == cmd.size()) break;
+        start = end + 1;
+    }
+    return false;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzCommand(
         JNIEnv* env, jobject, jbyteArray jbytes, jstring, jstring jcmd, jboolean unsafe) {
     std::string cmd = jStr(env, jcmd);
     if (cmd.empty()) return env->NewStringUTF("{\"error\":\"empty_command\"}");
-    const char* blocked[] = { "!", "!!", "o ", "oo", "w", "wx", "wa", "wc", "rm", "mv", "cp", "cat ", "ls " };
-    if (!unsafe) {
-        for (const char* b : blocked) {
-            if (cmd.rfind(b, 0) == 0) return env->NewStringUTF("{\"error\":\"unsafe_required\",\"message\":\"set unsafe=true for mutating, file, shell, debugger, or external commands\"}");
-        }
-    }
+    if (!unsafe && rizinCommandBlocked(cmd)) return env->NewStringUTF("{\"error\":\"unsafe_required\",\"message\":\"set unsafe=true for mutating, file, shell, debugger, or external commands\"}");
     jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) return env->NewStringUTF("{\"error\":\"empty\"}");
     std::vector<uint8_t> buf(len);
