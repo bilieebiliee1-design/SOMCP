@@ -806,9 +806,8 @@ class McpHttpServer(private val context: Context, private val port: Int, private
     private fun isIpLiteralHostname(name: String): Boolean {
         if (name.contains(':')) return true // bracket-stripped IPv6 literal
         val parts = name.split('.')
-        return parts.size == 4 && parts.all {
-            it.length <= 3 && it.toIntOrNull()?.let { n -> n in 0..255 } == true
-        }
+        if (parts.size != 4) return false
+        return parts.all { it.length <= 3 && it.toIntOrNull()?.let { n -> n in 0..255 } == true }
     }
 
     private fun uriHostOrNull(raw: String): String? = runCatching { java.net.URI(raw).host?.lowercase() }.getOrNull()
