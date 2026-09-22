@@ -137,13 +137,35 @@ class UnidbgEmulator(private val context: Context) {
                             unicornLoaded = true
                             AppLog.i("Unidbg native libunicorn.so loaded for 64-bit runtime")
                         }
-                        .onFailure {
-                            unicornLoaded = false
-                            AppLog.w(
-                                "libunicorn.so not found on this 64-bit device — " +
-                                    "Unicorn2Factory will fail. Re-run build-unidbg-native.sh " +
-                                    "or install a release APK that bundles unicorn: ${it.message}"
-                            )
+                        .onFailure { directError ->
+                            // jniLibs 直载失败时，回落到会话真正使用的加载路径：
+                            // Unicorn2Factory 的静态初始化会走 unidbg 自己的
+                            // NativeLoader（可从 jar 内置资源解出并 System.load）。
+                            // 探测必须与真实加载路径一致，否则 unidbg_session 可用
+                            // 而 emulate_call 会被探测闸门误拦。
+                            val viaFactory = runCatching {
+                                Class.forName(
+                                    "com.github.unidbg.arm.backend.Unicorn2Factory",
+                                    true,
+                                    UnidbgEmulator::class.java.classLoader
+                                )
+                                true
+                            }
+                            if (viaFactory.isSuccess) {
+                                unicornLoaded = true
+                                AppLog.i(
+                                    "libunicorn.so not in jniLibs; loaded via Unidbg " +
+                                        "NativeLoader (Unicorn2Factory static init) instead"
+                                )
+                            } else {
+                                unicornLoaded = false
+                                AppLog.w(
+                                    "libunicorn.so unavailable on this 64-bit device — " +
+                                        "System.loadLibrary failed (${directError.message}) and " +
+                                        "Unicorn2Factory static init failed (${viaFactory.exceptionOrNull()?.message}). " +
+                                        "Re-run build-unidbg-native.sh or install a release APK that bundles unicorn."
+                                )
+                            }
                         }
                 } else {
                     unicornLoaded = false
