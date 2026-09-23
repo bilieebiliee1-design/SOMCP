@@ -70,11 +70,15 @@ sealed interface UpdateDownloadEvent {
     data class Downloading(val source: String, val percent: Int) : UpdateDownloadEvent
     data object Verifying : UpdateDownloadEvent
 
-    /** Emitted when checksum verification is skipped (asset missing/unreachable). */
+    /** Emitted only when the release publishes no checksum asset at all. When a
+     *  checksum asset exists, verification is mandatory: fetch failure or digest
+     *  mismatch aborts the install instead of degrading to an unverified result. */
     data class VerifySkipped(val reason: String) : UpdateDownloadEvent
 }
 
-/** The checksum asset could not be fetched; verification is skipped (soft). */
+/** The checksum asset exists but could not be fetched from the official source.
+ *  Hard failure: the caller must abort the install (a mirror that silently
+ *  drops checksum requests must not be able to downgrade verification). */
 class ChecksumUnavailableException(message: String) : Exception(message)
 
 /** A checksum was fetched but did not match the download; hard failure. */
@@ -282,25 +286,19 @@ class GitHubUpdateManager(private val context: Context) {
                     }
                     require(downloaded) { lastFailure?.message ?: "All download mirrors failed" }
                     emit(UpdateDownloadEvent.Verifying)
-                    // Checksum verification is best-effort: the payload has already
-                    // been validated as a well-formed APK/ZIP above. If the checksum
-                    // asset cannot be fetched in time (mirror down / slow / missing),
-                    // we must NOT hang or hard-fail the whole update — we downgrade to
-                    // an unverified-but-installable result instead of dying on one
-                    // tree. A checksum that is fetched AND mismatches is still a hard
-                    // failure (that means tampering / corruption).
+                    // Verification is mandatory whenever the release publishes a
+                    // checksum asset: both a fetch failure and a mismatch abort
+                    // the install. The old soft "VerifySkipped" fallback let an
+                    // attacker who controls any mirror force an unverified install
+                    // simply by dropping the checksum request. Only releases with
+                    // no checksum asset at all install unverified (and without the
+                    // .verified marker, so cached reuse re-checks once a checksum
+                    // appears).
                     val verifiedHash = release.checksumUrl?.let { url ->
                         runCatching { verifyChecksum(partial, url, target.name) }
-                            .onFailure {
-                                emit(
-                                    UpdateDownloadEvent.VerifySkipped(
-                                        it.message ?: "checksum unavailable"
-                                    )
-                                )
-                            }
                             .getOrElse { failure ->
-                                if (failure is ChecksumMismatchException) throw failure
-                                null
+                                partial.delete()
+                                throw failure
                             }
                     } ?: run {
                         emit(UpdateDownloadEvent.VerifySkipped("no checksum published"))
@@ -350,10 +348,11 @@ class GitHubUpdateManager(private val context: Context) {
             val actualHash = runCatching { fileSha256(file) }.getOrNull() ?: return null
             return file.takeIf { actualHash == expectedHash }
         }
-        // No verified marker (checksum was unavailable at download time). Fall back
-        // to a structural check so a previously downloaded APK is still reusable
-        // instead of forcing a slow re-download that would likely be unverifiable
-        // again anyway.
+        // No verified marker: the file was never hash-verified. Only reuse it when
+        // the release publishes no checksum asset at all; when one exists, force
+        // a fresh download so the mandatory verification runs against the real
+        // bytes instead of trusting a structural (ZIP-magic) check.
+        if (release.checksumUrl != null) return null
         val looksLikeApk = runCatching {
             file.inputStream().use {
                 val header = ByteArray(4)
@@ -465,10 +464,10 @@ class GitHubUpdateManager(private val context: Context) {
     private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
         var expected: String? = null
         var lastFailure: Throwable? = null
-        // Bound the total time spent chasing checksum mirrors so a slow/hanging
-        // mirror cannot make the whole update appear stuck. Try a limited number
-        // of ranked candidates, each already under probeClient/client timeouts.
-        val candidates = rankedDownloadUrls(url) {}.take(CHECKSUM_MIRROR_ATTEMPTS)
+        // Official-domain candidates only (see DownloadMirrorPolicy.checksumCandidates):
+        // never let the checksum arrive over the same third-party mirrors the APK
+        // may have come from.
+        val candidates = DownloadMirrorPolicy.checksumCandidates(url)
         for (candidate in candidates) {
             try {
                 val request = Request.Builder().url(
@@ -489,12 +488,12 @@ class GitHubUpdateManager(private val context: Context) {
                 lastFailure = error
             }
         }
-        // Could not obtain a checksum -> signal "unavailable" (soft failure that
-        // the caller downgrades to an unverified install), NOT a mismatch.
+        // Could not obtain a checksum -> hard failure, propagated to the caller
+        // which aborts the install (deliberately no soft downgrade anymore).
         val expectedHash =
             expected
                 ?: throw ChecksumUnavailableException(
-                    lastFailure?.message ?: "All checksum mirrors failed"
+                    lastFailure?.message ?: "Checksum fetch failed"
                 )
         val actual = fileSha256(file)
         // Obtained a checksum but it does not match -> hard failure (tampering).
@@ -529,6 +528,5 @@ class GitHubUpdateManager(private val context: Context) {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
         private const val LATEST_RELEASE_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases/latest"
         private const val RELEASES_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases"
-        private const val CHECKSUM_MIRROR_ATTEMPTS = 4
     }
 }
