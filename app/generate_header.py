@@ -247,6 +247,10 @@ static const size_t kXorKeyLen = """ + str(len(key)) + """;
 // ---------------------------------------------------------------------------
 """)
     parts.append(fmt_array("kRkSalt", list(rk_salt)))
+    # No key injected: rk_cipher is empty, but a zero-length C array is not valid
+    # C++, so emit a single placeholder byte to keep the array well-formed. The
+    # authoritative "no key injected" signal is kRepApiKeyCipherLen (0), which
+    # the decoder checks before it ever reads kRepApiKeyCipher.
     parts.append(fmt_array("kRepApiKeyCipher", rk_cipher if rk_cipher else [0]))
     parts.append(f"static const size_t kRepApiKeyCipherLen = {len(rk_cipher)};\n\n")
 

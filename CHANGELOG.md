@@ -71,6 +71,11 @@
 - 修复分两步，缺一不可：豁免判据增加 `author_association` 写权限判定（取值集合与 job 级过滤逐字一致），随后在判据之后直接 `return`，跳过整套重复处置并置 `duplicate=false`，让后续 LLM 回复步骤照常运行。`issues` 事件载荷自带该字段，不需要额外 API 调用。`pr-auto-review.yml` 里两处同源判据（开头的限制期快速失败检查、末尾的 5 次警告计数）同批补齐；手动补跑时该字段从 resolve 步骤抓取的完整 PR 对象读取。
 - 行为变化：维护者自己提交的 issue 不再被记警告、发重复评论或关闭；维护者推送的 PR 不再计入警告、不会被限制关闭并删分支。非维护者路径不变。
 - 验证方式（不涉及本项目构建，未查询 CI）：① 按缩进把两个工作流里的 8 个 `script: |` 块切出，交给 node 22 逐块做语法校验，8/8 通过；另用一份人为注入语法错误的探针副本复核该流程确实会报错。② 用 mock 的 `github` / `context` / `core` 直接执行抽取出的步骤脚本做行为验证，issue 侧三组——`COLLABORATOR` 维护者与 `OWNER` 所有者均为「标签 0 / 评论 0 / 关闭 0」，`NONE` 普通用户仍为「1 / 1 / 1」（重复处置未被关掉）；PR 侧两组——维护者在限制期内「评论 0 / 关闭 0 / 删分支 0」，普通用户「1 / 1 / 1」。**只补豁免判据不改处置段时，issue 侧三组全部返回 1 / 1 / 1，正是这组 mock 把被漏掉的步骤 4 暴露出来**，语法校验完全看不出这个问题。
+- **按 PR #116 的自动审查意见补三处**（`UnidbgEmulator.kt`、`app/generate_header.py`、`reporting_key.h`、`sha256_impl.h`、`tools/test_reporting_key.py` / `.cpp`）。
+- 日志拼接不再依赖第三方异常的 `message`：`UnidbgEmulator.kt` 的回退探测分支改用局部变量 + `runCatching { ... }.getOrNull()` 取值，失败时退化为类名（`directError.javaClass.name` / `"unknown"`）。`getMessage()` 由异常类自己实现，理论上可以抛异常；而 `Result.onFailure` 内部没有 try/catch，从它的 lambda 里逃出去的异常会直接把整段 native 探测（keystone / capstone 自检在同一个块里）中断——日志代码本身不该是故障点。
+- 本 PR 新增的四个源码文件统一声明 `AGPL-3.0-only`：`reporting_key.h`、`sha256_impl.h`、`tools/test_reporting_key.py`、`tools/test_reporting_key.cpp`。此前 `test_reporting_key.py` 用的是「version 3 或任何更晚版本」的全文头，与同目录的 `tools/check_pr_review_ci_row.py` / `verify_unicorn_jni.py`（均 `AGPL-3.0-only`）、CI 里名为 `AGPL-3.0-only license compliance check` 的步骤，以及 `docs/legal/` 对外主张的许可都不一致。仓库其余历史文件仍是 `-or-later`，属既存漂移，不在本次范围。
+- `generate_header.py` 里 `kRepApiKeyCipher` 的占位字节补了源码侧注释。未注入 key 时向数组写单个 0 字节只是为了让 C 数组良构（零长数组不是合法 C++），真正的「无 key」判据是 `kRepApiKeyCipherLen == 0`，解码器在读数组之前先查它。
+- 验证方式（不涉及本项目构建，未查询 CI）：两个 `.py` 过 `py_compile`；改动的 Kotlin 文件过本机 ktlint，运行前先以探针副本确认该工具确实会报错、结果非空即为违规，最长改动行 144 字符（`.editorconfig` 上限 160）。
 
 ## 1.0.21
 
