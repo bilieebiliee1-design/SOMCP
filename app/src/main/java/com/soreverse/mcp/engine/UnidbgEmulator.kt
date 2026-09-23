@@ -159,10 +159,15 @@ class UnidbgEmulator(private val context: Context) {
                                 )
                             } else {
                                 unicornLoaded = false
+                                // 日志拼接本身也不能成为故障点：message 由第三方
+                                // 异常类实现，可能抛异常，取值失败时退化为类名。
+                                val directMsg = runCatching { directError.message }.getOrNull() ?: directError.javaClass.name
+                                val factoryError = viaFactory.exceptionOrNull()
+                                val factoryMsg = runCatching { factoryError?.message }.getOrNull() ?: factoryError?.javaClass?.name ?: "unknown"
                                 AppLog.w(
                                     "libunicorn.so unavailable on this 64-bit device — " +
-                                        "System.loadLibrary failed (${directError.message}) and " +
-                                        "Unicorn2Factory static init failed (${viaFactory.exceptionOrNull()?.message}). " +
+                                        "System.loadLibrary failed ($directMsg) and " +
+                                        "Unicorn2Factory static init failed ($factoryMsg). " +
                                         "Re-run build-unidbg-native.sh or install a release APK that bundles unicorn."
                                 )
                             }
