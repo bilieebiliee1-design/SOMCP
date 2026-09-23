@@ -1568,13 +1568,6 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return ok(res)
     }
 
-    /** Advertise the full built-in catalog by default. 29 tools is small enough
-     * for modern MCP clients and avoids hiding advanced SO workflows from AI.
-     * Lean exposure only activates for oversized catalogs, typically after
-     * dynamic APK-bridge tools are added, or if operators explicitly disable
-     * tools through policy.
-     */
-
     /** Returns a human-readable label for all online APK MCP bridges. */
     private fun bridgeLabel(): String {
         val prefixes = apkBridge.allPrefixes()
