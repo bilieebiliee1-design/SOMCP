@@ -39,6 +39,7 @@ Usage:
 
 Exit code 0 when every case passes, 1 otherwise.
 """
+import argparse
 import ast
 import json
 import os
@@ -170,8 +171,24 @@ def run_case(code, case):
     return rows, verdict, (SANDBOX / 'ci-downgraded.txt').exists()
 
 
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description='Assert that the CI-failure row of the LLM auto-review '
+                    'table renders as 严重 / `CI/CD` / 0.',
+        epilog='Exit code 0 when every case passes, 1 on failures, 2 on bad usage.')
+    parser.add_argument(
+        'workflow', nargs='?', type=pathlib.Path, default=DEFAULT_WORKFLOW,
+        help='path to pr-auto-review.yml (default: this repo\'s workflow file)')
+    return parser
+
+
 def main():
-    workflow = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_WORKFLOW
+    parser = build_parser()
+    args = parser.parse_args()
+    workflow = args.workflow.expanduser().resolve()
+    if not workflow.is_file():
+        # A bad path must print usage + a clean error, not a raw traceback.
+        parser.error(f'workflow file not found: {workflow}')
     code = extract_inline_python(workflow)
     ast.parse(code)  # syntax gate: a broken heredoc must fail here, not in CI
     print(f'{workflow.relative_to(REPO) if workflow.is_relative_to(REPO) else workflow}: '
