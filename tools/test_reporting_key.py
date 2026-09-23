@@ -45,16 +45,39 @@ GEN = REPO / "app" / "generate_header.py"
 HARNESS = REPO / "tools" / "test_reporting_key.cpp"
 CPP_DIR = REPO / "app" / "src" / "main" / "cpp"
 
-DEFAULT_CLANGXX_ROOT = Path("D:/Android/Sdk/ndk")
+def _ndk_search_roots() -> list[Path]:
+    """Candidate NDK roots in priority order: explicit NDK vars, then
+    $ANDROID_HOME/ndk, then typical per-OS SDK locations."""
+    roots: list[Path] = []
+    for var in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK_HOME", "NDK_ROOT"):
+        v = os.environ.get(var, "").strip()
+        if v:
+            roots.append(Path(v))
+    for var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        v = os.environ.get(var, "").strip()
+        if v:
+            roots.append(Path(v) / "ndk")
+    roots += [
+        Path("D:/Android/Sdk/ndk"),
+        Path.home() / "Android" / "Sdk" / "ndk",
+        Path.home() / "Library" / "Android" / "sdk" / "ndk",
+    ]
+    return roots
 
 
 def find_clangxx() -> Path | None:
     env = os.environ.get("RK_CLANGXX", "").strip()
     if env:
         return Path(env)
-    if DEFAULT_CLANGXX_ROOT.exists():
-        for c in sorted(DEFAULT_CLANGXX_ROOT.glob("*/toolchains/llvm/prebuilt/*/bin/clang++.exe")):
-            return c
+    for root in _ndk_search_roots():
+        if not root.is_dir():
+            continue
+        # An NDK var may point straight at one NDK, or at an `ndk/` dir of
+        # versioned children; probe both shapes.
+        for ndk in sorted([root, *filter(Path.is_dir, root.iterdir())]):
+            for c in sorted(ndk.glob("toolchains/llvm/prebuilt/*/bin/clang++*")):
+                if c.is_file():
+                    return c
     return None
 
 
@@ -108,7 +131,12 @@ def case_ok(name: str, cond: bool) -> bool:
 def main() -> int:
     clangxx = find_clangxx()
     if clangxx is None or not Path(clangxx).exists():
-        print("SKIP: no clang++ found (set RK_CLANGXX)")
+        print(
+            "SKIP: no NDK clang++ found. Install an Android NDK (r29+) and set one of "
+            "RK_CLANGXX (path to clang++), ANDROID_NDK_HOME/ANDROID_NDK_ROOT, or "
+            "ANDROID_HOME (searched as $ANDROID_HOME/ndk/*/); also probed "
+            "~/Android/Sdk/ndk, ~/Library/Android/sdk/ndk and D:/Android/Sdk/ndk."
+        )
         return 0
     try:
         subprocess.run(["node", "--version"], check=True, capture_output=True)
