@@ -24,4 +24,13 @@ class DownloadMirrorPolicyTest {
         val candidates = DownloadMirrorPolicy.candidates(original)
         assertEquals(listOf(original), candidates)
     }
+
+    @Test
+    fun checksumCandidatesNeverRouteThroughMirrors() {
+        val official = "https://github.com/example/app/releases/download/v1/app.apk.sha256"
+        assertEquals(listOf(official), DownloadMirrorPolicy.checksumCandidates(official))
+        // Non-github origins have no mirror set; they pass through unchanged.
+        val other = "https://cdn.example.com/app.sha256"
+        assertEquals(listOf(other), DownloadMirrorPolicy.checksumCandidates(other))
+    }
 }
