@@ -70,19 +70,12 @@ class SettingsStore(context: Context) {
             }
             prefs.edit().putBoolean("apkNpBridgeRemoved", true).apply()
         }
-        // One-time correction of misconfiguration introduced by the 1.0.10/1.0.11
-        // updates, which silently forced bindHost=127.0.0.1 and authEnabled=true
-        // onto existing installs and broke the LAN-link experience. Per the
-        // emergency 1.0.12 patch we reset these back to the user-friendly
-        // defaults (LAN on, no token) exactly once; users who prefer the stricter
-        // setup can re-enable it afterwards.
-        if (!prefs.getBoolean("lanDefaultsRestored_v1_0_12", false)) {
-            prefs.edit()
-                .putString("bindHost", "0.0.0.0")
-                .putBoolean("authEnabled", false)
-                .putBoolean("lanDefaultsRestored_v1_0_12", true)
-                .apply()
-        }
+        // The 1.0.12 emergency patch once carried a one-time "restore LAN defaults"
+        // migration that force-wrote bindHost=0.0.0.0 + authEnabled=false, silently
+        // disabling token auth for users who had it enabled. That write is gone for
+        // good: migrations must never turn a security setting off. Installs still
+        // pinned to the old forced-off state can re-enable from the settings UI,
+        // and new installs now start with auth enabled by default (see authEnabled).
     }
 
     var treeUri: Uri?
@@ -126,10 +119,13 @@ class SettingsStore(context: Context) {
             }
         ).apply()
 
+    /** Token auth is on by default: the server may bind 0.0.0.0 (LAN exposure is
+     *  the product's core use case), so an out-of-the-box install must never be
+     *  reachable without a token. Users can still turn it off explicitly. */
     var authEnabled: Boolean
-        get() = prefs.getBoolean("authEnabled", false)
+        get() = prefs.getBoolean("authEnabled", true)
         set(value) {
-            val wasEnabled = prefs.getBoolean("authEnabled", false)
+            val wasEnabled = prefs.getBoolean("authEnabled", true)
             prefs.edit().putBoolean("authEnabled", value).apply()
             // Rotating on enable invalidates any accessToken that leaked while
             // authentication was still off (e.g. via older app_config reads).

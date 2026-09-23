@@ -35,4 +35,18 @@ object DownloadMirrorPolicy {
         val xget = original.replaceFirst("https://github.com", "https://xget.xi-xu.me/gh")
         return (prefixes.map { it + original } + replacements + xget + original).distinct()
     }
+
+    /**
+     * Candidates for integrity artifacts (SHA-256 checksum files). Unlike APK
+     * downloads these must never route through third-party mirrors: a compromised
+     * or attacker-controlled mirror could forge the APK and its checksum together,
+     * or simply drop checksum requests to force an unverified install. GitHub
+     * release assets therefore fetch from the canonical github.com URL only;
+     * non-GitHub origins have no mirror set anyway and pass through unchanged.
+     */
+    fun checksumCandidates(original: String): List<String> = if (original.startsWith("https://github.com/")) {
+        listOf(original)
+    } else {
+        candidates(original)
+    }
 }
