@@ -46,7 +46,7 @@ SOMCP-1.0.19-x86_64.apk
 SOMCP-1.0.19-universal.apk
 ```
 
-可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI，存在校验资产时会在安装前强制验证 SHA-256。
+可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI；只要 release 存在校验资产，安装前就会强制验证 SHA-256，校验文件仅从 GitHub 官方域获取（与 APK 的第三方镜像下载严格分离），获取失败或不匹配都会直接中止安装。只有完全未发布校验资产的版本才允许以未验证状态安装。
 
 Release 输出体积随原生后端更新变化，以 GitHub Release 资产页面为准。
 
@@ -55,7 +55,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - Android 原生前台服务，不依赖 Python 运行环境。
 - Compose + Material 3 界面。
 - Ktor CIO MCP HTTP 服务，默认端口 `8000`。
-- MCP token 访问控制，可绑定 `127.0.0.1` 或 `0.0.0.0`。
+- MCP token 访问控制（出厂默认开启），可绑定 `127.0.0.1` 或 `0.0.0.0`。
 - 通过系统文件选择器授权工作目录。
 - 支持独立 `.so` 与 APK 内 `lib/<abi>/*.so` 工作流。
 - Rizin 原生后端：函数分析、CFG、xref、crypto 扫描、ESIL、字节搜索、反汇编、汇编。

@@ -352,13 +352,17 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 .put(
                     "_meta",
                     JSONObject()
-                        .put("builtInToolsAlwaysAdvertised", true)
+                        .put("builtInToolsAlwaysAdvertised", advertisesFullCatalog())
                         .put("fullToolCount", ToolCatalog.ALL.size)
                         .put("provenance", com.soreverse.mcp.core.Provenance.json())
                         .put("toolUsageGuide", toolUsageGuide())
                         .put(
                             "hint",
-                            "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to built-in tools (so_open + analyze_* + edit_*), NOT bridged APK tools."
+                            if (advertisesFullCatalog()) {
+                                "tools/list advertises the complete built-in catalog. IMPORTANT: Always route SO tasks to built-in tools (so_open + analyze_* + edit_*), NOT bridged APK tools."
+                            } else {
+                                "tools/list is filtered by server policy (leanTools/disabledTools); discover and describe the full catalog via meta_info (action=tools / action=describe). IMPORTANT: Always route SO tasks to built-in tools (so_open + analyze_* + edit_*), NOT bridged APK tools."
+                            }
                         )
                 )
 
@@ -370,18 +374,27 @@ class McpHttpServer(private val context: Context, private val port: Int, private
 
             "tools/list" -> {
                 val advertised = advertisedTools()
+                val fullCatalog = advertisesFullCatalog()
                 JSONObject()
                     .put("tools", advertised)
                     .put(
                         "_meta",
                         JSONObject()
-                            .put("builtInToolsAlwaysAdvertised", true)
+                            .put("builtInToolsAlwaysAdvertised", fullCatalog)
                             .put("returnedCount", advertised.length())
                             .put("totalCatalogCount", ToolCatalog.ALL.size)
                             .put("toolUsageGuide", toolUsageGuide())
                             .put(
                                 "hint",
-                                "IMPORTANT: so_open + analyze_* + edit_* + build_so are the built-in SO reverse engineering tools. Bridged APK tools are for APK-layer tasks only. Always route SO tasks to built-in tools."
+                                "IMPORTANT: so_open + analyze_* + edit_* + build_so are the built-in SO " +
+                                    "reverse engineering tools. Bridged APK tools are for APK-layer tasks " +
+                                    "only. Always route SO tasks to built-in tools." +
+                                    if (fullCatalog) {
+                                        ""
+                                    } else {
+                                        " Some built-in tools are hidden by lean/disabled settings; " +
+                                            "use meta_info (action=tools or action=describe) to discover them."
+                                    }
                             )
                     )
             }
@@ -463,6 +476,17 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return raw.split(',').any { it.trim() == name }
     }
 
+    private fun disabledToolNames(settings: SettingsStore): Set<String> = settings.disabledTools
+        .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    /** True while tools/list advertises the full built-in catalog, i.e. neither
+     *  lean-mode filtering nor policy-disabled tools remove anything from it.
+     *  Mirrors the `builtInToolsAlwaysAdvertised` capability marker clients read. */
+    private fun advertisesFullCatalog(): Boolean {
+        val settings = SettingsStore(context)
+        return !settings.leanTools && settings.disabledTools.isBlank()
+    }
+
     private fun toolsCount(): JSONObject {
         val settings = SettingsStore(context)
         val total = ToolCatalog.ALL.size
@@ -486,7 +510,9 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             JSONObject()
                 .put("totalCatalogCount", total)
                 .put("advertisedCount", advertisedCount)
-                .put("builtInToolsAlwaysAdvertised", true)
+                .put("builtInToolsAlwaysAdvertised", advertisesFullCatalog())
+                .put("leanTools", settings.leanTools)
+                .put("disabledToolCount", disabledToolNames(settings).size)
                 .put("apkBridgeAutoCompaction", true)
                 .put("apkBridgedAdvertised", apkBridged)
                 .put("perCategory", perCategory)
@@ -858,12 +884,29 @@ class McpHttpServer(private val context: Context, private val port: Int, private
      * inline `SchemaBuilder` DSL in the catalog, eliminating the historical
      * duplication between this server's `tools()` literal and the catalog
      * metadata. APK-merged tools are appended when the bridge is configured.
+     *
+     * Server-policy filtering: `disabledTools` are never advertised (they are
+     * already rejected at call time), and `leanTools` restricts the built-in
+     * surface to the CORE+META+lowlevel lean set — optionally boosted by the
+     * most-called EXTRA tools when `adaptiveLeanTools` is on. Hidden tools
+     * remain callable; discovery stays available via meta_info
+     * (action=describe / action=tools), matching the README's lean-mode claim.
      */
     private fun tools(): JSONArray {
         val settings = SettingsStore(context)
         val includeCategory = settings.includeCategoryInSchema
+        val disabled = disabledToolNames(settings)
+        val leanSet: Set<String>? = if (settings.leanTools) {
+            val popularity = if (settings.adaptiveLeanTools) ToolStats.popularity() else null
+            ToolCatalog.leanNames(popularity).toSet()
+        } else {
+            null
+        }
         val out = JSONArray()
         ToolCatalog.ALL.forEach { handler ->
+            val name = handler.meta.name
+            if (name in disabled) return@forEach
+            if (leanSet != null && name !in leanSet) return@forEach
             out.put(ToolCatalog.toolDescriptor(handler, includeCategory))
         }
         if (settings.apkMcpMergeTools) {
@@ -877,6 +920,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 emptyList()
             }
             toolsToShow.forEach { td ->
+                if (td.name in disabled) return@forEach
                 val schema =
                     td.inputSchema
                         ?: JSONObject().put("type", "object").put("properties", JSONObject())
@@ -903,7 +947,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             .put("runtime", runtimeInfo())
             .put("toolCount", advertisedTools().length())
             .put("totalCatalogCount", ToolCatalog.ALL.size)
-            .put("builtInToolsAlwaysAdvertised", true)
+            .put("builtInToolsAlwaysAdvertised", advertisesFullCatalog())
             .put("collectToolStats", SettingsStore(context).collectToolStats)
             .put("uptimeMillis", System.currentTimeMillis() - startedAt)
             .put("nativeBackends", nativeBackendStatus())
@@ -1140,12 +1184,16 @@ class McpHttpServer(private val context: Context, private val port: Int, private
             .put(
                 "exposure",
                 JSONObject()
-                    .put("builtInToolsAlwaysAdvertised", true)
+                    .put("builtInToolsAlwaysAdvertised", advertisesFullCatalog())
                     .put("advertisedCount", advertisedTools().length())
                     .put("totalCatalogCount", ToolCatalog.ALL.size)
                     .put(
                         "discoveryHint",
-                        "tools/list advertises the complete built-in catalog; meta_info action=describe/tools remains available for focused schemas and search."
+                        if (advertisesFullCatalog()) {
+                            "tools/list advertises the complete built-in catalog; meta_info action=describe/tools remains available for focused schemas and search."
+                        } else {
+                            "tools/list is filtered by leanTools/disabledTools; meta_info action=tools lists the whole catalog and action=describe fetches any tool's schema. Disabled tools stay rejected at call time."
+                        }
                     )
             )
             .put("categories", catMap)
@@ -1568,13 +1616,6 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         return ok(res)
     }
 
-    /** Advertise the full built-in catalog by default. 29 tools is small enough
-     * for modern MCP clients and avoids hiding advanced SO workflows from AI.
-     * Lean exposure only activates for oversized catalogs, typically after
-     * dynamic APK-bridge tools are added, or if operators explicitly disable
-     * tools through policy.
-     */
-
     /** Returns a human-readable label for all online APK MCP bridges. */
     private fun bridgeLabel(): String {
         val prefixes = apkBridge.allPrefixes()
@@ -1584,6 +1625,11 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         }
     }
 
+    /** Applies the bridge-catalog compaction on top of the policy-filtered
+     *  [tools] output: the lean/disabled filtering already happened in tools();
+     *  this extra trim only guards oversized catalogs produced by dynamic
+     *  APK-bridge tool floods.
+     */
     private fun advertisedTools(): JSONArray {
         val full = tools()
         if (full.length() <= ToolCatalog.ALL.size + 64) return full
