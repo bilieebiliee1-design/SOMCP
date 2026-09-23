@@ -2,7 +2,7 @@
 
 SOMCP 是一个运行在 Android 手机上的本地 SO 逆向 MCP 服务器。它通过 Streamable HTTP 暴露 MCP 工具，让客户端可以在手机上完成 ELF 结构分析、Rizin 反汇编/分析、LIEF ELF 修复/重写、补丁会话、构建导出、Cloudflare Tunnel 暴露和可选 APK MCP 桥接。
 
-当前版本：`1.0.19`
+当前版本：`1.0.22`（`app/build.gradle.kts` 的 `versionName`，`versionCode` 23）。已发布的正式产物见 [GitHub Releases](https://github.com/bilieebiliee1-design/SOMCP/releases)，两者不必同名：源码树里的版本可以领先于最近一次发布。
 
 包名：`com.soreverse.mcp`
 
@@ -36,17 +36,19 @@ app/build/outputs/apk/release/app-universal-release.apk
 
 应用只通过 `bilieebiliee1-design/SOMCP` 的 GitHub 正式 Releases 检测更新。普通提交、分支、构建产物和未发布 tag 都不会被视为更新，draft 与 prerelease 也不会进入自动更新通道。
 
-推荐 Release tag 使用 `v<versionName>`，并上传按 ABI 命名的 APK：
+推荐 Release tag 使用 `v<versionName>`，并上传按 ABI 命名的 APK（`.github/workflows/release.yml` 在打包阶段把 `app-<abi>-release.apk` 统一重命名为下面的名字、顺带生成 `SHA256SUMS`，所以资产名与 tag 里的版本号始终一致）：
 
 ```text
-SOMCP-1.0.19-arm64-v8a.apk
-SOMCP-1.0.19-armeabi-v7a.apk
-SOMCP-1.0.19-x86.apk
-SOMCP-1.0.19-x86_64.apk
-SOMCP-1.0.19-universal.apk
+SOMCP-1.0.22-arm64-v8a.apk
+SOMCP-1.0.22-armeabi-v7a.apk
+SOMCP-1.0.22-x86.apk
+SOMCP-1.0.22-x86_64.apk
+SOMCP-1.0.22-universal.apk
 ```
 
 可同时上传同名 `<apk>.sha256` 或统一的 `SHA256SUMS`。检测器会优先选择当前设备 ABI；只要 release 存在校验资产，安装前就会强制验证 SHA-256，校验文件仅从 GitHub 官方域获取（与 APK 的第三方镜像下载严格分离），获取失败或不匹配都会直接中止安装。只有完全未发布校验资产的版本才允许以未验证状态安装。
+
+v1.0.17 / v1.0.19 / v1.0.20 的资产是早年手工上传的 `SOMCP-main-<abi>.apk`，名字里没有版本号；更新器仍能按 ABI 子串选中并正常安装，只是人工核对资产与 tag 时会对不上。这几个 release 不再回溯改名（`SHA256SUMS` 里写的就是旧文件名，改名会让校验资产与文件对不上）。
 
 Release 输出体积随原生后端更新变化，以 GitHub Release 资产页面为准。
 
@@ -63,7 +65,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - 编辑会话：snapshot、rollback、undo、redo、check、audit、persist。
 - 构建导出：自动改名/覆盖、patch report、多输出变体、镜像到工作目录。
 - Cloudflare Tunnel：quick/named 隧道、keepalive、状态统计。
-- 可选 Unidbg：`emulate_call`、`emulate_dump`。**注意**：Unidbg 的 Android 原生库（`libcapstone.so` / `libkeystone.so` / `libunicorn.so` / `libjnidispatch.so`）不随 Debug APK 内置，需自行交叉编译 unidbg 上游 native 并放入 `app/src/main/jniLibs/<abi>/` 后重新构建，或在设备上额外安装；其中 `libunicorn.so` 必须是 unidbg unicorn2 的 JNI 桥（导出 `Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*`），只编译原始 unicorn 引擎不行，可用 `tools/verify_unicorn_jni.py` 校验。**官方 Release APK（v1.0.18+）已内置 arm64-v8a / armeabi-v7a / x86 / x86_64 全部四个 ABI 的 Unidbg 原生库**，直接安装即可使用。库缺失时 `system_control(action=status)` 的 `emulation.setup` 会明确标注 `requires-extra-install`，`emulate_*` 调用返回 `EMULATOR_UNAVAILABLE` 并说明缺失原因，不会伪装成可用。
+- 可选 Unidbg：`emulate_call`、`emulate_dump`。**注意**：Unidbg 的 Android 原生库（`libcapstone.so` / `libkeystone.so` / `libunicorn.so` / `libjnidispatch.so`）不随 Debug APK 内置，需自行交叉编译 unidbg 上游 native 并放入 `app/src/main/jniLibs/<abi>/` 后重新构建，或在设备上额外安装；其中 `libunicorn.so` 必须是 unidbg unicorn2 的 JNI 桥（导出 `Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*`），只编译原始 unicorn 引擎不行，可用 `tools/verify_unicorn_jni.py` 校验。**官方 Release APK（v1.0.18+）已内置 Unidbg 原生库，但只有 64 位 ABI 完整可用**：arm64-v8a / x86_64 四个库齐全，装完就能用 `emulate_call` / `emulate_dump`；armeabi-v7a / x86 只有 `libcapstone.so` / `libkeystone.so` / `libjnidispatch.so`，**不含 `libunicorn.so`**（unicorn/QEMU 需要 `__uint128_t`，Android NDK 的 32 位工具链不提供，`app/build.gradle.kts` 在打包阶段就对 32 位 ABI 剔除该库），所以 `emulate_*` 在 32 位设备上不可用，要用模拟执行得装 64 位 ABI 的包。库缺失时 `system_control(action=status)` 的 `emulation.setup` 会明确标注 `requires-extra-install`，`emulate_*` 调用返回 `EMULATOR_UNAVAILABLE` 并说明缺失原因，不会伪装成可用。
 - 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
 - APK 内 SO 使用流式扫描与按需提取，分析页可一键释放工作区、索引缓存和已结束的 Blutter 数据。
@@ -71,7 +73,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 
 ## MCP 工具体系
 
-当前目录共 38 个内置工具，默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
+当前共 40 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
 
 推荐工作流：
 
