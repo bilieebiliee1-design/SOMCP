@@ -105,7 +105,12 @@ object IntegrityGuard {
         val blockPass = !NativeProbe.isTamper(blockCode)
 
         if (earlyFailure != null ||
-            !javaPass || !nativePass || !v234Pass || !packagePass || !probePass || !blockPass
+            !javaPass ||
+            !nativePass ||
+            !v234Pass ||
+            !packagePass ||
+            !probePass ||
+            !blockPass
         ) {
             val reasons = mutableListOf<String>()
             if (earlyFailure != null) {
