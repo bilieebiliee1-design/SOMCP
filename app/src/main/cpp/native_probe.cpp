@@ -96,14 +96,19 @@ static int raw_sys_openat(const char* path) {
                      : "memory");
     return static_cast<int>(x0);
 #elif defined(__arm__)
-    register long r7 __asm__("r7") = SYS_openat;
+    // R7 is a reserved register on Android ARM (frame pointer / TLS), so the
+    // compiler rejects binding a C variable to it. Load the syscall number into
+    // R7 from a plain input inside the asm and clobber R7 so the frame pointer
+    // is preserved across the svc.
     register long r0 __asm__("r0") = AT_FDCWD;
     register long r1 __asm__("r1") = reinterpret_cast<long>(path);
     register long r2 __asm__("r2") = O_RDONLY | O_CLOEXEC;
-    __asm__ volatile("swi 0"
+    long nr = SYS_openat;
+    __asm__ volatile("mov r7, %1\n"
+                     "svc #0\n"
                      : "+r"(r0)
-                     : "r"(r7), "r"(r1), "r"(r2)
-                     : "memory");
+                     : "r"(nr), "r"(r1), "r"(r2)
+                     : "r7", "memory");
     return static_cast<int>(r0);
 #else
     return static_cast<int>(::syscall(SYS_openat, AT_FDCWD, path,
