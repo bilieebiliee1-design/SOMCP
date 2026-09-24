@@ -273,18 +273,28 @@ jobs:
               echo "::warning::Failed to query CI check-runs (elapsed ${elapsed}s); retrying."
               sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
             fi
-            count=$(printf '%s' "$resp" | jq -r '.total_count // 0')
-            if [ "$count" -eq 0 ]; then
-              echo "::notice::No CI check-runs yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
-              sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
-            fi
-            ci_found=true
-            incomplete=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
-              '.check_runs[]? | select((.id as $i | $self | index($i) | not) and .status != "completed") | .name' | wc -l)
-            if [ "$incomplete" -eq 0 ]; then
-              all_done=true
-              break
-            fi
+          count=$(printf '%s' "$resp" | jq -r '.total_count // 0')
+          if [ "$count" -eq 0 ]; then
+            echo "::notice::No CI check-runs yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
+            sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
+          fi
+          # 排除本 workflow 自身的 check-run（review/reply），统计外部 CI 数量。
+          # PR 刚 reopened/synchronize 时外部 CI 可能尚未创建，此时只有本工作流
+          # 自身的 check-run；若直接认为 all_done=true，会导致 review 在 CI 未跑完
+          # 前过早给出结论。
+          external_count=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+            '.check_runs[]? | select(.id as $i | $self | index($i) | not) | .name' | wc -l)
+          if [ "$external_count" -eq 0 ]; then
+            echo "::notice::No external CI check-runs found yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
+            sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
+          fi
+          ci_found=true
+          incomplete=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
+            '.check_runs[]? | select((.id as $i | $self | index($i) | not) and .status != "completed") | .name' | wc -l)
+          if [ "$incomplete" -eq 0 ]; then
+            all_done=true
+            break
+          fi
             echo "::notice::CI still running (${incomplete} check(s) pending); elapsed ${elapsed}s."
             sleep "$PERIOD"; elapsed=$((elapsed+PERIOD))
           done
