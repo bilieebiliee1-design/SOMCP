@@ -2,6 +2,15 @@
 
 # 更新日志
 
+## 1.0.23
+- **针对三类过签（DPatch/去签）手法的通道级防御**（`app/src/main/cpp/native_probe.cpp`、`nativecore/NativeProbe.kt`、`core/IntegrityGuard.kt`、`app/src/main/cpp/CMakeLists.txt`、`.github/workflows/build.yml` / `release.yml`）。
+- 既有缺口（本次修复对象）：native 全部校验建立在 `::open(packageCodePath)` 上，而 `open/openat/fopen` 正是 xhook 系 PLT hook 的首选目标——过签载荷（SoLab `original_apk` 模式的 `mt_jni.c`、DPatch 的 `libpandora.so` native redirect）把本 .so PLT/GOT 里的这几个符号替换成「指向嵌入的原始签名副本」，此后一切文件系统级校验读到的都是伪造文件。新增反重定向通道：arm64/arm 用 `svc`/`swi` 指令直发 `openat`（该调用不经过任何 PLT 表项，无 GOT 可改；x86 系回落 `syscall()`）；打开后以 dev+ino 交叉比对 `fstat(fd)` 与 `stat(path)`（被重定向的 open 两者对不上）；对「运行中安装包」的校验额外要求所打开的 inode 是 `/proc/self/maps` 中某个 `.apk` 映射（内核实际执行所依据的镜像集合——路径字符串可被 Java 层伪造传入，映射集合改不了；maps 无 `.apk` 条目的完全解包安装视为不确定、不误杀）。`nativeVerifyBlock` 发现路径被换与签名无效同级处置：返回前直接 `_exit(173)`，改返回值救不回。
+- 三条互补通道封死（过签载荷三板斧逐一对位）：`PackageInfo.CREATOR` 替换（normal/original_apk 用它伪造 PackageManager 返回）——`inspect()` 新增 CREATOR 类加载器自检，真品是 boot 框架类（classLoader 为 null），载荷自带的 Creator 必然挂在 app 可见的 ClassLoader 上；`appComponentFactory` 改写（DPatch 以 `com.pandora.core.AppFactory` 接管启动、早于 Application 代码）——`ApplicationInfo.appComponentFactory` 非空即记威胁（本应用不声明 factory），且 Application 实例类名必须精确等于 `com.soreverse.mcp.SoReverseApplication`（防"代理类继承本体再装 hook"的子类化）；`/proc/self/maps` 检测表新增 `pandora` / `dobby` / `lsplant` 与 `solab_signature`（运行期 hex 解码，同既有 `marked()` 惯例）。
+- attachBaseContext 早门禁从「失败仅记日志」改为**累积 fail-closed**：失败原因写入 `earlyNativeFailure`，`enforce()` 在 onCreate 无条件先消费该标志再跑其余检查。
+- 常量暴露面三处收紧：① `CMakeLists.txt` 在 `TM` 未设时回落**全零** XOR key（等于 pin 在二进制里就是明文，而此前没有任何 workflow 注入 `TM`，即所有 CI 发布产物均如此）——回退改为每次构建随机 key（key 与密文本就同 .so、构建内自洽，随机不损失任何功能），并给 `build.yml` / `release.yml` 的 release 构建 env 补上 `TM: ${{ secrets.TM }}`；② 解码后的 pin（SHA-256 / 包名）用毕 `rk::secure_zero` 清零，不再常驻堆可被内存扫描；③ `NativeProbe.matches` 的 MISMATCH 日志不再打印完整 pinned 摘要，`nativeMatchPackageId` 日志不再回显期望包名，源码注释里的明文期望摘要一并删除。
+- 修改版本为1.0.23，版本号为24
+- 验证方式（本机 Gradle 全量构建因 dl.google.com 读超时不可用，见下条）：NDK r29 clang++ `-std=c++17 -Wall -Wextra` 对 aarch64 / arm / x86_64 / i686（API 26）四个目标离线编译 `native_probe.cpp`——覆盖两处内联汇编分支与通用回退——全部通过，新增代码零警告（残留警告均为改动前既有项）；期间编译期坐实 `explicit_bzero` 在 bionic（API < 34 声明被宏屏蔽）不可用，改用项目自带 `rk::secure_zero`；两个 Kotlin 改动文件 ktlint 1.8.0 零违规；`external fun` 与 C++ `Java_..._NativeProbe_*` 两侧参数同步（新增的 `requireRunning` 共 3 个入口，Kotlin 8 个 external 与 C++ 8 个实现一一对应）。**Kotlin 全量类型检查（compileDebugKotlin）与真机回归未执行**，首次可用网络时随 CI 补验。
+
 ## 1.0.22
 - **加强签名校验：v2/v3 从「证书比对」升级为「真实签名验证 + 内容摘要比对」**（`app/src/main/cpp/native_probe.cpp` +947、`nativecore/NativeProbe.kt` +65、`core/IntegrityGuard.kt` +40/−4）。
 - 原设计的实际缺口（本次修复的对象）：`matchesV234` 做的是「把签名块里的证书取出来，算 SHA-256，与 pin 比字符串」。这只证明块里**写着**发布签名者，不证明任何签名、也不碰文件内容。签名块是个普通 blob：改掉 `lib/` 或 `classes.dex` 里的字节、把原签名块原样留在文件里（此时它的签名只是过期），在装包方自身的签名校验被绕过的设备上（CorePatch 一类「去签名校验」模块、root 下改写安装校验）照样能装上、能运行，而证书比对依旧通过。`kProbeCrcMismatch` 也拦不住：它比的是「磁盘载荷 CRC vs 中央目录 CRC」，重打包时两个 CRC 都会被重算。
