@@ -382,7 +382,7 @@ object IntegrityGuard {
     private fun factoryHijackThreat(context: Context): String? = runCatching {
         val factory = context.applicationInfo?.appComponentFactory
         if (!factory.isNullOrEmpty()) {
-            "foreign appComponentFactory declared: $factory"
+            "foreign appComponentFactory declared (value withheld)"
         } else {
             null
         }
@@ -399,9 +399,8 @@ object IntegrityGuard {
     private fun applicationClassThreat(context: Context): String? {
         if (context !is android.app.Application) return null
         val expected = "com.soreverse.mcp.SoReverseApplication"
-        val actual = context.javaClass.name
-        return if (actual != expected) {
-            "application instance class is not the declared one: $actual"
+        return if (context.javaClass.name != expected) {
+            "application instance class is not the declared one"
         } else {
             null
         }
