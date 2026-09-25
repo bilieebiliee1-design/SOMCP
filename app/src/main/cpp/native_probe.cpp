@@ -45,6 +45,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -80,7 +81,11 @@
 //      one of the `.apk` files mapped into this process according to
 //      /proc/self/maps — the image the kernel actually executes from. The
 //      path string may be attacker-influenced (it comes through JNI), but the
-//      mapping set is produced by the kernel at exec/dlopen time.
+//      mapping set is produced by the kernel at exec/dlopen time. Mappings
+//      that are themselves patcher artifacts (LSPatch keeps the preserved
+//      original under the app's cache/lspatch/, never under /data/app/) are
+//      excluded from the match set, so mmap'ing the original APK purely to
+//      get its inode whitelisted does not pass the gate.
 // ---------------------------------------------------------------------------
 
 static int raw_sys_openat(const char* path) {
@@ -125,11 +130,32 @@ enum MapStatus {
 };
 
 /**
+ * True when an `.apk` mapping path carries a runtime-patcher artifact marker:
+ * LSPatch keeps the preserved original at <pkg>/cache/lspatch/origin/<crc>.apk
+ * and its loader payload under assets/lspatch/. The genuine build's own package
+ * never appears under such names.
+ */
+static bool mapping_marker_suspicious(const std::string& lower) {
+    return lower.find("lspatch") != std::string::npos ||
+           lower.find("loader.dex") != std::string::npos ||
+           lower.find("origin.apk") != std::string::npos;
+}
+
+/**
  * Verifies that [fd] refers to one of the `.apk` images this process actually
  * executes from, per /proc/self/maps. Returns false only when the maps listing
  * DOES contain .apk mappings and none of them matches [fd]'s dev+ino; an
  * unreadable or .apk-free listing (fully-extracted install) is inconclusive
  * and reported as a pass so a quirk of the device cannot brick the app.
+ *
+ * Match qualification is two-tier:
+ *   - a mapping carrying a patcher marker is NEVER a match (an attacker who
+ *     mmaps the original APK purely to get its inode whitelisted is caught);
+ *   - a mapping outside /data/app/ is only trusted when the process has no
+ *     /data/app/ `.apk` mapping at all (instant/dry-run installs legitimately
+ *     run from /data/local/...; once a genuine install directory is mapped,
+ *     an inode match against an apk elsewhere is redirect evidence, not
+ *     running-package evidence).
  */
 static bool fd_is_mapped_apk(int fd) {
     struct stat st;
@@ -138,8 +164,14 @@ static bool fd_is_mapped_apk(int fd) {
     int mfd = raw_sys_openat("/proc/self/maps");
     if (mfd < 0) return true;
 
+    struct ApkMapping {
+        dev_t dev;
+        ino_t ino;
+        bool in_data_app;
+        bool marked;
+    };
+    std::vector<ApkMapping> maps;
     bool saw_apk = false;
-    bool matched = false;
     char buf[4096];
     std::string carry;
     for (;;) {
@@ -171,24 +203,36 @@ static bool fd_is_mapped_apk(int fd) {
             if (bang != std::string::npos) path = path.substr(0, bang);
             if (path.size() < 4 || path.compare(path.size() - 4, 4, ".apk") != 0)
                 continue;
-            saw_apk = true;
             // f[3] is "dev" as hex:hex, f[4] is the inode in decimal
             unsigned int major = 0, minor = 0;
             if (std::sscanf(f[3].c_str(), "%x:%x", &major, &minor) != 2)
                 continue;
-            dev_t dev = makedev(major, minor);
-            ino_t ino = static_cast<ino_t>(std::strtoull(f[4].c_str(), nullptr, 10));
-            if (dev == st.st_dev && ino == st.st_ino) {
-                matched = true;
-                break;
-            }
+            std::string lower = path;
+            for (auto& ch : lower) ch = static_cast<char>(::tolower(ch));
+            saw_apk = true;
+            maps.push_back(ApkMapping{
+                static_cast<dev_t>(makedev(major, minor)),
+                static_cast<ino_t>(std::strtoull(f[4].c_str(), nullptr, 10)),
+                strncmp(path.c_str(), "/data/app/", 10) == 0,
+                mapping_marker_suspicious(lower),
+            });
         }
-        if (matched) break;
         if (carry.size() > (1u << 20)) carry.clear();  // unbounded-line guard
     }
     ::close(mfd);
     if (!saw_apk) return true;  // inconclusive
-    return matched;
+
+    bool any_trusted_dir = false;
+    for (const auto& m : maps) {
+        if (!m.marked && m.in_data_app) { any_trusted_dir = true; break; }
+    }
+    for (const auto& m : maps) {
+        if (m.marked) continue;  // patcher artifact: never evidence
+        if (!m.in_data_app && any_trusted_dir) continue;  // outside the install
+        // dir while a real install mapping exists: redirect evidence
+        if (m.dev == st.st_dev && m.ino == st.st_ino) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------

@@ -345,6 +345,8 @@ object IntegrityGuard {
         creatorIntegrityThreat()?.let { threats += it }
         factoryHijackThreat(context)?.let { threats += it }
         applicationClassThreat(context)?.let { threats += it }
+        lspatchClassLoaderThreat(context)?.let { threats += it }
+        lspatchMetaDataThreat(context)?.let { threats += it }
         val maps = procMapsIndicators()
         if (maps.isNotEmpty()) threats += maps
         val ports = openLocalInstrumentationPorts()
@@ -406,6 +408,37 @@ object IntegrityGuard {
         }
     }
 
+    /**
+     * LSPatch (and metaloader derivatives) inject their payload by rewriting the
+     * manifest appComponentFactory and loading their Java side from
+     * assets/lspatch/loader.dex through an InMemoryDexClassLoader placed on the
+     * app's classloader parent chain. The genuine build can never resolve that
+     * class, so a successful load means the loader is present in this process.
+     */
+    private fun lspatchClassLoaderThreat(context: Context): String? = runCatching {
+        val loader = context.classLoader
+        // Class.forName(String, boolean, ClassLoader) - do NOT initialize the
+        // class: only its resolvability is the evidence.
+        Class.forName("org.lsposed.lspatch.loader.LSPApplication", false, loader)
+        "lspatch loader class resolvable from the app classloader chain"
+    }.getOrNull()
+
+    /**
+     * LSPatch's patcher writes its bypass config (sigBypassLevel, the original
+     * signature, the hijacked factory name) into the manifest as
+     * <meta-data android:name="lspatch">. The genuine build declares no such
+     * key, and the manifest's own integrity is already covered by the native
+     * content-digest check, so a visible key here is unambiguous evidence.
+     */
+    private fun lspatchMetaDataThreat(context: Context): String? = runCatching {
+        val meta = context.applicationInfo?.metaData
+        if (meta != null && meta.containsKey("lspatch")) {
+            "lspatch meta-data present in the active manifest"
+        } else {
+            null
+        }
+    }.getOrNull()
+
     private fun tracerPid(): Int = runCatching {
         File("/proc/self/status").useLines { lines ->
             lines.firstOrNull { it.startsWith("TracerPid:") }
@@ -438,7 +471,15 @@ object IntegrityGuard {
                 "pandora",
                 "dobby",
                 "lsplant",
-                marked("736f6c61625f7369676e6174757265")
+                marked("736f6c61625f7369676e6174757265"),
+                // LSPatch: liblspatch.so / the cache/lspatch origin.apk redirect
+                // target / its in-memory loader dex and the Xposed API surface
+                // it ships:
+                "lspatch",
+                "lspd",
+                marked("64652e726f6276"),
+                "loader.dex",
+                "origin.apk"
             )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
