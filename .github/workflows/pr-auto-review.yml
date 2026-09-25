@@ -244,6 +244,31 @@ jobs:
           # 本步骤误跳过等待）。
           SELF_PREFIX="${GITHUB_WORKFLOW}"
 
+          # 排除本 run 自身的 check-run。原来的 `startswith($self_prefix)`
+          # 判定是失效的：check-run 的 .name 是 **job 名**（本 workflow 里是
+          # "review"/"reply"），而 $SELF_PREFIX 是 workflow 名
+          # （"LLM Auto-Review PRs"），两者永远不相等，于是本 job 把自己的
+          # in_progress check-run 当成"外部 CI"，等待循环直到 MAX_WAIT 超时
+          # 才放行（表现为"Test v7 已绿，review 却仍在等待 CI"）。
+          # 精确判据是 check_suite：同一 workflow run 的所有 job 共用同一个
+          # check-suite id（实测 review/reply 同属，Test v7 的 checks 属另一个）。
+          self_suites=$(curl -sS -f -L \
+              -H "Authorization: Bearer ${TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" 2>/dev/null \
+            | jq -r '((.check_suite_id // "") | tostring)')
+          if [ -z "$self_suites" ]; then
+            echo "::warning::Failed to resolve own check-suite id; falling back to workflow-name prefix."
+            self_suites=""
+          fi
+          # 统一的 jq 前置表达式：is_ext 为真表示该 check-run 属于「外部 CI」。
+          # 判据：check_suite.id 不在本 run 的 suite 集合里；若拿不到 suite
+          # （接口失败等），才退回 workflow 名前缀判定。
+          JQ_PRE='def is_self: ((.check_suite.id // "" | tostring)) as $sid
+            | ((((($self_suites | split(" ")) - [""]) | index($sid)) != null)
+               or (($self_suites == "") and (((.name // "") | startswith($self_prefix))
+                                             or (.name == $self_job))));
+            def is_ext: is_self | not;'
+
           # CI is only configured for the main branch (test-v7.yml); PRs
           # targeting other branches have no CI to wait on.
           if [ "${BASE_REF:-}" != "main" ]; then
@@ -270,15 +295,15 @@ jobs:
           # PR 刚 reopened/synchronize 时外部 CI 可能尚未创建，此时只有本工作流
           # 自身的 check-run；若直接认为 all_done=true，会导致 review 在 CI 未跑完
           # 前过早给出结论。
-          external_count=$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
-            '.check_runs[]? | select(.name | startswith($self_prefix) | not) | .name' | wc -l)
+          external_count=$(printf '%s' "$resp" | jq -r --arg self_suites "$self_suites" --arg self_prefix "$SELF_PREFIX" --arg self_job "${GITHUB_JOB:-}" \
+            "${JQ_PRE}.check_runs[]? | select(is_ext) | .name" | wc -l)
           if [ "$external_count" -eq 0 ]; then
             echo "::notice::No external CI check-runs found yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
             sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
           fi
           ci_found=true
-          incomplete=$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
-            '.check_runs[]? | select((.name | startswith($self_prefix) | not) and .status != "completed") | .name' | wc -l)
+          incomplete=$(printf '%s' "$resp" | jq -r --arg self_suites "$self_suites" --arg self_prefix "$SELF_PREFIX" --arg self_job "${GITHUB_JOB:-}" \
+            "${JQ_PRE}.check_runs[]? | select(is_ext) | select(.status != \"completed\") | .name" | wc -l)
           if [ "$incomplete" -eq 0 ]; then
             all_done=true
             break
@@ -302,14 +327,13 @@ jobs:
 
           {
             printf '提交 %s 的 CI 检查结果（已等待 CI 完成后读取）：\n' "$HEAD_SHA"
-            printf '共 %s 项。\n' "$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" '[.check_runs[]? | select(.name | startswith($self_prefix) | not)] | length')"
-            printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
-              '.check_runs[]? | select(.name | startswith($self_prefix) | not) | "  - " + .name + "：" + ((.conclusion // .status) // "unknown")'
+            printf '共 %s 项。\n' "$(printf '%s' "$resp" | jq -r --arg self_suites "$self_suites" --arg self_prefix "$SELF_PREFIX" --arg self_job "${GITHUB_JOB:-}" "${JQ_PRE}[.check_runs[]? | select(is_ext)] | length")"
+            printf '%s' "$resp" | jq -r --arg self_suites "$self_suites" --arg self_prefix "$SELF_PREFIX" --arg self_job "${GITHUB_JOB:-}" "${JQ_PRE}.check_runs[]? | select(is_ext) | \"  - \" + .name + \"：\" + ((.conclusion // .status) // \"unknown\")"
           } > /tmp/ci-results.txt
 
-          failing=$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
-            '[.check_runs[]? | select(.name | startswith($self_prefix) | not) |
-              select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral" and .conclusion != "cancelled")] | length')
+          failing=$(printf '%s' "$resp" | jq -r --arg self_suites "$self_suites" --arg self_prefix "$SELF_PREFIX" --arg self_job "${GITHUB_JOB:-}" \
+            "${JQ_PRE}[.check_runs[]? | select(is_ext) |
+              select(.conclusion != \"success\" and .conclusion != \"skipped\" and .conclusion != \"neutral\" and .conclusion != \"cancelled\")] | length")
           printf '%s' "$failing" > /tmp/ci-failing.txt
           if [ "$failing" -gt 0 ]; then
             echo "ci_state=fail" >> "$GITHUB_OUTPUT"
