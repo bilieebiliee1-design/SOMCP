@@ -128,6 +128,24 @@ jobs:
           done
           echo "Unidbg native libs present for required ABIs."
 
+      # Build the rz-ghidra Ghidra decompiler plugin (libcore_ghidra.so) and copy
+      # it into jniLibs for all four ABIs. Fatal on failure so a signed APK can
+      # never silently lack the Ghidra backend (the app logs "ghidra plugin
+      # missing" and degrades to no pseudocode otherwise — see 25_09-18-04-09_117.log).
+      - name: Build rz-ghidra plugin (libcore_ghidra.so)
+        run: bash build-rz-ghidra-android.sh
+
+      - name: Verify rz-ghidra plugin in jniLibs
+        run: |
+          set -euo pipefail
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -f "app/src/main/jniLibs/$abi/libcore_ghidra.so" || {
+              echo "::error::missing app/src/main/jniLibs/$abi/libcore_ghidra.so after build-rz-ghidra-android.sh"
+              exit 1
+            }
+          done
+          echo "libcore_ghidra.so present for all four ABIs."
+
       - name: Set up Go for cloudflared cross-compile
         # v7 runs on the Node 24 runtime and clears the `punycode` (DEP0040)
         # deprecation warning that v5 emitted on the Node 24 runner.
