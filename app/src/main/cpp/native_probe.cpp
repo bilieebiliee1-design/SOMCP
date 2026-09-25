@@ -46,18 +46,151 @@
 #include <vector>
 #include <cstring>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <sys/sysmacros.h>
 #include <android/log.h>
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
 #include <zlib.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <fcntl.h>
 #include <unistd.h>
 
 #define LOG_TAG "NativeProbe"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+// ---------------------------------------------------------------------------
+// Anti-redirect raw file access
+//
+// Every filesystem-level identity check in this file used to open the package
+// file through the libc `open`, which lives on this .so's PLT/GOT. Hooking
+// frameworks (xhook/bhook PLT patching — the SoLab "original_apk" mode and the
+// DPatch "native redirect" payload do exactly this) redirect open/openat/fopen
+// for a target ELF to a preserved copy of the ORIGINAL APK, which makes every
+// file-content check pass against the untampered file while the process really
+// executes the repack. Defense in depth used here:
+//   1. open via a raw `svc` instruction on arm64 (no PLT/GOT entry involved;
+//      the payloads only patch libc symbol stubs, never inline assembly);
+//   2. cross-check fstat(fd) against stat(path) by dev+ino, so an open that
+//      was redirected to a different file is caught even without maps;
+//   3. for checks against the RUNNING package, require the opened inode to be
+//      one of the `.apk` files mapped into this process according to
+//      /proc/self/maps — the image the kernel actually executes from. The
+//      path string may be attacker-influenced (it comes through JNI), but the
+//      mapping set is produced by the kernel at exec/dlopen time.
+// ---------------------------------------------------------------------------
+
+static int raw_sys_openat(const char* path) {
+#if defined(__aarch64__)
+    register long x8 __asm__("x8") = SYS_openat;
+    register long x0 __asm__("x0") = AT_FDCWD;
+    register long x1 __asm__("x1") = reinterpret_cast<long>(path);
+    register long x2 __asm__("x2") = O_RDONLY | O_CLOEXEC;
+    register long x3 __asm__("x3") = 0;
+    __asm__ volatile("svc #0"
+                     : "+r"(x0)
+                     : "r"(x8), "r"(x1), "r"(x2), "r"(x3)
+                     : "memory");
+    return static_cast<int>(x0);
+#elif defined(__arm__)
+    // R7 is a reserved register on Android ARM (frame pointer / TLS), so the
+    // compiler rejects binding a C variable to it. Load the syscall number into
+    // R7 from a plain input inside the asm and clobber R7 so the frame pointer
+    // is preserved across the svc.
+    register long r0 __asm__("r0") = AT_FDCWD;
+    register long r1 __asm__("r1") = reinterpret_cast<long>(path);
+    register long r2 __asm__("r2") = O_RDONLY | O_CLOEXEC;
+    long nr = SYS_openat;
+    __asm__ volatile("mov r7, %1\n"
+                     "svc #0\n"
+                     : "+r"(r0)
+                     : "r"(nr), "r"(r1), "r"(r2)
+                     : "r7", "memory");
+    return static_cast<int>(r0);
+#else
+    return static_cast<int>(::syscall(SYS_openat, AT_FDCWD, path,
+                                      O_RDONLY | O_CLOEXEC, 0));
+#endif
+}
+
+/** Result of mapping a package file through the anti-redirect channel. */
+enum MapStatus {
+    kMapOk = 0,
+    kMapFailed = 1,         // could not open/read the path at all
+    kMapRedirected = 2,     // fd and path name different files (open() hooked)
+    kMapNotRunningApk = 3,  // opened file is not the mapped running APK
+};
+
+/**
+ * Verifies that [fd] refers to one of the `.apk` images this process actually
+ * executes from, per /proc/self/maps. Returns false only when the maps listing
+ * DOES contain .apk mappings and none of them matches [fd]'s dev+ino; an
+ * unreadable or .apk-free listing (fully-extracted install) is inconclusive
+ * and reported as a pass so a quirk of the device cannot brick the app.
+ */
+static bool fd_is_mapped_apk(int fd) {
+    struct stat st;
+    if (::fstat(fd, &st) != 0) return true;  // inconclusive
+
+    int mfd = raw_sys_openat("/proc/self/maps");
+    if (mfd < 0) return true;
+
+    bool saw_apk = false;
+    bool matched = false;
+    char buf[4096];
+    std::string carry;
+    for (;;) {
+        ssize_t n = ::read(mfd, buf, sizeof(buf));
+        if (n <= 0) break;
+        carry.append(buf, static_cast<size_t>(n));
+        size_t nl;
+        while ((nl = carry.find('\n')) != std::string::npos) {
+            std::string line = carry.substr(0, nl);
+            carry.erase(0, nl + 1);
+            // format: start-end perms offset dev inode [path]
+            // dev/ino come after 4 whitespace-separated fields; the path (if
+            // any) starts at the 6th field, after exactly one space.
+            std::string f[5];
+            size_t pos = 0;
+            bool has_path = true;
+            for (size_t fi = 0; fi < 5; fi++) {
+                while (pos < line.size() && line[pos] == ' ') pos++;
+                size_t s = pos;
+                while (pos < line.size() && line[pos] != ' ') pos++;
+                if (pos == s) { has_path = false; break; }
+                f[fi] = line.substr(s, pos - s);
+            }
+            if (!has_path) continue;
+            while (pos < line.size() && line[pos] == ' ') pos++;
+            if (pos >= line.size()) continue;  // no path column ([vdso], anon)
+            std::string path = line.substr(pos);
+            size_t bang = path.find('!');  // "base.apk!lib/foo.so"
+            if (bang != std::string::npos) path = path.substr(0, bang);
+            if (path.size() < 4 || path.compare(path.size() - 4, 4, ".apk") != 0)
+                continue;
+            saw_apk = true;
+            // f[3] is "dev" as hex:hex, f[4] is the inode in decimal
+            unsigned int major = 0, minor = 0;
+            if (std::sscanf(f[3].c_str(), "%x:%x", &major, &minor) != 2)
+                continue;
+            dev_t dev = makedev(major, minor);
+            ino_t ino = static_cast<ino_t>(std::strtoull(f[4].c_str(), nullptr, 10));
+            if (dev == st.st_dev && ino == st.st_ino) {
+                matched = true;
+                break;
+            }
+        }
+        if (matched) break;
+        if (carry.size() > (1u << 20)) carry.clear();  // unbounded-line guard
+    }
+    ::close(mfd);
+    if (!saw_apk) return true;  // inconclusive
+    return matched;
+}
+
 // ---------------------------------------------------------------------------
 // Memory-mapped APK reader
 //
@@ -74,26 +207,44 @@ public:
     MappedApk(const MappedApk&) = delete;
     MappedApk& operator=(const MappedApk&) = delete;
 
-    bool map(const char* path) {
+    bool map(const char* path) { return map_status(path, false) == kMapOk; }
+
+    /**
+     * Maps [path] through the anti-redirect channel.
+     * @param require_running true when [path] claims to be the package this
+     *        process executes from; the mapping is then additionally cross-
+     *        checked against /proc/self/maps.
+     */
+    MapStatus map_status(const char* path, bool require_running) {
         reset();
-        fd_ = ::open(path, O_RDONLY);
-        if (fd_ < 0) return false;
-        struct stat st;
-        if (::fstat(fd_, &st) != 0 || st.st_size <= 0) {
+        fd_ = raw_sys_openat(path);
+        if (fd_ < 0) return kMapFailed;
+        struct stat st_fd;
+        if (::fstat(fd_, &st_fd) != 0 || st_fd.st_size <= 0) {
             reset();
-            return false;
+            return kMapFailed;
         }
-        size_ = static_cast<size_t>(st.st_size);
+        struct stat st_path;
+        if (::stat(path, &st_path) == 0 &&
+            (st_path.st_dev != st_fd.st_dev || st_path.st_ino != st_fd.st_ino)) {
+            // open() was redirected: the fd names a different file than path.
+            reset();
+            return kMapRedirected;
+        }
+        if (require_running && !fd_is_mapped_apk(fd_)) {
+            reset();
+            return kMapNotRunningApk;
+        }
+        size_ = static_cast<size_t>(st_fd.st_size);
         data_ = static_cast<uint8_t*>(
             ::mmap(nullptr, size_, PROT_READ, MAP_SHARED, fd_, 0));
         if (data_ == MAP_FAILED) {
             data_ = nullptr;
             size_ = 0;
-            ::close(fd_);
-            fd_ = -1;
-            return false;
+            reset();
+            return kMapFailed;
         }
-        return true;
+        return kMapOk;
     }
 
     const uint8_t* data() const { return data_; }
@@ -734,9 +885,6 @@ static bool crc32_matches_inflated(const uint8_t* compressed, size_t compressed_
 // stored with a rotating multi-byte XOR cipher so it never appears as a
 // plain-text literal in the binary. The encoded arrays and key are defined
 // in key_generated.h (generated at build time from the TM GitHub secret).
-//
-// The expected hash below is:
-//   90FEDAC1F020C6C5D1DD1A635DB5C3B7579F5B87647E2C2C00966D3BCB0F8B6F
 // ---------------------------------------------------------------------------
 // All encoded arrays and the XOR key are defined in key_generated.h:
 //   #include "key_generated.h"  (at line 787 below)
@@ -759,6 +907,16 @@ static std::string decode_xor_hex(const uint8_t* encoded, size_t len) {
         result.push_back(static_cast<char>(encoded[i] ^ kXorKey[i % kXorKeyLen]));
     }
     return result;
+}
+
+/**
+ * Wipes a decoded secret (pinned digest / package) from memory once the
+ * caller is done with it, so repeated checks do not leave plain-text pin
+ * material lying around in the heap for a memory scan to recover.
+ */
+static void wipe_string(std::string& s) {
+    if (!s.empty()) rk::secure_zero(&s[0], s.size());
+    s.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -1839,7 +1997,9 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_NativeProbe_nativeGetPinnedFingerprint(
     JNIEnv* env, jobject thiz) {
     std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
-    return env->NewStringUTF(digest.c_str());
+    jstring out = env->NewStringUTF(digest.c_str());
+    wipe_string(digest);
+    return out;
 }
 
 /**
@@ -1883,7 +2043,7 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeGetReportingKey(
  */
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelope(
-    JNIEnv* env, jobject thiz, jstring apkPath) {
+    JNIEnv* env, jobject thiz, jstring apkPath, jboolean requireRunning) {
 
     if (!apkPath) {
         LOGE("apkPath is null");
@@ -1897,10 +2057,14 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelope(
     LOGI("Reading APK: %s", path.c_str());
 
     // Map the APK read-only instead of loading the whole file into the heap
-    // (avoids OOM on large APKs).
+    // (avoids OOM on large APKs). The open goes through the anti-redirect
+    // channel: raw syscall + fd/path inode cross-check + (for the running
+    // package) /proc/self/maps cross-validation.
     MappedApk apk;
-    if (!apk.map(path.c_str())) {
-        LOGE("Failed to map APK: %s", path.c_str());
+    const MapStatus ms = apk.map_status(path.c_str(), requireRunning == JNI_TRUE);
+    if (ms != kMapOk) {
+        LOGE("Failed to map APK (anti-redirect status=%d): %s",
+             static_cast<int>(ms), path.c_str());
         return nullptr;
     }
     const uint8_t* apk_data = apk.data();
@@ -2117,7 +2281,7 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelope(
  */
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelopeV234(
-    JNIEnv* env, jobject thiz, jstring apkPath) {
+    JNIEnv* env, jobject thiz, jstring apkPath, jboolean requireRunning) {
 
     if (!apkPath) {
         LOGE("apkPath is null");
@@ -2133,8 +2297,10 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelopeV234(
     env->ReleaseStringUTFChars(apkPath, path_cstr);
 
     MappedApk apk;
-    if (!apk.map(path.c_str())) {
-        LOGE("Failed to map APK for v2/v3 check: %s", path.c_str());
+    const MapStatus ms = apk.map_status(path.c_str(), requireRunning == JNI_TRUE);
+    if (ms != kMapOk) {
+        LOGE("Failed to map APK for v2/v3 check (anti-redirect status=%d): %s",
+             static_cast<int>(ms), path.c_str());
         return nullptr;
     }
     const uint8_t* apk_data = apk.data();
@@ -2211,12 +2377,13 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeMatchPackageId(
 
     std::string expected =
         decode_xor_hex(kEncodedExpectedPackage, kEncodedExpectedPackageLen);
-    if (actual != expected) {
-        LOGE("Package name MISMATCH (expected=%s, actual=%s)",
-             expected.c_str(), actual.c_str());
+    const bool ok = (actual == expected);
+    wipe_string(expected);
+    if (!ok) {
+        LOGE("Package name MISMATCH (actual=%s)", actual.c_str());
         return JNI_FALSE;
     }
-    LOGI("Package id matched: %s", expected.c_str());
+    LOGI("Package id matched");
     return JNI_TRUE;
 }
 
@@ -2232,7 +2399,7 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeMatchPackageId(
  */
 extern "C" JNIEXPORT jint JNICALL
 Java_com_soreverse_mcp_nativecore_NativeProbe_nativeProbeArchive(
-    JNIEnv* env, jobject thiz, jstring apkPath) {
+    JNIEnv* env, jobject thiz, jstring apkPath, jboolean requireRunning) {
 
     if (!apkPath) {
         LOGE("apkPath is null");
@@ -2248,8 +2415,10 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeProbeArchive(
     env->ReleaseStringUTFChars(apkPath, path_cstr);
 
     MappedApk apk;
-    if (!apk.map(path.c_str())) {
-        LOGE("Failed to map APK for integrity check: %s", path.c_str());
+    const MapStatus ms = apk.map_status(path.c_str(), requireRunning == JNI_TRUE);
+    if (ms != kMapOk) {
+        LOGE("Failed to map APK for integrity check (anti-redirect status=%d): %s",
+             static_cast<int>(ms), path.c_str());
         return kProbeReadFailed;
     }
 
@@ -2312,8 +2481,20 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeVerifyBlock(
     std::string path(path_cstr);
     env->ReleaseStringUTFChars(apkPath, path_cstr);
 
+    // This check always runs against the RUNNING package, so it also acts as
+    // the anti-redirect gate: if the file behind [apkPath] is not the APK
+    // image the process executes from, or open() was steered to a different
+    // inode, the very input of every content check has been substituted.
+    // That is definitive tampering, so terminate here (before returning) the
+    // same way a fatal signature mismatch does - the caller cannot veto it.
     MappedApk apk;
-    if (!apk.map(path.c_str())) {
+    const MapStatus ms = apk.map_status(path.c_str(), /*require_running=*/true);
+    if (ms == kMapRedirected || ms == kMapNotRunningApk) {
+        LOGE("APK path substituted (anti-redirect status=%d): %s",
+             static_cast<int>(ms), path.c_str());
+        ::_exit(173);
+    }
+    if (ms != kMapOk) {
         LOGE("Failed to map APK for signature verification: %s", path.c_str());
         return kBlockReadFailed;
     }
@@ -2330,12 +2511,13 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeVerifyBlock(
         return kBlockMalformed;
     }
 
-    const std::string pinned =
+    std::string pinned =
         normalize_hex(decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len));
 
     bool fatal = false;
     const int code = verify_sign_block(apk.data(), apk.size(), eocd_pos,
                                        eocd.central_dir_offset, pinned, &fatal);
+    wipe_string(pinned);
     if (fatal) {
         LOGE("APK signature verification FAILED (code=0x%X): %s", code, path.c_str());
         ::_exit(173);
