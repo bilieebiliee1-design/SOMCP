@@ -228,10 +228,8 @@ jobs:
           # it into the native header baked into librz_native.so. GitHub masks
           # secrets in logs automatically; it is never echoed here.
           LRP_API_KEY: ${{ secrets.LRP_API_KEY }}
-          # 16-hex-char secret: rotating XOR key for the signer-pin arrays and
-          # the SHA-256-CTR master for LRP_API_KEY. Required whenever a real
-          # reporting key is injected — generate_header.py refuses to encrypt it
-          # under the all-zero local-dev fallback and fails the build.
+          # XOR key for the signer-pin arrays in key_generated.h
+          # (generate_header.py --key). Absent -> per-build random fallback key.
           TM: ${{ secrets.TM }}
         run: |
           set -euo pipefail
