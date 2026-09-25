@@ -40,6 +40,9 @@ object IntegrityGuard {
 
     @Volatile private var recheckStarted = false
 
+    /** Failure recorded by [enforceEarly]; consumed (fail-closed) by [enforce]. */
+    @Volatile private var earlyNativeFailure: String? = null
+
     /**
      * Runs all checks (Java PackageManager + native filesystem-level probe) and
      * terminates the process if any check fails.
@@ -63,6 +66,12 @@ object IntegrityGuard {
      * timing-based bypass does not survive past startup.
      */
     fun enforce(context: Context) {
+        // 0. Consume any failure the attachBaseContext-time gate recorded. It
+        //    was deliberately non-fatal there (no crash reporter yet), but it
+        //    is authoritative by the time onCreate runs: fail closed.
+        val earlyFailure = earlyNativeFailure
+        earlyNativeFailure = null
+
         // 1. Java-level check (readable through the Binder interface)
         val javaResult = inspect(context)
         val javaPass = javaResult.trusted
@@ -95,8 +104,18 @@ object IntegrityGuard {
         val blockCode = NativeProbe.verifyBlock(context)
         val blockPass = !NativeProbe.isTamper(blockCode)
 
-        if (!javaPass || !nativePass || !v234Pass || !packagePass || !probePass || !blockPass) {
+        if (earlyFailure != null ||
+            !javaPass ||
+            !nativePass ||
+            !v234Pass ||
+            !packagePass ||
+            !probePass ||
+            !blockPass
+        ) {
             val reasons = mutableListOf<String>()
+            if (earlyFailure != null) {
+                reasons.add("Early gate (attachBaseContext): $earlyFailure")
+            }
             if (!javaPass) reasons.add("Java: ${javaResult.reason}")
             if (!nativePass) {
                 reasons.add(
@@ -143,16 +162,23 @@ object IntegrityGuard {
      * of the startup-crash issue. We therefore only record the mismatch here;
      * the authoritative kill happens in Application.onCreate() via [enforce],
      * which re-runs the same native checks after AppLog has been initialized
-     * and logs the exact reason before terminating.
+     * and logs the exact reason before terminating. The failure is recorded in
+     * [earlyNativeFailure] so [enforce] cannot proceed past it even if the
+     * state is somehow transient (fail-closed accumulation).
      */
     fun enforceEarly(context: Context) {
-        if (!NativeProbe.matches(context) ||
-            !NativeProbe.matchesV234(context) ||
-            !NativeProbe.matchesId(context) ||
-            NativeProbe.probeArchive(context) != NativeProbe.ProbeCode.OK
-        ) {
+        val failures = mutableListOf<String>()
+        if (!NativeProbe.matches(context)) failures += "native identity"
+        if (!NativeProbe.matchesV234(context)) failures += "native v2/v3 identity"
+        if (!NativeProbe.matchesId(context)) failures += "package id pin"
+        val probeCode = NativeProbe.probeArchive(context)
+        if (probeCode != NativeProbe.ProbeCode.OK) {
+            failures += "archive probe (code=0x${probeCode.toString(16)})"
+        }
+        if (failures.isNotEmpty()) {
+            earlyNativeFailure = failures.joinToString("; ")
             AppLog.w(
-                "INTEGRITY (early) native identity / package / archive mismatch detected; " +
+                "INTEGRITY (early) $earlyNativeFailure mismatch detected; " +
                     "deferring termination to onCreate (attachBaseContext has no crash reporter)"
             )
         }
@@ -209,7 +235,7 @@ object IntegrityGuard {
         }
         val result = runCatching {
             val expected = NativeProbe.pinnedFingerprint().normalizeDigest()
-            val threats = runtimeThreats()
+            val threats = runtimeThreats(context)
             if (expected.isBlank()) {
                 Result(
                     threats.isEmpty(),
@@ -307,7 +333,7 @@ object IntegrityGuard {
         }
     }
 
-    private fun runtimeThreats(): List<String> {
+    private fun runtimeThreats(context: Context): List<String> {
         val threats = linkedSetOf<String>()
         if (Debug.isDebuggerConnected() ||
             Debug.waitingForDebugger()
@@ -316,11 +342,68 @@ object IntegrityGuard {
         }
         val tracer = tracerPid()
         if (tracer > 0) threats += "native tracer attached"
+        creatorIntegrityThreat()?.let { threats += it }
+        factoryHijackThreat(context)?.let { threats += it }
+        applicationClassThreat(context)?.let { threats += it }
         val maps = procMapsIndicators()
         if (maps.isNotEmpty()) threats += maps
         val ports = openLocalInstrumentationPorts()
         if (ports.isNotEmpty()) threats += ports.map { "instrumentation port open: $it" }
         return threats.toList()
+    }
+
+    /**
+     * Detects a Parcel/Creator substitution of the PackageManager result
+     * (SoLab "normal"/"original_apk" signature-bypass templates, DPatch's
+     * loader): these frameworks install their own Creator class as
+     * [PackageInfo.CREATOR] so every getPackageInfo() response is rewritten
+     * with the original signatures during unparceling. The genuine Creator is
+     * a framework class loaded by the boot classloader (reported as null);
+     * anything the repack ships is loaded by an app-visible classloader.
+     */
+    private fun creatorIntegrityThreat(): String? = runCatching {
+        val creator = PackageInfo::class.java.getField("CREATOR").get(null)
+        when {
+            creator == null -> "PackageInfo.CREATOR is null"
+
+            creator.javaClass.classLoader != null ->
+                "PackageInfo.CREATOR replaced by a non-boot classloader"
+
+            else -> null
+        }
+    }.getOrNull()
+
+    /**
+     * DPatch takes over process startup by rewriting the manifest's
+     * appComponentFactory (to com.pandora.core.AppFactory) before the app's
+     * own code ever runs. This app declares no component factory, so any
+     * non-empty value means the installed manifest was hijacked.
+     */
+    private fun factoryHijackThreat(context: Context): String? = runCatching {
+        val factory = context.applicationInfo?.appComponentFactory
+        if (!factory.isNullOrEmpty()) {
+            "foreign appComponentFactory declared (value withheld)"
+        } else {
+            null
+        }
+    }.getOrNull()
+
+    /**
+     * A proxy Application that subclasses ours (so the manifest entry still
+     * reaches our code) is caught by exact-class identity: the object passed
+     * to attachBaseContext/onCreate must be precisely [android.app.Application]
+     * of the declared class, not a repack's subclass installing hooks first.
+     * Only applies while [context] is the Application instance itself; an
+     * Activity context carries no information about the Application class.
+     */
+    private fun applicationClassThreat(context: Context): String? {
+        if (context !is android.app.Application) return null
+        val expected = "com.soreverse.mcp.SoReverseApplication"
+        return if (context.javaClass.name != expected) {
+            "application instance class is not the declared one"
+        } else {
+            null
+        }
     }
 
     private fun tracerPid(): Int = runCatching {
@@ -349,7 +432,13 @@ object IntegrityGuard {
                 "tweakme",
                 marked("7369676e61747572656b696c6c"),
                 "yc/pm",
-                marked("7369676e617475726566616b6572")
+                marked("7369676e617475726566616b6572"),
+                // DPatch payload + the inline/JNI hook engines it embeds, and
+                // the SoLab signature-bypass native helper:
+                "pandora",
+                "dobby",
+                "lsplant",
+                marked("736f6c61625f7369676e6174757265")
             )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
