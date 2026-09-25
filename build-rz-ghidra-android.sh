@@ -42,6 +42,14 @@ if [ ! -d "$RIZIN_SRC/librz/include" ]; then
     exit 1
 fi
 
+# rizin master added ldexpf() in pf_parser.c (half_to_float, 2025-08).
+# Bionic does not export the float ldexpf symbol for API < 30, so the
+# shared-lib link (-Wl,--no-undefined) fails on android-26.
+# Replace with (float)ldexp((double)…), which is available on all API levels.
+# sed is idempotent: once applied the ldexpf( pattern is gone.
+sed -i 's/float val = ldexpf((float)man, -24);/float val = (float)ldexp((double)man, -24);/' \
+    "$RIZIN_SRC/librz/type/pf/pf_parser.c"
+
 # Cross-template per ABI (exist in repo; tokens rewritten for Linux below).
 ABIS=(arm64-v8a armeabi-v7a x86 x86_64)
 TPL=(rizin-cross-aarch64.ini rizin-cross-armv7a.ini rizin-cross-i686.ini rizin-cross-x86_64.ini)
