@@ -104,8 +104,12 @@ target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
 # Generate key_generated.h from the TM GitHub Actions secret.
 # The key is read from $TM (16 hex chars = 8 bytes). If $TM is not set,
-# local development builds fall back to a fixed key so the project builds
-# out of the box; hardened builds (REQUIRE_NATIVE_BACKENDS=ON) must provide
+# local development builds fall back to a per-build RANDOM key (the encoded
+# arrays and the key ship together inside the same .so, so consistency is
+# per-build by design and a random fallback loses nothing). The old fixed
+# all-zero fallback meant XOR == plaintext: every debug artifact and every CI
+# release built without TM carried the signer pins as readable ASCII - never
+# do that again. Hardened builds (REQUIRE_NATIVE_BACKENDS=ON) must provide
 # the secret.
 set(KEY_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/key_generated.h")
 
@@ -123,11 +127,10 @@ elseif(REQUIRE_NATIVE_BACKENDS)
         "  Set `$env:TM = '<16-hex-chars>' before building."
     )
 else()
-    set(XOR_KEY "0000000000000000")
-    message(WARNING
-        "[xor-key] TM environment variable not set; using fallback key "
-        "0000000000000000. Set `$env:TM = '<16-hex-chars>' in Release/CI."
-    )
+    string(RANDOM LENGTH 16 ALPHABET "0123456789abcdef" XOR_KEY)
+    message(STATUS
+        "[xor-key] TM not set; using a per-build random fallback key "
+        "(pins stay encoded; rebuilds produce different key material).")
 endif()
 
 # The reporting API key (log-report-platform X-API-Key) is read by

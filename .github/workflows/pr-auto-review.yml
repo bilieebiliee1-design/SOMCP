@@ -224,7 +224,6 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ steps.resolve.outputs.head_sha || github.event.pull_request.head.sha }}
           BASE_REF: ${{ steps.resolve.outputs.base_ref || github.event.pull_request.base.ref }}
-          RUN_ID: ${{ github.run_id }}
         # This step budget must stay strictly above the polling window below
         # (MAX_WAIT), otherwise the step gets killed mid-wait and fails the job
         # before the graceful ci_state=timeout fallback can run. Measured CI
@@ -239,22 +238,11 @@ jobs:
           elapsed=0
           ci_found=false
           all_done=false
-          # This workflow's own run creates check-runs on the head commit
-          # (each job's id equals its check-run id). Resolve them once via
-          # github.run_id and exclude by id — precise, and safe against job
-          # renames, matrix expansion, and workflow renames. This prevents the
-          # workflow from blocking on its own in-progress check runs.
-          if ! JOBS=$(curl -sS -f -L \
-              -H "Authorization: Bearer ${TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" 2>/dev/null); then
-            echo "::warning::Failed to resolve this run's check-runs; cannot wait for CI safely. Skipping CI wait."
-            echo "ci_state=no_ci" >> "$GITHUB_OUTPUT"
-            printf '无法解析本工作流自身的 check-run，已跳过 CI 等待。\n' > /tmp/ci-results.txt
-            printf '0' > /tmp/ci-failing.txt
-            exit 0
-          fi
-          SELF_IDS=$(printf '%s' "$JOBS" | jq -c '[.jobs[].id]')
+          # 本 workflow 在 check-runs 中的名称前缀即 workflow 名称；用它在查询
+          # 结果中排除自身，比调用 actions/runs/{run_id}/jobs 更可靠（后者在
+          # pull_request_target 事件下可能因 actions 读权限不足而 403，导致
+          # 本步骤误跳过等待）。
+          SELF_PREFIX="${GITHUB_WORKFLOW}"
 
           # CI is only configured for the main branch (test-v7.yml); PRs
           # targeting other branches have no CI to wait on.
@@ -273,18 +261,28 @@ jobs:
               echo "::warning::Failed to query CI check-runs (elapsed ${elapsed}s); retrying."
               sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
             fi
-            count=$(printf '%s' "$resp" | jq -r '.total_count // 0')
-            if [ "$count" -eq 0 ]; then
-              echo "::notice::No CI check-runs yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
-              sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
-            fi
-            ci_found=true
-            incomplete=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
-              '.check_runs[]? | select((.id as $i | $self | index($i) | not) and .status != "completed") | .name' | wc -l)
-            if [ "$incomplete" -eq 0 ]; then
-              all_done=true
-              break
-            fi
+          count=$(printf '%s' "$resp" | jq -r '.total_count // 0')
+          if [ "$count" -eq 0 ]; then
+            echo "::notice::No CI check-runs yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
+            sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
+          fi
+          # 排除本 workflow 自身的 check-run（review/reply），统计外部 CI 数量。
+          # PR 刚 reopened/synchronize 时外部 CI 可能尚未创建，此时只有本工作流
+          # 自身的 check-run；若直接认为 all_done=true，会导致 review 在 CI 未跑完
+          # 前过早给出结论。
+          external_count=$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
+            '.check_runs[]? | select(.name | startswith($self_prefix) | not) | .name' | wc -l)
+          if [ "$external_count" -eq 0 ]; then
+            echo "::notice::No external CI check-runs found yet for ${HEAD_SHA} (elapsed ${elapsed}s); waiting."
+            sleep "$PERIOD"; elapsed=$((elapsed+PERIOD)); continue
+          fi
+          ci_found=true
+          incomplete=$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
+            '.check_runs[]? | select((.name | startswith($self_prefix) | not) and .status != "completed") | .name' | wc -l)
+          if [ "$incomplete" -eq 0 ]; then
+            all_done=true
+            break
+          fi
             echo "::notice::CI still running (${incomplete} check(s) pending); elapsed ${elapsed}s."
             sleep "$PERIOD"; elapsed=$((elapsed+PERIOD))
           done
@@ -304,13 +302,13 @@ jobs:
 
           {
             printf '提交 %s 的 CI 检查结果（已等待 CI 完成后读取）：\n' "$HEAD_SHA"
-            printf '共 %s 项。\n' "$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" '[.check_runs[]? | select(.id as $i | $self | index($i) | not)] | length')"
-            printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
-              '.check_runs[]? | select(.id as $i | $self | index($i) | not) | "  - " + .name + "：" + ((.conclusion // .status) // "unknown")'
+            printf '共 %s 项。\n' "$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" '[.check_runs[]? | select(.name | startswith($self_prefix) | not)] | length')"
+            printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
+              '.check_runs[]? | select(.name | startswith($self_prefix) | not) | "  - " + .name + "：" + ((.conclusion // .status) // "unknown")'
           } > /tmp/ci-results.txt
 
-          failing=$(printf '%s' "$resp" | jq -r --argjson self "$SELF_IDS" \
-            '[.check_runs[]? | select(.id as $i | $self | index($i) | not) |
+          failing=$(printf '%s' "$resp" | jq -r --arg self_prefix "$SELF_PREFIX" \
+            '[.check_runs[]? | select(.name | startswith($self_prefix) | not) |
               select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral" and .conclusion != "cancelled")] | length')
           printf '%s' "$failing" > /tmp/ci-failing.txt
           if [ "$failing" -gt 0 ]; then

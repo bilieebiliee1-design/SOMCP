@@ -54,11 +54,11 @@ object NativeProbe {
     }
 
     // JNI: implemented in cpp/native_probe.cpp
-    private external fun nativeReadEnvelope(apkPath: String): ByteArray?
-    private external fun nativeReadEnvelopeV234(apkPath: String): ByteArray?
+    private external fun nativeReadEnvelope(apkPath: String, requireRunning: Boolean): ByteArray?
+    private external fun nativeReadEnvelopeV234(apkPath: String, requireRunning: Boolean): ByteArray?
     private external fun nativeGetPinnedFingerprint(): String
     private external fun nativeMatchPackageId(packageName: String): Boolean
-    private external fun nativeProbeArchive(apkPath: String): Int
+    private external fun nativeProbeArchive(apkPath: String, requireRunning: Boolean): Int
     private external fun nativeComputeSha256Hex(data: ByteArray): String?
     private external fun nativeGetReportingKey(): String
     private external fun nativeVerifyBlock(apkPath: String): Int
@@ -105,16 +105,25 @@ object NativeProbe {
      * Reads the embedded X.509 record directly from the package file, bypassing
      * the Java PackageManager API.
      *
+     * The file is opened through the native anti-redirect channel (raw syscall
+     * + fd/path inode cross-check), so a PLT-hook path substitution
+     * (original_apk / DPatch style file redirection) cannot feed this a
+     * preserved copy of the original APK undetected.
+     *
      * @param apkPath Absolute path to the package file (context.packageCodePath)
+     * @param requireRunning true when [apkPath] is this process's own package:
+     *        native then additionally verifies the opened file is one of the
+     *        `.apk` images mapped in /proc/self/maps (the kernel-authoritative
+     *        "what am I actually running").
      * @return DER-encoded X.509 bytes, or null on failure
      */
-    fun readEnvelope(apkPath: String): ByteArray? {
+    fun readEnvelope(apkPath: String, requireRunning: Boolean = false): ByteArray? {
         if (!loaded) {
             AppLog.e("NativeProbe: native library not loaded: $loadError")
             return null
         }
         return try {
-            nativeReadEnvelope(apkPath)
+            nativeReadEnvelope(apkPath, requireRunning)
         } catch (e: Exception) {
             AppLog.e("NativeProbe: nativeReadEnvelope failed", e)
             null
@@ -135,7 +144,7 @@ object NativeProbe {
             return null
         }
 
-        val certBytes = readEnvelope(apkPath) ?: return null
+        val certBytes = readEnvelope(apkPath, requireRunning = true) ?: return null
         return bytesToFingerprint(certBytes)
     }
 
@@ -221,10 +230,9 @@ object NativeProbe {
 
         val match = actualV1 == expected && actualV234 == expected
         if (!match) {
-            AppLog.e(
-                "NativeProbe: build identity MISMATCH " +
-                    "(pinned=$expected, v1=$actualV1, v2/v3=$actualV234)"
-            )
+            // Deliberately omits the values: a full-length digest in the log
+            // hands the pinned identity to anyone with logcat access.
+            AppLog.e("NativeProbe: build identity MISMATCH against pinned release")
         }
         return match
     }
@@ -236,10 +244,10 @@ object NativeProbe {
      * @return uppercase hex digest, or null if the package has no v2/v3 block
      *         or the record cannot be extracted.
      */
-    fun fingerprintV234(apkPath: String): String? {
+    fun fingerprintV234(apkPath: String, requireRunning: Boolean = false): String? {
         if (!loaded) return null
         val cert = try {
-            nativeReadEnvelopeV234(apkPath)
+            nativeReadEnvelopeV234(apkPath, requireRunning)
         } catch (e: Exception) {
             AppLog.e("NativeProbe: nativeReadEnvelopeV234 failed", e)
             null
@@ -259,7 +267,7 @@ object NativeProbe {
             AppLog.e("NativeProbe: cannot get packageCodePath", e)
             return null
         }
-        return fingerprintV234(apkPath)
+        return fingerprintV234(apkPath, requireRunning = true)
     }
 
     /**
@@ -342,7 +350,7 @@ object NativeProbe {
             return ProbeCode.READ_FAILED
         }
         return try {
-            nativeProbeArchive(apkPath)
+            nativeProbeArchive(apkPath, requireRunning = true)
         } catch (e: Exception) {
             AppLog.e("NativeProbe: nativeProbeArchive failed", e)
             ProbeCode.READ_FAILED
@@ -381,7 +389,11 @@ object NativeProbe {
      *
      * The native side terminates the process on [BlockCode.SIG_INVALID] and
      * [BlockCode.CONTENT_MISMATCH] before returning, so a hook that rewrites
-     * the value returned here cannot turn a rejection into a pass.
+     * the value returned here cannot turn a rejection into a pass. It also
+     * always cross-validates that [apkPath] is the APK image this process
+     * executes from (raw-syscall open + inode cross-check against
+     * /proc/self/maps): a substituted/redirected path terminates the process
+     * the same way.
      *
      * @return a [BlockCode] bitmask.
      */
