@@ -98,7 +98,9 @@ EOF
     fi
 
     # --- 2) rz-ghidra source + submodules (Ghidra decompiler C++ lives in a submodule) ---
-    if [ ! -d "$RZ_GHIDRA_SRC/.git" ]; then
+    # Checkout uses submodules:recursive, so the dir normally exists with .git as a
+    # *file* (gitlink); only clone when it's genuinely absent, else clone aborts 128.
+    if [ ! -e "$RZ_GHIDRA_SRC/.git" ]; then
         git clone --depth 1 https://github.com/rizinorg/rz-ghidra.git "$RZ_GHIDRA_SRC"
     fi
     git -C "$RZ_GHIDRA_SRC" submodule update --init --recursive --depth 1 || true
