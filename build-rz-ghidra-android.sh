@@ -109,10 +109,12 @@ EOF
     rz_ghidra_build="third_party/rz-ghidra-build-$abi"
     rz_ghidra_install="third_party/rz-ghidra-install-$abi"
     rm -rf "$rz_ghidra_build"
+    # android-26 matches the Rizin SDK cross templates and app minSdk 26;
+    # on armeabi-v7a, bionic API<24 hides fseeko/ftello and libc++ <fstream> fails.
     cmake -S "$RZ_GHIDRA_SRC" -B "$rz_ghidra_build" -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake" \
         -DANDROID_ABI="$abi" \
-        -DANDROID_PLATFORM=android-23 \
+        -DANDROID_PLATFORM=android-26 \
         -DCMAKE_PREFIX_PATH="$(pwd)/$rz_sdk" \
         -DCMAKE_FIND_ROOT_PATH="$(pwd)/$rz_sdk" \
         -DCMAKE_INSTALL_PREFIX="$(pwd)/$rz_ghidra_install" \
