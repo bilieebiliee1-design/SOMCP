@@ -74,13 +74,17 @@ jobs:
       # by run 34614015172), but a self-hosted runner without proxy/mirror
       # access can hang here. The step-level timeout + retry loop fail fast
       # with a clear ::error instead of stalling to the job default.
-      - name: Clone Rizin source (v0.10.0)
+      - name: Clone Rizin source (v0.9.1)
         timeout-minutes: 15
         run: |
           set -euo pipefail
+          # Pinned to the latest release tag. rizin master is a moving target
+          # and already broke rz-ghidra after 2026-09-15 commit #6736 (the
+          # rz_cons_singleton removal added RzCons* params to core APIs);
+          # rz-ghidra only tracks rizin releases, not master.
           if [ ! -d third_party/rizin-src/librz/include ]; then
             for attempt in 1 2 3; do
-              if git clone --depth 1 https://github.com/rizinorg/rizin.git third_party/rizin-src; then
+              if git clone --depth 1 --branch v0.9.1 https://github.com/rizinorg/rizin.git third_party/rizin-src; then
                 break
               fi
               rm -rf third_party/rizin-src
