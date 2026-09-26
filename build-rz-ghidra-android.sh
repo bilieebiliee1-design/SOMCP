@@ -118,7 +118,13 @@ EOF
         -DCMAKE_INSTALL_PREFIX="$(pwd)/$rz_ghidra_install" \
         -DBUILD_CUTTER_PLUGIN=OFF \
         -DBUILD_SLEIGH_PLUGIN=OFF \
+        -DBUILD_SLASPECS=OFF \
         -DUSE_SYSTEM_ZLIB=OFF
+    # BUILD_SLASPECS defaults ON and compiles every .slaspec with a just-built
+    # (Android-target) sleighc that cannot execute on the x86_64 runner; the
+    # runtime .sla/.cspec/.ldefs are already committed under
+    # app/src/main/assets/rizin/plugins/rz_ghidra_sleigh and copied to
+    # sleighhome by NativeEngine.configureGhidra(), so skip the spec build.
     cmake --build "$rz_ghidra_build" --config Release -j "$(nproc)"
     cmake --install "$rz_ghidra_build"
 
