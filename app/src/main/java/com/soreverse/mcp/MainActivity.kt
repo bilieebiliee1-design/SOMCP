@@ -349,10 +349,9 @@ private fun SoReverseApp() {
     }
     LaunchedEffect(Unit) {
         if (settings.autoCheckUpdates) {
-            val channel = com.soreverse.mcp.core.UpdateChannel.valueOf(
-                settings.updateChannel.uppercase()
-            )
-            updateManager.check(channel)
+            // Both channels: a beta published after the latest stable must also
+            // prompt (checkAnyChannel picks the highest release).
+            updateManager.checkAnyChannel()
                 .onSuccess { result ->
                     if (result is com.soreverse.mcp.core.UpdateCheckResult.Available) {
                         availableRelease = result.release
