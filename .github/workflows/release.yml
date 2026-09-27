@@ -228,7 +228,12 @@ jobs:
           TM: ${{ secrets.TM }}
         run: |
           set -euo pipefail
-          gradle :app:assembleRelease --stacktrace
+          # Embed this build's UTC instant as the release publishtime baseline:
+          # in-app update checks offer a same-version republish only when the
+          # release's published_at is later than this value (see
+          # GitHubUpdateManager.isUpdateOfferable). The actual release publish
+          # happens after this step, so the embedded time is always <= it.
+          gradle :app:assembleRelease --stacktrace "-PpublishedAt=$(/usr/bin/date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Harden release APKs with Dex2C (dcc)
         timeout-minutes: 90
