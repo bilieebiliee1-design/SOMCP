@@ -46,6 +46,16 @@ android {
         versionCode = 23
         versionName = "1.0.22"
 
+        // Publishtime of the release this APK was built from (ISO-8601 UTC).
+        // The release workflow overrides it via -PpublishedAt; default empty so
+        // dev/CI test builds behave like "unknown" (same-version republishes are
+        // then not offered, matching the old strict-semver gate).
+        buildConfigField(
+            "String",
+            "RELEASE_PUBLISHED_AT",
+            "\"" + ((findProperty("publishedAt") as String?) ?: "").filter { !it.isWhitespace() && it != '"' } + "\""
+        )
+
         externalNativeBuild {
             cmake {
                 cppFlags += listOf(
