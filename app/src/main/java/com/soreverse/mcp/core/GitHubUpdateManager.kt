@@ -123,13 +123,52 @@ class GitHubUpdateManager(private val context: Context) {
         }
     }
 
-    private suspend fun checkStable(): UpdateCheckResult {
+    /** Checks BOTH channels and reports the highest release of either, so the
+     *  automatic prompt also surfaces beta builds (a stable-only check misses
+     *  every pre-release published after the latest stable). Per-channel manual
+     *  checks (Settings > Updates) keep honouring the selected channel. A
+     *  channel that fails is ignored as long as the other yields a verdict. */
+    suspend fun checkAnyChannel(): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
+        try {
+            val releases = listOf(
+                runCatching { checkStable() },
+                runCatching { checkBeta() }
+            ).mapNotNull { it.getOrNull() }
+                .filterIsInstance<UpdateCheckResult.Available>()
+                .map { it.release }
+            val newest = releases.reduceOrNull { acc, release ->
+                val order = compareVersions(release.tag, acc.tag)
+                when {
+                    order > 0 -> release
+                    order < 0 -> acc
+                    else -> if (release.publishedAt > acc.publishedAt) release else acc
+                }
+            }
+            Result.success(newest?.let { UpdateCheckResult.Available(it) } ?: UpdateCheckResult.Current)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Result.failure(error)
+        }
+    }
+
+    private suspend fun checkStable(): UpdateCheckResult = fetchReleases { array ->
         // Do NOT trust /releases/latest: GitHub picks it by release creation
         // time, not by version. Republishing (or editing) an older release
         // moves that pointer back to the lower tag, and then any newer release
-        // is invisible to the semver comparison below — users silently stop
-        // getting update prompts. Instead enumerate the release list and take
-        // the highest non-draft, non-prerelease tag ourselves.
+        // becomes invisible — users silently stop getting update prompts.
+        // Enumerate the list and take the highest stable tag ourselves.
+        newestRelease(array, prerelease = false)
+    }
+
+    private suspend fun checkBeta(): UpdateCheckResult = fetchReleases(required = false) { array ->
+        newestRelease(array, prerelease = true)
+    }
+
+    private suspend fun fetchReleases(
+        required: Boolean = true,
+        pick: (JSONArray) -> JSONObject?
+    ): UpdateCheckResult {
         val request = Request.Builder()
             .url("${RELEASES_URL}?per_page=100")
             .header("Accept", "application/vnd.github+json")
@@ -143,68 +182,100 @@ class GitHubUpdateManager(private val context: Context) {
                 )
             }
             val array = JSONArray(response.body.string())
-            var candidate: JSONObject? = null
-            var candidateTime = ""
-            for (index in 0 until array.length()) {
-                val release = array.getJSONObject(index)
-                if (release.optBoolean("draft") || release.optBoolean("prerelease")) continue
-                val tag = release.optString("tag_name")
-                val published = release.optString("published_at")
-                    .ifBlank { release.optString("created_at") }
-                val better = when {
-                    candidate == null -> true
-                    else -> when (val order = compareVersions(tag, candidate.optString("tag_name"))) {
-                        0 -> published > candidateTime
-                        else -> order > 0
-                    }
-                }
-                if (better) {
-                    candidate = release
-                    candidateTime = published
-                }
-            }
-            candidate?.let { buildRelease(it, required = true) } ?: UpdateCheckResult.Current
+            pick(array)?.let { buildRelease(it, required = required) } ?: UpdateCheckResult.Current
         }
     }
 
+    /** Highest non-draft release of the requested prerelease state; ties
+     *  (same-version republish) break by publishtime. */
+    private fun newestRelease(array: JSONArray, prerelease: Boolean): JSONObject? {
+        var candidate: JSONObject? = null
+        var candidateTime = ""
+        for (index in 0 until array.length()) {
+            val release = array.getJSONObject(index)
+            if (release.optBoolean("draft") ||
+                release.optBoolean("prerelease") != prerelease
+            ) continue
+            val tag = release.optString("tag_name")
+            val published = release.optString("published_at")
+                .ifBlank { release.optString("created_at") }
+            val better = when {
+                candidate == null -> true
+                else -> when (val order = compareVersions(tag, candidate.optString("tag_name"))) {
+                    0 -> published > candidateTime
+                    else -> order > 0
+                }
+            }
+            if (better) {
+                candidate = release
+                candidateTime = published
+            }
+        }
+        return candidate
+    }
+
     /** Semver-order comparison of two release tags: >0 if [left] is the
-     *  higher version, 0 if equal or both unparseable-as-different. Tags with
-     *  no numeric version rank below every versioned tag. */
+     *  higher version, 0 if equal. Ordering: numeric core first, then the
+     *  pre-release suffix per semver (1.0.0-beta < 1.0.0, beta1 < beta2), so
+     *  a stale beta never outranks its own final release. Tags with no
+     *  numeric core rank below every versioned tag. */
     private fun compareVersions(left: String, right: String): Int {
         val a = versionParts(left)
         val b = versionParts(right)
         if (a.isEmpty() != b.isEmpty()) return if (a.isEmpty()) -1 else 1
-        for (index in 0 until maxOf(a.size, b.size)) {
-            val comparison = (a.getOrNull(index) ?: 0).compareTo(b.getOrNull(index) ?: 0)
+        compareCore(a, b)?.let { return it }
+        return comparePrerelease(prereleaseOf(left), prereleaseOf(right))
+    }
+
+    /** Component-wise core comparison, zero-padded; null when equal. */
+    private fun compareCore(left: List<Int>, right: List<Int>): Int? {
+        for (index in 0 until maxOf(left.size, right.size)) {
+            val comparison = (left.getOrNull(index) ?: 0).compareTo(right.getOrNull(index) ?: 0)
             if (comparison != 0) return comparison
         }
-        return 0
+        return null
     }
 
-    private fun versionParts(version: String): List<Int> = version.trim().removePrefix(
-        "v"
-    ).split('.', '-', '+').mapNotNull(String::toIntOrNull)
+    /** Pre-release suffix (after the first '-', build metadata '+' dropped);
+     *  null for a clean release tag. */
+    private fun prereleaseOf(version: String): String? {
+        val core = version.trim().removePrefix("v").substringBefore('+')
+        val index = core.indexOf('-')
+        return if (index < 0) null else core.substring(index + 1)
+    }
 
-    private suspend fun checkBeta(): UpdateCheckResult {
-        val request = Request.Builder()
-            .url("${RELEASES_URL}?per_page=30")
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
-            .build()
-        return client.newCall(request).await().use { response ->
-            if (!response.isSuccessful) {
-                error(
-                    "GitHub HTTP ${response.code} ${response.message}"
-                )
+    /** Semver pre-release precedence: absent suffix outranks any; otherwise
+     *  dot-separated identifiers compare numerically / lexically, and the
+     *  shorter field-wise prefix is smaller (alpha < alpha.1). */
+    private fun comparePrerelease(left: String?, right: String?): Int = when {
+        left == null && right == null -> 0
+        left == null -> 1
+        right == null -> -1
+        else -> {
+            val l = left.split('.')
+            val r = right.split('.')
+            for (index in 0 until maxOf(l.size, r.size)) {
+                val li = l.getOrNull(index) ?: return -1
+                val ri = r.getOrNull(index) ?: return 1
+                val ln = li.toIntOrNull()
+                val rn = ri.toIntOrNull()
+                val comparison = when {
+                    ln != null && rn != null -> ln.compareTo(rn)
+                    ln != null -> -1
+                    rn != null -> 1
+                    else -> li.compareTo(ri)
+                }
+                if (comparison != 0) return comparison
             }
-            val array = JSONArray(response.body.string())
-            val candidate = (0 until array.length())
-                .map { array.getJSONObject(it) }
-                .firstOrNull { it.optBoolean("prerelease") && !it.optBoolean("draft") }
-            candidate?.let { buildRelease(it, required = false) } ?: UpdateCheckResult.Current
+            0
         }
     }
+
+    /** Numeric core of a version tag: the dotted numbers before any
+     *  -suffix/+build. */
+    private fun versionParts(version: String): List<Int> = version.trim().removePrefix(
+        "v"
+    ).substringBefore('-').substringBefore('+').split('.').mapNotNull(String::toIntOrNull)
 
     private fun buildRelease(root: JSONObject, required: Boolean): UpdateCheckResult {
         val tag = root.optString("tag_name")
@@ -496,19 +567,24 @@ class GitHubUpdateManager(private val context: Context) {
     /** Whether the release [tag] (published at [publishedAt], ISO-8601 UTC)
      *  should be offered as an update to this build.
      *
-     *  Higher semver: always. Equal semver: only when the release was
-     *  published AFTER this APK was built — i.e. a same-version republish
-     *  (hot-fix without a version bump), which users could previously only
-     *  discover by downloading manually. This build's own publishtime is
-     *  embedded by the release workflow via -PpublishedAt; when it is empty
-     *  (dev/test builds) same-tag offers are suppressed, so the prompt can
-     *  never nag forever. Lower semver (e.g. a rolled-back release): never.
-     *  ISO-8601 UTC strings are lexicographically ordered by instant. */
+     *  Compares the NUMERIC CORE only against this APK's versionName (which
+     *  never carries a beta suffix): a higher core is always offered — that
+     *  covers both new stables and newer betas. Equal core is the
+     *  same-version case (republish, or beta1 -> beta2): offered only when
+     *  the release was published AFTER this APK's own release moment, which
+     *  the release workflow embeds via -PpublishedAt
+     *  (BuildConfig.RELEASE_PUBLISHED_AT). That single rule resolves the
+     *  users-indistinguishable-by-versionName dilemma: a stable 1.0.22 user
+     *  has embedded the final's publishtime, so the older beta 1.0.22-x
+     *  (published before it) is never offered; a beta1 user has beta1's
+     *  publishtime, so beta2 (published later) is offered. Dev/test builds
+     *  have no embedded moment and suppress equal-core offers entirely.
+     *  Lower core: never. ISO-8601 UTC strings sort lexicographically. */
     private fun isUpdateOfferable(tag: String, publishedAt: String): Boolean {
-        val order = compareVersions(tag, BuildConfig.VERSION_NAME)
+        val core = compareCore(versionParts(tag), versionParts(BuildConfig.VERSION_NAME))
         return when {
-            order > 0 -> true
-            order < 0 -> false
+            core != null && core > 0 -> true
+            core != null -> false
             else -> publishedAt.isNotBlank() &&
                 BuildConfig.RELEASE_PUBLISHED_AT.isNotBlank() &&
                 publishedAt > BuildConfig.RELEASE_PUBLISHED_AT
