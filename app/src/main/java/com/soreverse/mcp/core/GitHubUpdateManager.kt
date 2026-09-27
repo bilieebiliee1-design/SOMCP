@@ -121,22 +121,66 @@ class GitHubUpdateManager(private val context: Context) {
     }
 
     private suspend fun checkStable(): UpdateCheckResult {
+        // Do NOT trust /releases/latest: GitHub picks it by release creation
+        // time, not by version. Republishing (or editing) an older release
+        // moves that pointer back to the lower tag, and then any newer release
+        // is invisible to the semver comparison below — users silently stop
+        // getting update prompts. Instead enumerate the release list and take
+        // the highest non-draft, non-prerelease tag ourselves.
         val request = Request.Builder()
-            .url(LATEST_RELEASE_URL)
+            .url("${RELEASES_URL}?per_page=100")
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header("User-Agent", "SOMCP/${BuildConfig.VERSION_NAME}")
             .build()
         return client.newCall(request).await().use { response ->
-            if (response.code == 404) return@use UpdateCheckResult.Current
             if (!response.isSuccessful) {
                 error(
                     "GitHub HTTP ${response.code} ${response.message}"
                 )
             }
-            buildRelease(JSONObject(response.body.string()), required = true)
+            val array = JSONArray(response.body.string())
+            var candidate: JSONObject? = null
+            var candidateTime = ""
+            for (index in 0 until array.length()) {
+                val release = array.getJSONObject(index)
+                if (release.optBoolean("draft") || release.optBoolean("prerelease")) continue
+                val tag = release.optString("tag_name")
+                val published = release.optString("published_at")
+                    .ifBlank { release.optString("created_at") }
+                val better = when {
+                    candidate == null -> true
+                    else -> when (val order = compareVersions(tag, candidate.optString("tag_name"))) {
+                        0 -> published > candidateTime
+                        else -> order > 0
+                    }
+                }
+                if (better) {
+                    candidate = release
+                    candidateTime = published
+                }
+            }
+            candidate?.let { buildRelease(it, required = true) } ?: UpdateCheckResult.Current
         }
     }
+
+    /** Semver-order comparison of two release tags: >0 if [left] is the
+     *  higher version, 0 if equal or both unparseable-as-different. Tags with
+     *  no numeric version rank below every versioned tag. */
+    private fun compareVersions(left: String, right: String): Int {
+        val a = versionParts(left)
+        val b = versionParts(right)
+        if (a.isEmpty() != b.isEmpty()) return if (a.isEmpty()) -1 else 1
+        for (index in 0 until maxOf(a.size, b.size)) {
+            val comparison = (a.getOrNull(index) ?: 0).compareTo(b.getOrNull(index) ?: 0)
+            if (comparison != 0) return comparison
+        }
+        return 0
+    }
+
+    private fun versionParts(version: String): List<Int> = version.trim().removePrefix(
+        "v"
+    ).split('.', '-', '+').mapNotNull(String::toIntOrNull)
 
     private suspend fun checkBeta(): UpdateCheckResult {
         val request = Request.Builder()
@@ -444,12 +488,8 @@ class GitHubUpdateManager(private val context: Context) {
     }
 
     private fun isNewer(remote: String, local: String): Boolean {
-        val remoteParts = remote.trim().removePrefix(
-            "v"
-        ).split('.', '-', '+').mapNotNull(String::toIntOrNull)
-        val localParts = local.trim().removePrefix(
-            "v"
-        ).split('.', '-', '+').mapNotNull(String::toIntOrNull)
+        val remoteParts = versionParts(remote)
+        val localParts = versionParts(local)
         for (index in 0 until maxOf(remoteParts.size, localParts.size)) {
             val comparison = (
                 remoteParts.getOrNull(
@@ -526,7 +566,6 @@ class GitHubUpdateManager(private val context: Context) {
 
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
-        private const val LATEST_RELEASE_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases/latest"
         private const val RELEASES_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases"
     }
 }
