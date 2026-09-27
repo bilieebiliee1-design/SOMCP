@@ -165,10 +165,7 @@ class GitHubUpdateManager(private val context: Context) {
         newestRelease(array, prerelease = true)
     }
 
-    private suspend fun fetchReleases(
-        required: Boolean = true,
-        pick: (JSONArray) -> JSONObject?
-    ): UpdateCheckResult {
+    private suspend fun fetchReleases(required: Boolean = true, pick: (JSONArray) -> JSONObject?): UpdateCheckResult {
         val request = Request.Builder()
             .url("${RELEASES_URL}?per_page=100")
             .header("Accept", "application/vnd.github+json")
@@ -195,7 +192,9 @@ class GitHubUpdateManager(private val context: Context) {
             val release = array.getJSONObject(index)
             if (release.optBoolean("draft") ||
                 release.optBoolean("prerelease") != prerelease
-            ) continue
+            ) {
+                continue
+            }
             val tag = release.optString("tag_name")
             val published = release.optString("published_at")
                 .ifBlank { release.optString("created_at") }
