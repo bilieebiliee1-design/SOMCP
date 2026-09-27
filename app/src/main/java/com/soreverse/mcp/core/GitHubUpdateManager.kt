@@ -52,7 +52,10 @@ data class GitHubRelease(
     val apkName: String,
     val apkUrl: String,
     val apkSize: Long,
-    val checksumUrl: String?
+    val checksumUrl: String?,
+    /** Release publishtime (ISO-8601, UTC). "" when the API omitted it. Used to
+     *  tell a same-version republish apart from the build already installed. */
+    val publishedAt: String = ""
 )
 
 sealed interface UpdateCheckResult {
@@ -205,7 +208,9 @@ class GitHubUpdateManager(private val context: Context) {
 
     private fun buildRelease(root: JSONObject, required: Boolean): UpdateCheckResult {
         val tag = root.optString("tag_name")
-        if (!isNewer(tag, BuildConfig.VERSION_NAME)) return UpdateCheckResult.Current
+        val publishedAt = root.optString("published_at")
+            .ifBlank { root.optString("created_at") }
+        if (!isUpdateOfferable(tag, publishedAt)) return UpdateCheckResult.Current
         val assets = root.optJSONArray("assets")
         val apk = assets?.let { selectApk((0 until it.length()).map { index -> it.getJSONObject(index) }) }
             ?: return if (required) error("Release has no APK for ${Build.SUPPORTED_ABIS.joinToString()}") else UpdateCheckResult.Current
@@ -226,7 +231,8 @@ class GitHubUpdateManager(private val context: Context) {
                 apkSize = apk.optLong("size"),
                 checksumUrl = checksum?.optString(
                     "browser_download_url"
-                )?.takeIf(String::isNotBlank)
+                )?.takeIf(String::isNotBlank),
+                publishedAt = publishedAt
             )
         )
     }
@@ -487,18 +493,26 @@ class GitHubUpdateManager(private val context: Context) {
             ?: apks.singleOrNull()
     }
 
-    private fun isNewer(remote: String, local: String): Boolean {
-        val remoteParts = versionParts(remote)
-        val localParts = versionParts(local)
-        for (index in 0 until maxOf(remoteParts.size, localParts.size)) {
-            val comparison = (
-                remoteParts.getOrNull(
-                    index
-                ) ?: 0
-                ).compareTo(localParts.getOrNull(index) ?: 0)
-            if (comparison != 0) return comparison > 0
+    /** Whether the release [tag] (published at [publishedAt], ISO-8601 UTC)
+     *  should be offered as an update to this build.
+     *
+     *  Higher semver: always. Equal semver: only when the release was
+     *  published AFTER this APK was built — i.e. a same-version republish
+     *  (hot-fix without a version bump), which users could previously only
+     *  discover by downloading manually. This build's own publishtime is
+     *  embedded by the release workflow via -PpublishedAt; when it is empty
+     *  (dev/test builds) same-tag offers are suppressed, so the prompt can
+     *  never nag forever. Lower semver (e.g. a rolled-back release): never.
+     *  ISO-8601 UTC strings are lexicographically ordered by instant. */
+    private fun isUpdateOfferable(tag: String, publishedAt: String): Boolean {
+        val order = compareVersions(tag, BuildConfig.VERSION_NAME)
+        return when {
+            order > 0 -> true
+            order < 0 -> false
+            else -> publishedAt.isNotBlank() &&
+                BuildConfig.RELEASE_PUBLISHED_AT.isNotBlank() &&
+                publishedAt > BuildConfig.RELEASE_PUBLISHED_AT
         }
-        return false
     }
 
     private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
