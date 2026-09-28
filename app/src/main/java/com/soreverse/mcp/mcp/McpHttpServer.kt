@@ -451,7 +451,7 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                 "Tool $name hit the per-minute rate limit ($rateLimit/min). Retry shortly."
             )
         }
-        val heavy = name in ToolCatalog.heavyNames
+        val heavy = name in ToolCatalog.heavyNames && !isHeavyGateExempt(name, args)
         val acquiredGate = heavyGate
         if (heavy && !acquiredGate.tryAcquire()) {
             val busy =
@@ -474,6 +474,19 @@ class McpHttpServer(private val context: Context, private val port: Int, private
         val raw = settings.disabledTools
         if (raw.isBlank()) return false
         return raw.split(',').any { it.trim() == name }
+    }
+
+    /** flutter_blutter 的控制面 action 绕过 heavy gate：否则执行槽被长任务占住时，
+     *  cancel/status/prune 自己也抢不到 permit，永远 SERVER_BUSY，无从自救。 */
+    private fun isHeavyGateExempt(name: String, args: JSONObject): Boolean {
+        if (name != "flutter_blutter") return false
+        return args.optString("action", "inspect") in setOf(
+            "status",
+            "result",
+            "cancel",
+            "prune",
+            "packages"
+        )
     }
 
     private fun disabledToolNames(settings: SettingsStore): Set<String> = settings.disabledTools
