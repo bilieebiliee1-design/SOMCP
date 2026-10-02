@@ -347,6 +347,7 @@ object IntegrityGuard {
         applicationClassThreat(context)?.let { threats += it }
         lspatchClassLoaderThreat(context)?.let { threats += it }
         lspatchMetaDataThreat(context)?.let { threats += it }
+        AppListGuard.threats(context).forEach { threats += it }
         val maps = procMapsIndicators()
         if (maps.isNotEmpty()) threats += maps
         val ports = openLocalInstrumentationPorts()
