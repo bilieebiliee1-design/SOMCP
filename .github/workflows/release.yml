@@ -274,6 +274,21 @@ jobs:
 
           git clone --quiet https://github.com/amimo/dcc.git "$WORK/dcc"
           git -C "$WORK/dcc" checkout --quiet "$DCC_COMMIT"
+          # dcc unconditionally signs the apktool-rebuilt APK with its bundled
+          # signapk.jar, which imports sun.misc.BASE64Encoder - removed in
+          # Java 9+, so under the workflow's Java 17 it dies with
+          # NoClassDefFoundError. That test-key signature is throwaway anyway
+          # (the APK is re-aligned and re-signed with the release key below),
+          # so replace the signapk invocation with a plain copy.
+          python3 - "$WORK/dcc/dcc.py" <<'PY'
+          import sys, pathlib
+          p = pathlib.Path(sys.argv[1])
+          src = p.read_text()
+          old = "subprocess.check_call(['java', '-jar', SIGNJAR, pem, pk8, unsigned_apk, signed_apk])"
+          if old not in src:
+              raise SystemExit("signapk call not found in dcc.py; pinned dcc moved")
+          p.write_text(src.replace(old, "shutil.copyfile(unsigned_apk, signed_apk)"))
+          PY
           python3 -m venv "$WORK/venv"
           "$WORK/venv/bin/pip" install --quiet --disable-pip-version-check \
             -r "$WORK/dcc/requirements.txt"
