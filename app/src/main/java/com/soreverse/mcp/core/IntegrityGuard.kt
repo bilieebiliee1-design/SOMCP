@@ -44,8 +44,26 @@ object IntegrityGuard {
     @Volatile private var earlyNativeFailure: String? = null
 
     /**
+     * Startup enforcement failure. Surfaced by the UI gate (MainActivity's
+     * IntegrityGate dialog shows it with the triggering check or application
+     * named) instead of being killed on here: a kill inside
+     * Application.onCreate() runs before any UI exists, so the reason died
+     * with the in-memory AppLog and the launcher relaunched into the same
+     * silent kill - an undiagnosable reboot loop (observed on a HONOR LSA-AN00
+     * device where every start SIGKILLed itself ~1.2 s after launch with the
+     * native v3 verification passing). Fail-closed semantics are preserved:
+     * [inspect] short-circuits on this value, so the service/boot gates and
+     * the UI countdown exit all see an untrusted state until it is cleared.
+     */
+    @Volatile
+    var startupFailure: String? = null
+        private set
+
+    /**
      * Runs all checks (Java PackageManager + native filesystem-level probe) and
-     * terminates the process if any check fails.
+     * records [startupFailure] if any check fails; the UI gate renders the
+     * reason and exits after its countdown. Runtime tampering detected by the
+     * periodic recheck still terminates immediately.
      *
      * This is the main entry point for startup enforcement.
      * It should be called once during Application.onCreate().
@@ -140,7 +158,15 @@ object IntegrityGuard {
                 )
             }
             AppLog.e("INTEGRITY ENFORCEMENT FAILED: ${reasons.joinToString("; ")}")
-            terminateWithContext(context)
+            // Do NOT kill here. MainActivity is about to launch and its
+            // IntegrityGate dialog renders this reason (including which
+            // installed application tripped the coexistence gate) before the
+            // 10 s countdown exit; killing in onCreate() instead produced a
+            // silent relaunch loop with no evidence at all. The native
+            // crypto-verified tamper codes never reach this branch (they
+            // _exit(173) inside librz_native before returning), so the
+            // authoritative hard kill remains untouched.
+            startupFailure = reasons.joinToString("; ")
             return
         }
 
@@ -230,6 +256,19 @@ object IntegrityGuard {
     }
 
     fun inspect(context: Context): Result {
+        // A recorded startup enforcement failure is authoritative and sticky
+        // (fail-closed): every consumer of [inspect] - the UI gate, the MCP
+        // service gate, the boot receiver gate - must see the untrusted state
+        // until the reason is surfaced and the process exits.
+        startupFailure?.let { failure ->
+            return Result(
+                false,
+                failure,
+                NativeProbe.pinnedFingerprint().normalizeDigest(),
+                emptyList(),
+                listOf(failure)
+            )
+        }
         cached?.let { (time, result) ->
             if (System.currentTimeMillis() - time < 2_000L) return result
         }
