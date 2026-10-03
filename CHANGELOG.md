@@ -3,6 +3,7 @@
 # 更新日志
 
 ## 1.0.22
+- **修复 Release 流水线 Dex2C 加固在 universal APK 上必炸**（`app/build.gradle.kts` +11）。JNA 5.10 的 AAR 仍给早已废弃的 armeabi / mips / mips64 三个 ABI 捎带 `libjnidispatch.so`：四个 ABI split 包有 `splits.abi.include` 过滤无恙，universal APK 却把这三个死 ABI 目录一起打了进去。dcc 加固时按 APK 里实际存在的 ABI 生成 `APP_ABI`，NDK 29 直接 `Aborting: The armeabi ABI is no longer supported`（run 37086944811）；且 dcc 的 `copy_compiled_libs` 对 mips/mips64 没有 armeabi 那种「回退 armeabi-v7a」的逻辑，只在 workflow 里过滤 `APP_ABI` 救不了。修法从源头解决：`packaging.jniLibs.excludes` 把 `lib/armeabi/**`、`lib/mips/**`、`lib/mips64/**` 排出所有 APK——本应用 minSdk 26、native 全部按四个现代 ABI 交叉编译，这些死 .so 本来就是纯死重，universal 包还能顺带瘦身。
 - **修复 rzAnalyze 退出时 Scudo 堆崩溃（issue #138，应用莫名退出）**（app/src/main/cpp/rizin_core.cpp，+4/−1）。`rz_analysis_function_list()` 返回的是 RzAnalysis **内部**函数链表（analysis->fcns）的借用引用，不是新分配的链表；rzAnalyze 统计完函数个数后对它调用了 `rz_list_free()`，随后 `rz_core_free → rz_analysis_free` 对同一链表二次释放，Scudo 报 `corrupted chunk header` 并 SIGABRT——与 #138 崩溃栈 `rz_analysis_free → rz_list_free → rz_analysis_function_free → rz_pvector_free` 完全吻合。修复：只读长度、不再 free。同文件其余 `rz_list_free`（xrefs/hits/ops）释放的都是新分配链表，写法正确，不受影响。
 
 - **新增应用列表门禁：装有清风（com.qingfeng.app）或飘零浅醉·Hub（metk.hub）即闪退**（`core/AppListGuard.kt` 新增 177 行、`core/IntegrityGuard.kt` +1、`app/src/main/AndroidManifest.xml` +16/−1、`app/src/test/java/com/soreverse/mcp/core/AppListGuardTest.kt` 新增 62 行）。此前对抗只覆盖「安装包已被改」，本机装着哪个过签工具完全不查；现在把它作为一枚威胁并入 `runtimeThreats()`，与既有检查共用同一条终止链路（启动 `enforce()`、UI 3 s 轮询、45–135 s 周期复查、`isTrusted()` 服务/开机门禁），命中即走「应用完整性校验失败」弹窗 → `finishAffinity` + `exitProcess(173)`。
