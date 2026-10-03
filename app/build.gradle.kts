@@ -179,6 +179,15 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // JNA 5.10 still ships libjnidispatch.so for the long-dead armeabi /
+            // mips / mips64 ABIs. The ABI splits filter them out via
+            // splits.abi.include, but the universal APK packaged all three dead
+            // directories - and the release Dex2C hardening step derives APP_ABI
+            // from the APK itself, so NDK 29 aborted with "The armeabi ABI is no
+            // longer supported" (dcc's copy_compiled_libs has no fallback for
+            // mips/mips64 either). Nothing running this app is on those ABIs;
+            // drop the dead libs from every APK.
+            excludes += setOf("lib/armeabi/**", "lib/mips/**", "lib/mips64/**")
         }
         resources {
             excludes += setOf(
