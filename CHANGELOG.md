@@ -3,6 +3,8 @@
 # 更新日志
 
 ## 1.0.22
+- **修复 rzAnalyze 退出时 Scudo 堆崩溃（issue #138，应用莫名退出）**（app/src/main/cpp/rizin_core.cpp，+4/−1）。`rz_analysis_function_list()` 返回的是 RzAnalysis **内部**函数链表（analysis->fcns）的借用引用，不是新分配的链表；rzAnalyze 统计完函数个数后对它调用了 `rz_list_free()`，随后 `rz_core_free → rz_analysis_free` 对同一链表二次释放，Scudo 报 `corrupted chunk header` 并 SIGABRT——与 #138 崩溃栈 `rz_analysis_free → rz_list_free → rz_analysis_function_free → rz_pvector_free` 完全吻合。修复：只读长度、不再 free。同文件其余 `rz_list_free`（xrefs/hits/ops）释放的都是新分配链表，写法正确，不受影响。
+
 - **新增应用列表门禁：装有清风（com.qingfeng.app）或飘零浅醉·Hub（metk.hub）即闪退**（`core/AppListGuard.kt` 新增 177 行、`core/IntegrityGuard.kt` +1、`app/src/main/AndroidManifest.xml` +16/−1、`app/src/test/java/com/soreverse/mcp/core/AppListGuardTest.kt` 新增 62 行）。此前对抗只覆盖「安装包已被改」，本机装着哪个过签工具完全不查；现在把它作为一枚威胁并入 `runtimeThreats()`，与既有检查共用同一条终止链路（启动 `enforce()`、UI 3 s 轮询、45–135 s 周期复查、`isTrusted()` 服务/开机门禁），命中即走「应用完整性校验失败」弹窗 → `finishAffinity` + `exitProcess(173)`。
 - 两条互不冗余的通道：① **pinned 包名直查**（`pinnedPackageThreats`）——对两个包名各一次 `getPackageInfo`，便宜，每次检查都跑，冷启动第一次 `inspect()` 就能命中；② **全量列表 label 扫描**（`scan` + `matchThreats`）——覆盖保留显示名、改掉 applicationId 的重打包。枚举取两条通道的并集：`getInstalledApplications` 与 `queryIntentActivities(MAIN/LAUNCHER)`（参考 `D:\AppListViewer`：国产 ROM 上这两条是不同的过滤路径，hook 裁掉一条另一条仍在）。
 - 匹配口径：包名**全等**（忽略大小写，不做子串，`com.qingfeng.app.hook` 不命中）；名称按 `normalizeFingerprint` 归一化（丢弃 `·`/空格/括号等分隔符、统一大小写）后**包含即命中**，于是 `飘零浅醉·Hub` / `飘零浅醉 hub` / `【飘零浅醉·Hub】` 是同一个身份，`清风工具箱` 也命中。代价：名字里带「清风」的正规 app（清风壁纸一类）会被误杀；命中原因会把对方的包名与实际名称一并显示在弹窗「威胁」行，便于用户自查是哪个应用触发的。
