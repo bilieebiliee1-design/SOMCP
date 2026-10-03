@@ -853,8 +853,11 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzAnalyze(
     rz_core_analysis_all(core);
 
     RzList* funcs = rz_analysis_function_list(core->analysis);
+    // rz_analysis_function_list() returns the list OWNED by RzAnalysis (analysis->fcns).
+    // It is a borrowed reference — freeing it here leaves a dangling pointer that
+    // rz_core_free -> rz_analysis_free will free again (Scudo "corrupted chunk
+    // header" SIGABRT, issue #138). Only read the length; do not free.
     int funcCount = funcs ? rz_list_length(funcs) : 0;
-    rz_list_free(funcs);
 
     char b[256];
     snprintf(b, sizeof(b), "{\"ok\":true,\"functions\":%d,\"size\":%zu}", funcCount, buf.size());
