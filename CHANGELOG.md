@@ -3,6 +3,11 @@
 # 更新日志
 
 ## 1.0.22
+- **修复启动完整性校验失败时的无提示重启循环**（`core/IntegrityGuard.kt` +47/−4）。真机（HONOR LSA-AN00，SDK 34）logcat 实证：主进程每次启动约 1.2 s 即自杀（`Process: Sending signal. PID: … SIG: 9`，连续 40+ 次循环），且 logcat 里找不到任何失败原因——native 验签链全部通过（证书提取、`Package id matched`、`v2/v3 signature and content digest verified (v3)`），自杀点唯一吻合 `enforce()` 尾部的 `terminateWithContext`，而失败的是 logcat 不可见的静默检查项（Java 层指纹/`runtimeThreats`/应用列表门禁/digest 对比其一），失败原因只写进内存 `AppLog`，进程一死即丢。
+  - 根因：`enforce()` 在 `Application.onCreate()` 里硬杀进程，早于任何 UI 存在——#137 的文档声称「命中即走应用完整性校验失败弹窗」，但 `MainActivity` 的 `IntegrityGate` 弹窗根本来不及显示；启动器拉起 → onCreate 杀 → 再拉起，形成用户完全不可诊断的重启循环。这与 `enforceEarly` 注释里记录过的上一代启动崩溃问题同构（当时已把 attachBaseContext 门禁改为非致命，onCreate 这层仍保留硬杀）。
+  - 修复（最小 diff，仅 `IntegrityGuard.kt`）：`enforce()` 检查失败不再 `terminateWithContext`，改为把原因记入新增的 `startupFailure`（volatile，private set）；`inspect()` 对该标志短路返回不可信 `Result`——UI 门禁弹窗显示具体原因（应用列表门禁命中时含触发应用的包名与显示名）后走既有 10 s 倒计时退出；MCP 服务与开机门禁同样经 `isTrusted() → inspect()` 读到该状态，保持 fail-closed。
+  - 不受影响：native 侧确凿篡改判定（`SIG_INVALID`/`CONTENT_MISMATCH` 在 `librz_native` 内 `_exit(173)`，根本到不了这段代码）与 45–135 s 周期复查的立即终止——前者是权威硬杀，后者的威胁出现时 UI 已在运行，3 s 轮询弹窗与终止链路照旧。
+
 - **修复 Release 流水线 Dex2C 加固在 universal APK 上必炸**（`app/build.gradle.kts` +11）。JNA 5.10 的 AAR 仍给早已废弃的 armeabi / mips / mips64 三个 ABI 捎带 `libjnidispatch.so`：四个 ABI split 包有 `splits.abi.include` 过滤无恙，universal APK 却把这三个死 ABI 目录一起打了进去。dcc 加固时按 APK 里实际存在的 ABI 生成 `APP_ABI`，NDK 29 直接 `Aborting: The armeabi ABI is no longer supported`（run 37086944811）；且 dcc 的 `copy_compiled_libs` 对 mips/mips64 没有 armeabi 那种「回退 armeabi-v7a」的逻辑，只在 workflow 里过滤 `APP_ABI` 救不了。修法从源头解决：`packaging.jniLibs.excludes` 把 `lib/armeabi/**`、`lib/mips/**`、`lib/mips64/**` 排出所有 APK——本应用 minSdk 26、native 全部按四个现代 ABI 交叉编译，这些死 .so 本来就是纯死重，universal 包还能顺带瘦身。
 - **修复 rzAnalyze 退出时 Scudo 堆崩溃（issue #138，应用莫名退出）**（app/src/main/cpp/rizin_core.cpp，+4/−1）。`rz_analysis_function_list()` 返回的是 RzAnalysis **内部**函数链表（analysis->fcns）的借用引用，不是新分配的链表；rzAnalyze 统计完函数个数后对它调用了 `rz_list_free()`，随后 `rz_core_free → rz_analysis_free` 对同一链表二次释放，Scudo 报 `corrupted chunk header` 并 SIGABRT——与 #138 崩溃栈 `rz_analysis_free → rz_list_free → rz_analysis_function_free → rz_pvector_free` 完全吻合。修复：只读长度、不再 free。同文件其余 `rz_list_free`（xrefs/hits/ops）释放的都是新分配链表，写法正确，不受影响。
 
