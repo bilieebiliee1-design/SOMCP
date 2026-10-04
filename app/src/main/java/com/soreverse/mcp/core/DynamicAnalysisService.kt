@@ -40,6 +40,7 @@ class DynamicAnalysisService(private val appContext: Context) {
     val reportDraft: StateFlow<String> = _reportDraft
     private val _partsDraft = MutableStateFlow<List<RikkaPart>>(emptyList())
     val partsDraft: StateFlow<List<RikkaPart>> = _partsDraft
+    private val currentWorkspaceId = MutableStateFlow("")
 
     /** Blocking entry used by the MCP dynamic_analyze_ai tool (heavy tool). */
     fun analyzeSync(dynamicRun: String, path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> =
@@ -120,6 +121,8 @@ Requirements:
             DYNAMIC_TOOL_NAMES,
             AgentToolHooks(
                 zh = zh,
+                workspaceId = { currentWorkspaceId.value },
+                onWorkspaceOpened = { currentWorkspaceId.value = it },
                 onToolStart = { name ->
                     emit(DynamicAnalysisEvent.Kind.TOOL, if (zh) "调用工具 $name" else "Calling tool $name", name)
                 },
@@ -135,6 +138,7 @@ Requirements:
             zh = zh,
             depth = 1,
             budget = SubAgentBudget(settings.subAgentMaxPerRun),
+            workspaceId = { currentWorkspaceId.value },
             onProgress = { text ->
                 _events.tryEmit(DynamicAnalysisEvent(DynamicAnalysisEvent.Kind.STATUS, text))
             }
