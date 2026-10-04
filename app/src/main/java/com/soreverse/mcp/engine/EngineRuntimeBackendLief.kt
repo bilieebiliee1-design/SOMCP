@@ -196,6 +196,14 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                     )
             )
             .put(
+                "jni",
+                jniCapabilities()
+            )
+            .put(
+                "packer",
+                PackerFingerprint.capabilities()
+            )
+            .put(
                 "dynamic",
                 dynamicCapabilityEntry()
             )

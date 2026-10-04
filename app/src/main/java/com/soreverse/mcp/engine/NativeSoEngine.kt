@@ -156,6 +156,11 @@ class NativeSoEngine(context: Context) {
     fun rzDecompile(workspaceId: String, editSessionId: String = "", locator: String = "", strict: Boolean = true): JSONObject =
         runtime.rzDecompile(workspaceId, editSessionId, locator, strict)
     fun capabilityRegistry(): JSONObject = runtime.capabilityRegistry()
+    fun jniScan(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.jniScan(workspaceId, editSessionId)
+    fun jniResolve(workspaceId: String, editSessionId: String = "", query: String): JSONObject = runtime.jniResolve(workspaceId, editSessionId, query)
+    fun jniCapabilities(): JSONObject = runtime.jniCapabilities()
+    fun packerScan(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.packerScan(workspaceId, editSessionId)
+    fun packerCapabilities(): JSONObject = PackerFingerprint.capabilities()
     fun liefDispatch(
         workspaceId: String,
         editSessionId: String = "",

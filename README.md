@@ -67,13 +67,15 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - Cloudflare Tunnel：quick/named 隧道、keepalive、状态统计。
 - 可选 Unidbg：`emulate_call`、`emulate_dump`。**注意**：Unidbg 的 Android 原生库（`libcapstone.so` / `libkeystone.so` / `libunicorn.so` / `libjnidispatch.so`）不随 Debug APK 内置，需自行交叉编译 unidbg 上游 native 并放入 `app/src/main/jniLibs/<abi>/` 后重新构建，或在设备上额外安装；其中 `libunicorn.so` 必须是 unidbg unicorn2 的 JNI 桥（导出 `Java_com_github_unidbg_arm_backend_unicorn_Unicorn_*`），只编译原始 unicorn 引擎不行，可用 `tools/verify_unicorn_jni.py` 校验。**官方 Release APK（v1.0.18+）已内置 Unidbg 原生库，但只有 64 位 ABI 完整可用**：arm64-v8a / x86_64 四个库齐全，装完就能用 `emulate_call` / `emulate_dump`；armeabi-v7a / x86 只有 `libcapstone.so` / `libkeystone.so` / `libjnidispatch.so`，**不含 `libunicorn.so`**（unicorn/QEMU 需要 `__uint128_t`，Android NDK 的 32 位工具链不提供，`app/build.gradle.kts` 在打包阶段就对 32 位 ABI 剔除该库），所以 `emulate_*` 在 32 位设备上不可用，要用模拟执行得装 64 位 ABI 的包。库缺失时 `system_control(action=status)` 的 `emulation.setup` 会明确标注 `requires-extra-install`，`emulate_*` 调用返回 `EMULATOR_UNAVAILABLE` 并说明缺失原因，不会伪装成可用。
 - 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
+- JNI 动态注册静态还原（`jni_api`）：扫描 `JNINativeMethod` 表，把 Java 方法名/签名映射到真实原生地址，并解析回符号。
+- 加固/壳静态指纹识别（`packer_api`）：厂商标记、逐段熵、入口点异常、段名异常、反分析字符串，输出带证据的排序判定。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
 - APK 内 SO 使用流式扫描与按需提取，分析页可一键释放工作区、索引缓存和已结束的 Blutter 数据。
 - 精简工具列表：默认只暴露核心 + meta 工具，完整能力通过 `meta_info(action=describe)` 发现。
 
 ## MCP 工具体系
 
-当前共 40 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
+当前共 42 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
 
 推荐工作流：
 
@@ -125,14 +127,18 @@ meta_info(action=health)
 底层 API 通过 capability registry + 4 个聚合网关暴露，避免 MCP 工具数量爆炸。`meta_info(action=capabilities)` 是真实能力面来源，会明确列出 supported / partial / missing，避免把未实现的底层 API 误报为已覆盖：
 
 ```text
-rizin_api(action=capabilities|command|analyze|functions|cfg|xrefs|search_bytes|crypto|esil|diff|asm|disasm)
+rizin_api(action=capabilities|command|analyze|functions|cfg|xrefs|search_bytes|crypto|esil|diff|asm|disasm|decompile)
 lief_api(action=capabilities|parse|list|patch_address|add_export|remove_symbol|build|fix_sections|report)
 unidbg_api(action=capabilities|status|call|dump)
 xanso_api(action=capabilities|status|fix_sections)
 flutter_blutter(action=inspect|analyze|status|result|cancel|packages|prune)
 dynamic_api(action=capabilities|dispatch|status|analyze)
 dynamic_analyze_ai(evidence=...|function=...|request=...)
+jni_api(action=capabilities|scan|resolve|method_table, query=...)
+packer_api(action=capabilities|scan|fingerprint)
 ```
+
+`jni_api` 静态还原 JNI 动态注册：扫描只读数据段里的 `JNINativeMethod` 三指针表（name / signature / fnPtr），把「Java 方法名 → 真实原生地址」直接映射出来，并解析 fnPtr 回 `.symtab` / `.dynsym` 符号。Android 上多数 native 方法不导出 `Java_*` 符号，而是在 `JNI_OnLoad` 里用 `RegisterNatives` 动态注册，因此普通符号表看不到这层映射。`packer_api` 做加固/壳静态指纹：厂商标记串（360 / 梆梆 / 爱加密 / 阿里 / 腾讯乐固 / UPX）、逐段 Shannon 熵、`e_entry` 落在 `.text` 之外的壳 stub 特征、非标准/空段名、反分析字符串。两者都是纯字节检查，不执行目标文件，对不可信输入安全；结论带证据与置信度，不会把「混淆构建」直接断言成「商业加固」。
 
 ## 动态分析（手动加载到内存 → AI 分析）
 

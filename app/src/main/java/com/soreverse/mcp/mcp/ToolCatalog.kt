@@ -1843,6 +1843,69 @@ object ToolCatalog {
         }
     }
 
+    private val jniApi = EngineToolHandler(
+        ToolMeta(
+            "jni_api",
+            "JNI 动态注册映射网关（RegisterNatives 表扫描 / 方法名→原生地址）",
+            "Recover JNI dynamic registrations: scans read-only data for JNINativeMethod tables and maps Java method names to real native addresses.",
+            "lowlevel",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf(
+                        "JNI operation",
+                        "capabilities",
+                        "scan",
+                        "resolve",
+                        "method_table"
+                    )
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID"
+                    "query" str "Method name, JNI descriptor fragment, Java class, or fnPtr hex"
+                }
+            )
+        }
+    ) { e, a, _ ->
+        when (a.str("action", "scan")) {
+            "capabilities" -> ok(e.jniCapabilities())
+            "scan", "method_table" -> e.jniScan(a.str("workspaceId"), a.str("editSessionId"))
+            "resolve" -> e.jniResolve(a.str("workspaceId"), a.str("editSessionId"), a.str("query"))
+            else -> err("UNKNOWN_ACTION", "Unknown JNI action", "action", a.str("action"))
+        }
+    }
+
+    private val packerApi = EngineToolHandler(
+        ToolMeta(
+            "packer_api",
+            "加固/壳静态指纹识别网关（厂商标记、段熵、入口点异常）",
+            "Static packer/protector fingerprinting: vendor markers, per-section entropy, entry-point anomaly, and anti-analysis string hints.",
+            "lowlevel",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf(
+                        "Packer operation",
+                        "capabilities",
+                        "scan",
+                        "fingerprint"
+                    )
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID"
+                }
+            )
+        }
+    ) { e, a, _ ->
+        when (a.str("action", "scan")) {
+            "capabilities" -> ok(e.packerCapabilities())
+            "scan", "fingerprint" -> e.packerScan(a.str("workspaceId"), a.str("editSessionId"))
+            else -> err("UNKNOWN_ACTION", "Unknown packer action", "action", a.str("action"))
+        }
+    }
+
     // ── SESSION ──
 
     private val sessionOpen = EngineToolHandler(
@@ -2298,6 +2361,7 @@ object ToolCatalog {
         unidbgSession, unidbgMemory, unidbgDebug, unidbgBatch,
         diffSo,
         rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi,
+        jniApi, packerApi,
         sessionOpen, sessionHistory, sessionAudit,
         buildSo,
         systemControl,
