@@ -289,6 +289,13 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean("emulationEnabled", true)
         set(value) = prefs.edit().putBoolean("emulationEnabled", value).apply()
 
+    /** Default TCP port used by the Frida bridge to reach frida-server / frida-gadget.
+     *  Applied when a dynamic_api call does not pass an explicit host/port JSON target;
+     *  per-call overrides still take precedence. */
+    var fridaPort: Int
+        get() = prefs.getInt("fridaPort", 27042)
+        set(value) = prefs.edit().putInt("fridaPort", value.coerceIn(1, 65535)).apply()
+
     /** Hard cap on the textual size of a single tool result (characters). 0 disables it.
      *  When set, McpHttpServer truncates the JSON payload text past this limit and appends
      *  a "[truncated]" marker — bounding the LLM context cost of chatty tools
