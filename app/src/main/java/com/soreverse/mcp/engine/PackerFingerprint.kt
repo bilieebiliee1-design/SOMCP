@@ -82,23 +82,198 @@ internal object PackerFingerprint {
     }
 
     /**
-     * Vendor markers are plain ASCII tags that these vendors embed in their
-     * stub. Kept as readable strings so a hit is self-explanatory in the
-     * evidence output.
+     * One protector's static signature.
+     *
+     * [filePatterns] are matched against the analysed file's own name; `*` is
+     * the only wildcard. These are the strongest signal available: a stub
+     * literally named `libjiagu.so` is the 360 protector, no heuristics needed.
+     *
+     * [stringMarkers] are ASCII tags found inside the binary, which is weaker —
+     * a marker only survives in the binary if the vendor did not encrypt it.
+     * Markers must be specific enough to be unlikely by accident; short generic
+     * fragments are deliberately excluded (see [VENDOR_SIGNATURES]).
      */
-    private val VENDOR_MARKERS = listOf(
-        Triple("360", "Qihoo 360", "libjiagu"),
-        Triple("bangcle", "Bangcle / SecNeo", "SecNeo"),
-        Triple("ijiami", "Ijiami", "ijiami"),
-        Triple("ali", "Ali (Alibaba)", "libmobisec"),
-        Triple("secneo", "SecNeo", "SecNeo"),
-        Triple("tencent", "Tencent Legu", "libshella"),
-        Triple("legu", "Tencent Legu", "libshella"),
-        Triple("upx", "UPX", "UPX!"),
-        Triple("bangcle_self", "Bangcle / SecNeo", "bangcle_self")
+    private class VendorSignature(
+        val id: String,
+        val name: String,
+        val vendor: String,
+        val filePatterns: List<String>,
+        val stringMarkers: List<String> = emptyList()
     )
 
-    fun analyze(elf: ElfFile): JSONObject {
+    /**
+     * True when [candidate] matches [pattern], where `*` is the only wildcard
+     * and matches any run of characters (including none).
+     *
+     * Done without [Regex] so that vendor names containing regex metacharacters
+     * — `.so` extensions above all — are matched literally.
+     */
+    private fun matchesFileName(pattern: String, candidate: String): Boolean {
+        if (pattern.equals(candidate, ignoreCase = true)) return true
+        if ('*' !in pattern) return false
+        val parts = pattern.split("*")
+        val haystack = candidate.lowercase()
+        var cursor = 0
+        parts.forEachIndexed { index, raw ->
+            val part = raw.lowercase()
+            val last = index == parts.lastIndex
+            val found = when {
+                // Leading part must anchor at the start.
+                index == 0 -> if (haystack.startsWith(part)) 0 else -1
+                // Trailing part must anchor at the end, so "libshella-*.so"
+                // does not match "libshella-1.2.3.so.bak".
+                last -> if (part.isEmpty() || haystack.endsWith(part)) haystack.length - part.length else -1
+                // Interior parts may appear anywhere after the cursor.
+                else -> haystack.indexOf(part, cursor)
+            }
+            if (found < 0) return false
+            cursor = found + part.length
+        }
+        return true
+    }
+
+    /**
+     * Vendor signatures, keyed by the file/entry names each protector ships.
+     *
+     * Sourced from published packer-signature lists. Two classes of entry in
+     * those lists are intentionally **not** included here:
+     *
+     *  - Ordinary third-party dependencies that co-occur with protection
+     *    (`okhttp3`, `com.google.gson`, `kotlinx.coroutines`, `androidx.*`,
+     *    `com.alibaba.android.arouter`, `com.tencent.bugly`, …). They describe
+     *    the app, not the protector, and would flag a large share of clean APKs.
+     *  - Obfuscated class names (`a.a`, `a.b.a`, `a.f.a`) and very short
+     *    fragments (`_se_`, `_me_`), which match almost anything.
+     *
+     * Both classes are DEX-level rather than SO-level, so they are out of reach
+     * of this SO scanner anyway; see `capabilities.limits`.
+     */
+    private val VENDOR_SIGNATURES = listOf(
+        VendorSignature(
+            "360",
+            "Qihoo 360",
+            "Qihoo",
+            listOf("libjiagu.so", "libjiagu_a64.so", "libjiagu_x86.so", "libjiagu_x64.so", "libprotectClass.so"),
+            listOf("libjiagu")
+        ),
+        VendorSignature(
+            "360_enterprise",
+            "Qihoo 360 Enterprise",
+            "Qihoo",
+            listOf("libjiagu_vip.so", "libjiagu_vip_a64.so", "libjiagu_vip_x86.so", "libjiagu_vip_x64.so", "libjg_mc.so")
+        ),
+        VendorSignature("bangcle", "Bangcle / SecNeo", "Bangcle", listOf("libsecexe.so", "libsecmain.so", "libSecShell.so"), listOf("bangcle", "secneo")),
+        VendorSignature(
+            "bangcle_enterprise",
+            "Bangcle Enterprise",
+            "Bangcle",
+            listOf("libDexHelper.so", "libDexHelper-x86.so", "libAppGuard.so", "libAppGuard-x86.so"),
+            listOf("libDexHelper")
+        ),
+        VendorSignature(
+            "ijiami",
+            "Ijiami",
+            "Ijiami",
+            listOf("ijiami.ajm", "ijiami.dat", "IJMDal.Data", "libijmDataEncryption.so", "libijm-emulator.so"),
+            listOf("ijiami")
+        ),
+        VendorSignature("ijiami_enterprise", "Ijiami Enterprise", "Ijiami", listOf("libijm-emulator.so", "libijmDataEncryption.so")),
+        VendorSignature(
+            "tencent_legu",
+            "Tencent Legu",
+            "Tencent",
+            listOf("libshell.so", "libtup.so", "mix.dex", "mixz.dex", "libshella-*.so", "libshellx-*.so"),
+            listOf("libshella", "legu")
+        ),
+        VendorSignature(
+            "tencent_yu",
+            "Tencent Yuas",
+            "Tencent",
+            listOf(
+                "libshell-super.2019.so",
+                "libshell-superbasic.2019.so",
+                "libtosprotection.armeabi.so",
+                "libtosprotection.armeabi-v7a.so",
+                "libtosprotection.x86.so",
+                "tosversion"
+            )
+        ),
+        VendorSignature(
+            "tencent_yu_enterprise",
+            "Tencent Yuas Enterprise",
+            "Tencent",
+            listOf("libshell-superv.2019.so", "libshell-supervbasic.2019.so", "dexMethod_00oo1l1l.dat")
+        ),
+        VendorSignature("ali", "Ali (Alibaba)", "Alibaba", listOf("libfakejni.so", "libzuma.so")),
+        VendorSignature("ali_ju", "Ali Ju Security", "Alibaba", listOf("aliprotect.dat", "libmobisec.so"), listOf("libmobisec")),
+        VendorSignature("alipay", "Alipay", "Alibaba", listOf("libashield.so")),
+        VendorSignature(
+            "nagain",
+            "Nagain",
+            "Nagain",
+            listOf("libddog.so", "libedog.so", "libchaosvmp.so", "libddog.solibfdog.so", "libvdog", "libvdog64", "libvdog-x86")
+        ),
+        VendorSignature("tongfu", "Tongfu Shield", "Tongfu", listOf("libNSaferOnly.so", "libegis.so")),
+        VendorSignature("baidu", "Baidu", "Baidu", listOf("libbaiduprotect.so", "libbuGvmSolxMV.so")),
+        VendorSignature("baidu_sagittarius", "Baidu Sagittarius", "Baidu", listOf("libsagittarius6.so", "libsagittarius6_x86", "sagittarius6-sec.dex")),
+        VendorSignature("netqin", "NetQin", "NetQin", listOf("libnqshield.so")),
+        VendorSignature(
+            "netease",
+            "NetEase Yidun",
+            "NetEase",
+            listOf("libnesec", "libnesec64", "libnesec.so", "libunisec.so", "libunisec_x86.so", "libunisec2.so", "libunisec2_x86.so", "nedata.db")
+        ),
+        VendorSignature(
+            "kiwi",
+            "Kiwi Security",
+            "Kiwi",
+            listOf(
+                "libkwscmm.so",
+                "libkwscr.so",
+                "libkwslinker.so",
+                "libKwProtectSDK.so",
+                "libKwAppGuardSDK.so",
+                "kwmkadp_arm64-v8a",
+                "kwmkadp_armeabi-v7a",
+                "kiwiguard.lic"
+            )
+        ),
+        VendorSignature(
+            "dingxiang",
+            "Dingxiang",
+            "Dingxiang",
+            listOf(
+                "libx3g.so", "libdx-ld.so", "libcsn.so", "libstub000.so",
+                "libDXWhiteBoxComm-*.so", "output-armeabi-v7a.zip", "output-arm64-v8a.zip", "output-x86.zip", "output-x86_64.zip"
+            )
+        ),
+        VendorSignature("manxi", "Manxi", "Manxi", listOf("mxsafe.data", "mxsafe.jar", "libmanxi.so", "libmxldd.so", "libmxacc.so")),
+        VendorSignature("shensi", "Shensi Shield", "Shensi", listOf("kqkticwjgzy_a32.so", "kqkticwjgzy_a64.so", "kqkticwjgzy_x86.so", "kqkticwjgzy_x64.so")),
+        VendorSignature("cmcc_mogo", "China Mobile Mogo", "China Mobile", listOf("mogosec_classes", "libcmvmp.so", "libmogosecurity.so")),
+        VendorSignature("shanhulingyu", "Shanhulingyu", "Shanhulingyu", listOf("libreincp.so", "libreincp_x86.so")),
+        VendorSignature("epic", "Epic", "Epic", listOf("Epic.vmp", "libEP_arm.so", "libEP_arm64.so", "libEP_x86.so", "libEP_x86_64.so")),
+        VendorSignature("epic_v3", "Epic V3", "Epic", listOf("libEpicVm.so")),
+        VendorSignature("arm", "Arm Protect", "Arm", listOf("libArmEpicVm.so", "libarm_protect.so")),
+        VendorSignature("oppo", "OPPO", "OPPO", listOf("libomas.so")),
+        VendorSignature("google_pairip", "Google Play Protect", "Google", listOf("libpairipcore.so")),
+        VendorSignature("venustech", "Venustech", "Venustech", listOf("libvenustech.so", "libvenSec.so")),
+        VendorSignature("appshield", "AppShield", "AppShield", listOf("libahope.so")),
+        VendorSignature("appsealin", "AppSealin", "AppSealin", listOf("libcovault-appsec.so", "libcovault.so")),
+        VendorSignature("nesun", "Nesun", "Nesun", listOf("libzprotect.so")),
+        VendorSignature("shadowsafety", "ShadowSafety", "ShadowSafety", listOf("libShadowSafetyProtect.so", "libShadowSafetyProtect_a64.so")),
+        VendorSignature("yingan", "Yingan", "Yingan", listOf("libabcdProtect.so", "libabcdProtect_a64.so")),
+        VendorSignature("yinglian", "Yinglian", "Yinglian", listOf("libylshell.so")),
+        VendorSignature("yangfan", "Yangfan Security", "Yangfan", listOf("libyfboot.so")),
+        VendorSignature("shanda", "Shanda", "Shanda", listOf("libapssec.so")),
+        VendorSignature("rising", "Rising", "Rising", listOf("librsprotect.so")),
+        VendorSignature("uu", "UU Security", "UU", listOf("libuusafe.jar.so", "libuusafe.so", "libuusafeempty.so")),
+        VendorSignature("haiyunan", "HaiyunAn", "HaiyunAn", listOf("libitsec.so")),
+        VendorSignature("dexprotect", "DexProtect", "DexProtect", listOf("dp.arm-v7.so.dat", "dp.arm.so.dat", "libdexprotector.so")),
+        VendorSignature("apkprotect", "APKProtect", "APKProtect", listOf("libAPKProtect.so")),
+        VendorSignature("upx", "UPX", "UPX", emptyList(), listOf("UPX!"))
+    )
+
+    fun analyze(elf: ElfFile, sourceName: String = ""): JSONObject {
         val data = elf.data
         val evidence = mutableListOf<String>()
         val verdicts = linkedMapOf<String, PackerVerdict>()
@@ -120,24 +295,43 @@ internal object PackerFingerprint {
             )
         }
 
-        // ── Vendor marker scan ──
+        // ── Vendor signature scan ──
         val asciiView = buildString {
             data.forEach { b ->
                 val v = b.toInt() and 0xff
                 append(if (v in 0x20..0x7e) v.toChar() else ' ')
             }
         }
-        for ((id, name, marker) in VENDOR_MARKERS) {
-            val present = asciiView.contains(marker)
-            if (present) {
-                add(
-                    id,
-                    name,
-                    name,
-                    60,
-                    "Marker string '$marker' present in binary",
-                    if (id == "upx") "high" else "medium"
-                )
+        // A stub is normally named after its vendor, so the file name is the
+        // cheapest and strongest evidence there is. Score it above any string
+        // hit, because a name collision on a marker is far likelier than a
+        // third-party library shipping the exact protector stub name.
+        val fileName = sourceName.substringAfterLast('/').substringAfterLast('\\')
+        for (sig in VENDOR_SIGNATURES) {
+            if (fileName.isNotBlank()) {
+                val hit = sig.filePatterns.firstOrNull { matchesFileName(it, fileName) }
+                if (hit != null) {
+                    add(
+                        sig.id,
+                        sig.name,
+                        sig.vendor,
+                        90,
+                        "File name '$fileName' matches known $sig.vendor artefact '$hit'",
+                        "high"
+                    )
+                }
+            }
+            sig.stringMarkers.forEach { marker ->
+                if (asciiView.contains(marker)) {
+                    add(
+                        sig.id,
+                        sig.name,
+                        sig.vendor,
+                        60,
+                        "Marker string '$marker' present in binary",
+                        if (sig.id == "upx") "high" else "medium"
+                    )
+                }
             }
         }
 
@@ -257,6 +451,7 @@ internal object PackerFingerprint {
             .put("architecture", elf.architecture)
             .put("endian", elf.endian)
             .put("entry", hex(elf.entry))
+            .put("fileName", fileName)
             .put("sectionCount", elf.sections.size)
             .put("packers", items)
             .put("evidence", JSONArray(evidence))
@@ -272,7 +467,10 @@ internal object PackerFingerprint {
             "supported",
             JSONArray(
                 listOf(
-                    "vendor marker string scan (360 / Bangcle / Ijiami / Ali / Tencent Legu / UPX)",
+                    "vendor artefact file-name match (${VENDOR_SIGNATURES.count {
+                        it.filePatterns.isNotEmpty()
+                    }} protectors: 360 / Bangcle / Ijiami / Tencent Legu+Yuas / Ali / Baidu / Netease / Kiwi / Dingxiang / Epic / …)",
+                    "vendor marker string scan inside the binary (360 / Bangcle / Ijiami / Tencent Legu / Ali / UPX)",
                     "Shannon entropy per section (encrypted / compressed region detection)",
                     "entry point vs .text range check (packer stub indicator)",
                     "non-standard and blank section name detection",
@@ -286,7 +484,8 @@ internal object PackerFingerprint {
                 listOf(
                     "Heuristic only; no code executed and no runtime unpack performed",
                     "Encrypted markers are invisible until the stub decrypts them",
-                    "Customised or rebranded protectors may evade all markers"
+                    "Customised or rebranded protectors may evade all markers",
+                    "DEX-level signatures (wrapper Application classes, injected packages) are out of scope: this scanner only sees one SO, not the APK or its DEX files"
                 )
             )
         )
@@ -294,5 +493,5 @@ internal object PackerFingerprint {
 
 internal fun EngineRuntime.packerScan(workspaceId: String, editSessionId: String = ""): JSONObject = guarded {
     val elf = elfFor(workspaceId, editSessionId)
-    ok(PackerFingerprint.analyze(elf))
+    ok(PackerFingerprint.analyze(elf, workspace(workspaceId).source.name))
 }

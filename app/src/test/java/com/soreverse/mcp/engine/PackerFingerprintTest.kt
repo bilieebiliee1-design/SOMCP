@@ -16,6 +16,7 @@ package com.soreverse.mcp.engine
 
 import java.util.Random
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -103,5 +104,84 @@ class PackerFingerprintTest {
         val caps = PackerFingerprint.capabilities()
         assertTrue(caps.getString("coverageClass") == "static_fingerprint")
         assertTrue(caps.getJSONArray("limits").length() > 0)
+    }
+
+    private fun packerIds(result: JSONObject): List<String> {
+        val packers = result.getJSONArray("packers")
+        return (0 until packers.length()).map { packers.getJSONObject(it).getString("id") }
+    }
+
+    private fun neutralElf(): ElfFile {
+        val data = ByteArray(0x2000)
+        val sections = listOf(
+            SectionInfo(".text", 1L, 0x6L, 0x1000L, 0x0L, 0x800L, 0, 0, 4, 0),
+            SectionInfo(".rodata", 1L, 0x2L, 0x2000L, 0x800L, 0x800L, 0, 0, 8, 0)
+        )
+        return elf(data, entry = 0x1000L, sections = sections)
+    }
+
+    @Test
+    fun detectsVendorFromStubFileName() {
+        val result = PackerFingerprint.analyze(neutralElf(), "libjiagu.so")
+        val packers = result.getJSONArray("packers")
+        val hit = (0 until packers.length()).map { packers.getJSONObject(it) }.first { it.getString("id") == "360" }
+        assertEquals("high", hit.getString("confidence"))
+        assertEquals("libjiagu.so", result.getString("fileName"))
+        // A stub named after the vendor is decisive, not a suspicion.
+        assertEquals("protected", result.getString("overall"))
+    }
+
+    @Test
+    fun detectsVendorFromApkStyleEntryPath() {
+        // Workspace sources coming from an APK carry the full lib/<abi>/ entry.
+        val result = PackerFingerprint.analyze(neutralElf(), "lib/armeabi-v7a/libsecexe.so")
+        assertTrue(packerIds(result).contains("bangcle"))
+    }
+
+    @Test
+    fun wildcardFilePatternMatchesVersionedStub() {
+        val result = PackerFingerprint.analyze(neutralElf(), "libshella-1.2.3.so")
+        assertTrue(packerIds(result).contains("tencent_legu"))
+    }
+
+    @Test
+    fun wildcardFilePatternAnchorsBothEnds() {
+        // "libshella-*.so" must not swallow a renamed or wrapped artefact.
+        listOf("libshella.so", "libshella-1.2.3.so.bak", "xlibshella-1.so").forEach { name ->
+            val result = PackerFingerprint.analyze(neutralElf(), name)
+            assertFalse("'$name' must not match libshella-*.so", packerIds(result).contains("tencent_legu"))
+        }
+    }
+
+    @Test
+    fun unrelatedFileNameIsNotFlagged() {
+        val result = PackerFingerprint.analyze(neutralElf(), "libnative.so")
+        assertEquals("clean", result.getString("overall"))
+    }
+
+    @Test
+    fun commonDependencyNamesAreNotTreatedAsProtectorSignatures() {
+        // Regression guard: published signature lists mix protector artefacts
+        // with ordinary app dependencies. Matching the latter would flag most
+        // clean APKs, so they must never produce a verdict.
+        val noise = listOf("libokhttp.so", "libgson.so", "kotlinx.coroutines", "com.google.gson", "androidx.constraintlayout", "com.alibaba.android.arouter")
+        noise.forEach { name ->
+            val result = PackerFingerprint.analyze(neutralElf(), name)
+            assertEquals("clean '$name' must not be a protector verdict", "clean", result.getString("overall"))
+        }
+    }
+
+    @Test
+    fun shortGenericMarkersDoNotFireOnIncidentalSubstrings() {
+        // "ali" is a substring of valid / malicious / finally. A bare substring
+        // marker on it produced false positives on unrelated binaries.
+        val data = ByteArray(0x2000)
+        "valid signal malicious".toByteArray(Charsets.US_ASCII).copyInto(data, 0x900)
+        val sections = listOf(
+            SectionInfo(".text", 1L, 0x6L, 0x1000L, 0x0L, 0x800L, 0, 0, 4, 0),
+            SectionInfo(".rodata", 1L, 0x2L, 0x2000L, 0x800L, 0x800L, 0, 0, 8, 0)
+        )
+        val result = PackerFingerprint.analyze(elf(data, entry = 0x1000L, sections = sections))
+        assertFalse(packerIds(result).contains("ali"))
     }
 }
