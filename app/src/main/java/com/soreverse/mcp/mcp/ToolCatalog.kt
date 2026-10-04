@@ -1906,6 +1906,97 @@ object ToolCatalog {
         }
     }
 
+    private val obfuscApi = EngineToolHandler(
+        ToolMeta(
+            "obfusc_api",
+            "控制流混淆检测网关（CFG 结构化 CFF / bogus edge 度量）",
+            "Control-flow obfuscation detection from the real basic-block graph: dispatcher blocks, flattening factor, and bogus-edge candidates. No symbol-name guessing.",
+            "lowlevel",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf(
+                        "Obfuscation operation",
+                        "capabilities",
+                        "scan",
+                        "detect"
+                    )
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID"
+                    "limit" int "Max functions to analyse, default 40 (largest first)"
+                }
+            )
+        }
+    ) { e, a, _ ->
+        when (a.str("action", "scan")) {
+            "capabilities" -> ok(e.obfuscCapabilities())
+            "scan", "detect" -> e.obfuscScan(a.str("workspaceId"), a.str("editSessionId"), a.intValue("limit", 40))
+            else -> err("UNKNOWN_ACTION", "Unknown obfuscation action", "action", a.str("action"))
+        }
+    }
+
+    private val antiDebugApi = EngineToolHandler(
+        ToolMeta(
+            "antidebug_api",
+            "反调试/反 hook 扫描网关（导入证据 / 注入框架特征 / detour 模式）",
+            "Anti-debug and anti-hook triage with graded evidence: loader-resolved imports, /proc/self inspection strings, injector token clusters, and inline detour patterns.",
+            "lowlevel",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf(
+                        "Anti-analysis operation",
+                        "capabilities",
+                        "scan",
+                        "detect"
+                    )
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID"
+                }
+            )
+        }
+    ) { e, a, _ ->
+        when (a.str("action", "scan")) {
+            "capabilities" -> ok(e.antiDebugCapabilities())
+            "scan", "detect" -> e.antiDebugScan(a.str("workspaceId"), a.str("editSessionId"))
+            else -> err("UNKNOWN_ACTION", "Unknown anti-analysis action", "action", a.str("action"))
+        }
+    }
+
+    private val importApi = EngineToolHandler(
+        ToolMeta(
+            "import_api",
+            "导入符号溯源网关（.gnu.version_r 精确归属 + Bionic 库角色）",
+            "Import attribution: maps each imported symbol to its source library via .gnu.version_r, with documented fallback and Android Bionic library roles.",
+            "lowlevel",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf(
+                        "Import operation",
+                        "capabilities",
+                        "trace",
+                        "scan"
+                    )
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID"
+                }
+            )
+        }
+    ) { e, a, _ ->
+        when (a.str("action", "trace")) {
+            "capabilities" -> ok(e.importCapabilities())
+            "trace", "scan" -> e.importTrace(a.str("workspaceId"), a.str("editSessionId"))
+            else -> err("UNKNOWN_ACTION", "Unknown import action", "action", a.str("action"))
+        }
+    }
+
     // ── SESSION ──
 
     private val sessionOpen = EngineToolHandler(
@@ -2361,7 +2452,7 @@ object ToolCatalog {
         unidbgSession, unidbgMemory, unidbgDebug, unidbgBatch,
         diffSo,
         rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi,
-        jniApi, packerApi,
+        jniApi, packerApi, obfuscApi, antiDebugApi, importApi,
         sessionOpen, sessionHistory, sessionAudit,
         buildSo,
         systemControl,

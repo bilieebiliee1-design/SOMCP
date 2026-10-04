@@ -22,7 +22,14 @@ object ToolCatalogPresentation {
             (if (zh) "模拟执行：Unidbg + DalvikVM 函数调用、内存转储" else "Emulate: Unidbg + DalvikVM function calls, memory dump"),
         "diff" to (if (zh) "差异对比：结构化 SO 版本差异" else "Diff: structural SO version diff"),
         "lowlevel" to
-            (if (zh) "底层 API 网关：Rizin / LIEF / Unidbg / xAnSo / JNI / 壳识别" else "Low-level API gateways: Rizin / LIEF / Unidbg / xAnSo / JNI / packer access"),
+            (
+                if (zh) {
+                    "底层网关：Rizin / LIEF / Unidbg / xAnSo / JNI / 壳 / 混淆 / 反调试 / 导入"
+                } else {
+                    "Low-level: Rizin / LIEF / Unidbg / xAnSo / " +
+                        "JNI / packer / obfusc / antidebug / import"
+                }
+                ),
         "session" to (if (zh) "编辑会话：打开、历史管理、审计" else "Edit session: open, history, audit"),
         "build" to (if (zh) "构建：输出补丁后的 SO 文件" else "Build: export patched SO file"),
         "system" to (if (zh) "系统控制：隧道、APK MCP 桥" else "System: tunnel, APK MCP bridge"),

@@ -161,6 +161,12 @@ class NativeSoEngine(context: Context) {
     fun jniCapabilities(): JSONObject = runtime.jniCapabilities()
     fun packerScan(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.packerScan(workspaceId, editSessionId)
     fun packerCapabilities(): JSONObject = PackerFingerprint.capabilities()
+    fun obfuscScan(workspaceId: String, editSessionId: String = "", limit: Int = 40): JSONObject = runtime.obfuscScan(workspaceId, editSessionId, limit)
+    fun obfuscCapabilities(): JSONObject = runtime.obfuscCapabilities()
+    fun antiDebugScan(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.antiDebugScan(workspaceId, editSessionId)
+    fun antiDebugCapabilities(): JSONObject = runtime.antiDebugCapabilities()
+    fun importTrace(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.importTrace(workspaceId, editSessionId)
+    fun importCapabilities(): JSONObject = runtime.importCapabilities()
     fun liefDispatch(
         workspaceId: String,
         editSessionId: String = "",

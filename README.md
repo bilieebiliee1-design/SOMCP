@@ -69,13 +69,16 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
 - JNI 动态注册静态还原（`jni_api`）：扫描 `JNINativeMethod` 表，把 Java 方法名/签名映射到真实原生地址，并解析回符号。
 - 加固/壳静态指纹识别（`packer_api`）：厂商标记、逐段熵、入口点异常、段名异常、反分析字符串，输出带证据的排序判定。
+- 控制流混淆检测（`obfusc_api`）：基于真实 basic block 图的 dispatcher 识别、扁平化因子、bogus edge 度量，替代高误报的符号名启发式。
+- 反调试/反 hook 扫描（`antidebug_api`）：按 import / string / code_pattern 三级证据分类，输出风险等级。
+- 导入符号溯源（`import_api`）：经 `.gnu.version_r` 把导入符号精确归属到源库，标注 Bionic 库用途。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
 - APK 内 SO 使用流式扫描与按需提取，分析页可一键释放工作区、索引缓存和已结束的 Blutter 数据。
 - 精简工具列表：默认只暴露核心 + meta 工具，完整能力通过 `meta_info(action=describe)` 发现。
 
 ## MCP 工具体系
 
-当前共 42 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
+当前共 45 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
 
 推荐工作流：
 
@@ -136,9 +139,14 @@ dynamic_api(action=capabilities|dispatch|status|analyze)
 dynamic_analyze_ai(evidence=...|function=...|request=...)
 jni_api(action=capabilities|scan|resolve|method_table, query=...)
 packer_api(action=capabilities|scan|fingerprint)
+obfusc_api(action=capabilities|scan|detect, limit=40)
+antidebug_api(action=capabilities|scan|detect)
+import_api(action=capabilities|trace|scan)
 ```
 
 `jni_api` 静态还原 JNI 动态注册：扫描只读数据段里的 `JNINativeMethod` 三指针表（name / signature / fnPtr），把「Java 方法名 → 真实原生地址」直接映射出来，并解析 fnPtr 回 `.symtab` / `.dynsym` 符号。Android 上多数 native 方法不导出 `Java_*` 符号，而是在 `JNI_OnLoad` 里用 `RegisterNatives` 动态注册，因此普通符号表看不到这层映射。`packer_api` 做加固/壳静态指纹：厂商标记串（360 / 梆梆 / 爱加密 / 阿里 / 腾讯乐固 / UPX）、逐段 Shannon 熵、`e_entry` 落在 `.text` 之外的壳 stub 特征、非标准/空段名、反分析字符串。两者都是纯字节检查，不执行目标文件，对不可信输入安全；结论带证据与置信度，不会把「混淆构建」直接断言成「商业加固」。
+
+`obfusc_api` 从**真实 basic block 图**判定控制流混淆，而不是靠符号名猜：识别 dispatcher 块（高 fan-in + 薄块体，即只做比较跳转的 switch）、算扁平化因子、量 bogus edge 候选比例，逐函数给 `flattened` / `suspected` / `clean` 与置信度。它是 `analyze_elf` 里 `hasOllvm` 标签的结构化替代——后者匹配的是 `.cold.`、`__clang_call_terminate` 这类**标准 clang 产物**，在正常 NDK Release 上也会命中。`antidebug_api` 按证据强度分级扫描反调试/反 hook：`import`（加载器必须解析的符号，近乎确证）、`string`（`/proc/self/*` 等字面量，弱）、`code_pattern`（x86-64 inline detour 跳板序列）。`import_api` 解析 `.gnu.version_r`（DT_VERNEED）把每个导入符号**精确归属**到源库，并标注 Android Bionic 各库用途；缺版本表时降级为 `DT_NEEDED` 启发式，并在 `evidence` 字段明说「库名不是来源证明」。这三项同样不执行目标文件。
 
 ## 动态分析（手动加载到内存 → AI 分析）
 

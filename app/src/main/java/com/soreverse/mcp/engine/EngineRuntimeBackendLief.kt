@@ -204,6 +204,18 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                 PackerFingerprint.capabilities()
             )
             .put(
+                "obfusc",
+                obfuscCapabilities()
+            )
+            .put(
+                "antidebug",
+                antiDebugCapabilities()
+            )
+            .put(
+                "import",
+                importCapabilities()
+            )
+            .put(
                 "dynamic",
                 dynamicCapabilityEntry()
             )
