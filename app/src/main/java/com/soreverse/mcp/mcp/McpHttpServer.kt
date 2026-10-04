@@ -1272,6 +1272,21 @@ class McpHttpServer(private val context: Context, private val port: Int, private
                     .put(
                         JSONObject().put(
                             "name",
+                            "delegated evidence sweep (needs AI endpoint configured)"
+                        ).put(
+                            "steps",
+                            listOf(
+                                "so_open",
+                                "agent_api (action=roles)",
+                                "agent_api (action=run, role=xref_tracer, task=..., workspaceId=...)",
+                                "agent_api (action=run, role=crypto_locator, task=...)",
+                                "merge the returned evidence blocks into the final report"
+                            )
+                        )
+                    )
+                    .put(
+                        JSONObject().put(
+                            "name",
                             "audit recovery"
                         ).put(
                             "steps",

@@ -2,8 +2,6 @@ package com.soreverse.mcp.core
 
 import android.content.Context
 import android.util.Log
-import com.soreverse.mcp.mcp.SchemaBuilder
-import com.soreverse.mcp.mcp.ToolCatalog
 import com.soreverse.mcp.mcp.ToolContext
 import com.soreverse.mcp.service.McpForegroundService
 import java.util.concurrent.TimeUnit
@@ -15,14 +13,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
-import org.json.JSONObject
 import org.json.JSONObject as OrgJSONObject
 
 data class DeepAnalysisEvent(val kind: Kind, val text: String, val toolName: String = "") {
@@ -57,7 +51,7 @@ class DeepAnalysisService(private val appContext: Context) {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .build()
-        val customHeaders = parseStringMap(settings.aiCustomHeadersJson)
+        val customHeaders = AgentKernel.stringMap(settings.aiCustomHeadersJson)
         val models = linkedSetOf<String>()
         val seenCursors = mutableSetOf<String>()
         var cursor: String? = null
@@ -186,28 +180,13 @@ class DeepAnalysisService(private val appContext: Context) {
                     if (zh) "请先开启 MCP 服务后再进行 AI 深度分析" else "Start the MCP service before AI deep analysis"
                 )
             }
-            requireConfigured(settings)
+            AgentKernel.requireConfigured(settings)
             emit(
                 DeepAnalysisEvent.Kind.STATUS,
                 if (zh) "正在初始化 AI 会话…" else "Initializing AI session…"
             )
             val userPrompt = buildUserPrompt(path, zh, request)
-            val engine = RikkaAgentEngine(
-                client = OkHttpClient.Builder().connectTimeout(
-                    20,
-                    TimeUnit.SECONDS
-                ).readTimeout(
-                    10,
-                    TimeUnit.MINUTES
-                ).writeTimeout(120, TimeUnit.SECONDS).retryOnConnectionFailure(true).build(),
-                provider = settings.aiProvider,
-                endpoint = settings.aiEndpoint,
-                apiKey = settings.aiApiKey,
-                model = settings.aiModel,
-                temperature = settings.aiTemperature,
-                customHeaders = parseStringMap(settings.aiCustomHeadersJson),
-                customBody = buildAdditionalProperties(settings)
-            )
+            val engine = AgentKernel.engine(settings)
             val tools = buildRikkaTools(settings, zh)
             var lastReasoning = ""
             val finalReport = engine.run(
@@ -326,108 +305,47 @@ Only after gathering the necessary evidence, return the final Markdown report. D
     private fun buildRikkaTools(settings: SettingsStore, zh: Boolean): List<RikkaTool> {
         val engine = EngineProvider.get(appContext)
         val ctx = ToolContext(appContext, settings, engine)
-        return DEEP_TOOL_NAMES.mapNotNull { name ->
-            val handler = ToolCatalog.byName[name] ?: return@mapNotNull null
-            val schema = handler.meta.schemaBuilder.invoke(SchemaBuilder)
-            RikkaTool(
-                name = name,
-                description = if (zh) handler.meta.zh else handler.meta.en,
-                schema = schema
-            ) { args ->
-                emit(
-                    DeepAnalysisEvent.Kind.TOOL,
-                    if (zh) "调用工具 $name" else "Calling tool $name",
-                    name
-                )
-                AppLog.i("AI tool call $name args=${args.toString().take(600)}")
-                val effectiveArgs = JSONObject(args.toString()).apply {
-                    if (name != "so_open" && optString("workspaceId").isBlank()) {
-                        _workspaceId.value.takeIf(String::isNotBlank)?.let {
-                            put("workspaceId", it)
-                        }
+        val catalog = AgentKernel.catalogTools(
+            ctx,
+            DEEP_TOOL_NAMES,
+            AgentToolHooks(
+                zh = zh,
+                workspaceId = { _workspaceId.value },
+                onWorkspaceOpened = { _workspaceId.value = it },
+                onToolStart = { name ->
+                    emit(
+                        DeepAnalysisEvent.Kind.TOOL,
+                        if (zh) "调用工具 $name" else "Calling tool $name",
+                        name
+                    )
+                },
+                onToolDone = { name ->
+                    emit(
+                        DeepAnalysisEvent.Kind.TOOL,
+                        if (zh) "工具完成 $name" else "Tool completed $name",
+                        name
+                    )
+                    if (name == "analysis_report") {
+                        emit(
+                            DeepAnalysisEvent.Kind.FINALIZING,
+                            if (zh) "MCP 取证已完成" else "MCP evidence complete"
+                        )
                     }
                 }
-                runCatching { handler.handle(ctx, effectiveArgs) }
-                    .onSuccess { payload ->
-                        if (name == "so_open") {
-                            payload.optString("workspaceId").takeIf(String::isNotBlank)?.let {
-                                _workspaceId.value = it
-                            }
-                        }
-                        AppLog.i("AI tool completed $name result=${payload.toString().take(600)}")
-                    }
-                    .onFailure { error ->
-                        AppLog.e("AI tool failed $name", error)
-                    }
-                    .getOrThrow()
-                    .let { payload ->
-                        val text = payload.toString()
-                        val limit = settings.toolResultMaxChars
-                        val result = if (limit <= 0 ||
-                            text.length <= limit
-                        ) {
-                            text
-                        } else {
-                            text.take(limit) + "…"
-                        }
-                        emit(
-                            DeepAnalysisEvent.Kind.TOOL,
-                            if (zh) "工具完成 $name" else "Tool completed $name",
-                            name
-                        )
-                        if (name ==
-                            "analysis_report"
-                        ) {
-                            emit(
-                                DeepAnalysisEvent.Kind.FINALIZING,
-                                if (zh) "MCP 取证已完成" else "MCP evidence complete"
-                            )
-                        }
-                        result
-                    }
+            )
+        )
+        catalog.unresolved.forEach { AppLog.w("Deep analysis: tool not in catalog: $it") }
+        if (!settings.subAgentEnabled) return catalog.tools
+        return catalog.tools + subAgentSpawnTool(
+            ctx = ctx,
+            zh = zh,
+            depth = 1,
+            budget = SubAgentBudget(settings.subAgentMaxPerRun),
+            workspaceId = { _workspaceId.value },
+            onProgress = { text ->
+                _events.tryEmit(DeepAnalysisEvent(DeepAnalysisEvent.Kind.STATUS, text))
             }
-        }
-    }
-
-    private fun parseStringMap(raw: String): Map<String, String> {
-        val obj =
-            runCatching { OrgJSONObject(raw.ifBlank { "{}" }) }.getOrNull() ?: return emptyMap()
-        return buildMap {
-            val keys = obj.keys()
-            while (keys.hasNext()) {
-                val key = keys.next().trim()
-                if (key.isNotBlank()) put(key, obj.optString(key))
-            }
-        }
-    }
-
-    private fun buildAdditionalProperties(settings: SettingsStore): Map<String, JsonElement> {
-        val properties = LinkedHashMap<String, JsonElement>()
-        val body =
-            runCatching { OrgJSONObject(settings.aiCustomBodyJson.ifBlank { "{}" }) }.getOrNull()
-                ?: return properties
-        val keys = body.keys()
-        while (keys.hasNext()) {
-            val key = keys.next().trim()
-            if (key.isBlank()) continue
-            val value = body.opt(key)
-            properties[key] = runCatching {
-                Json.parseToJsonElement(
-                    when (value) {
-                        null, OrgJSONObject.NULL -> "null"
-                        is String -> OrgJSONObject.quote(value)
-                        else -> value.toString()
-                    }
-                )
-            }.getOrElse { JsonPrimitive(value?.toString().orEmpty()) }
-        }
-        return properties
-    }
-
-    private fun requireConfigured(settings: SettingsStore) {
-        if (settings.aiApiKey.isBlank()) error("AI API key is empty")
-        if (settings.aiModel.isBlank()) error("AI model is empty")
-        if (settings.aiEndpoint.isBlank()) error("AI endpoint is empty")
+        )
     }
 
     private fun requireModelCatalogConfigured(settings: SettingsStore) {
