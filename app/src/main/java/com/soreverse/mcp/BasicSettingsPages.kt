@@ -450,6 +450,7 @@ internal fun SettingsLimitsPage(t: UiText, settings: SettingsStore) {
     var disasmBytes by remember { mutableStateOf(settings.disasmMaxBytes.toString()) }
     var hexdumpBytes by remember { mutableStateOf(settings.hexdumpMaxBytes.toString()) }
     var maxRequestKb by remember { mutableStateOf(settings.maxRequestKb.toString()) }
+    var fridaPort by remember { mutableStateOf(settings.fridaPort.toString()) }
     PageScroll {
         GlassGroup {
             NumberSettingRow(if (t.zh) "默认 limit" else "Default limit", defaultLimit, {
@@ -483,6 +484,11 @@ internal fun SettingsLimitsPage(t: UiText, settings: SettingsStore) {
                 maxRequestKb =
                     it
             }, { settings.maxRequestKb = it }, "KB")
+            GroupDivider()
+            NumberSettingRow(if (t.zh) "Frida 端口" else "Frida port", fridaPort, {
+                fridaPort =
+                    it
+            }, { settings.fridaPort = it }, "")
         }
     }
 }

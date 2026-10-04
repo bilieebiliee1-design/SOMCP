@@ -12,6 +12,7 @@
 //
 package com.soreverse.mcp.engine
 
+import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.nativecore.NativeEngine
@@ -202,7 +203,7 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
 
 internal fun EngineRuntime.dynamicCapabilityEntry(): JSONObject {
     val unidbgAvailable = unidbg.available()
-    val fridaTarget = FridaTarget()
+    val fridaTarget = FridaTarget(port = SettingsStore(context).fridaPort)
     val fridaAvailable = frida.available(fridaTarget)
     return JSONObject()
         .put(

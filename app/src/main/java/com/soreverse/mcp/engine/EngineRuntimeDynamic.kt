@@ -29,6 +29,7 @@
 // handed to DynamicAnalysisService for an independent AI report.
 package com.soreverse.mcp.engine
 
+import com.soreverse.mcp.core.SettingsStore
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.ok
 import com.soreverse.mcp.core.str
@@ -416,9 +417,10 @@ private fun EngineRuntime.dynamicSessionIds(): JSONArray = fridaSessionsView().o
 
 private fun EngineRuntime.fridaTargetFromArgs(raw: Any?): FridaTarget {
     val json = raw as? JSONObject ?: JSONObject()
+    val settingsPort = SettingsStore(context).fridaPort
     return FridaTarget(
         host = json.str("host", "127.0.0.1"),
-        port = json.int("port", 27042).coerceIn(1, 65535),
+        port = json.int("port", settingsPort).coerceIn(1, 65535),
         connectTimeoutMillis = json.int("connectTimeoutMillis", 5_000).toLong(),
         readTimeoutMillis = json.int("readTimeoutMillis", 15_000).toLong()
     )
