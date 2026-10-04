@@ -3,6 +3,7 @@
 # 更新日志
 
 ## 1.0.22
+- **新增自定义 Frida 端口设置**（`core/SettingsStore.kt` +9、`engine/EngineRuntimeDynamic.kt` +2/−1、`engine/EngineRuntimeBackendLief.kt` +2/−1、`BasicSettingsPages.kt` +7、`mcp/ToolCatalog.kt` +1/−1）。此前 Frida 桥接的 frida-server / frida-gadget 连接端口硬编码为 27042，frida-server 换端口监听时只能在每次 dynamic_api 调用里手传 host/port JSON。现在：设置 → 限制页新增「Frida 端口」（`fridaPort`，1–65535，默认 27042），作为所有 Frida 调用的默认端口（`frida_status`/`capabilities`/`frida_open`/`analyze` 全部生效）；调用参数里显式传 `port` 仍可按次覆盖，优先级不变。
 - **修复启动完整性校验失败时的无提示重启循环**（`core/IntegrityGuard.kt` +47/−4）。真机（HONOR LSA-AN00，SDK 34）logcat 实证：主进程每次启动约 1.2 s 即自杀（`Process: Sending signal. PID: … SIG: 9`，连续 40+ 次循环），且 logcat 里找不到任何失败原因——native 验签链全部通过（证书提取、`Package id matched`、`v2/v3 signature and content digest verified (v3)`），自杀点唯一吻合 `enforce()` 尾部的 `terminateWithContext`，而失败的是 logcat 不可见的静默检查项（Java 层指纹/`runtimeThreats`/应用列表门禁/digest 对比其一），失败原因只写进内存 `AppLog`，进程一死即丢。
   - 根因：`enforce()` 在 `Application.onCreate()` 里硬杀进程，早于任何 UI 存在——#137 的文档声称「命中即走应用完整性校验失败弹窗」，但 `MainActivity` 的 `IntegrityGate` 弹窗根本来不及显示；启动器拉起 → onCreate 杀 → 再拉起，形成用户完全不可诊断的重启循环。这与 `enforceEarly` 注释里记录过的上一代启动崩溃问题同构（当时已把 attachBaseContext 门禁改为非致命，onCreate 这层仍保留硬杀）。
   - 修复（最小 diff，仅 `IntegrityGuard.kt`）：`enforce()` 检查失败不再 `terminateWithContext`，改为把原因记入新增的 `startupFailure`（volatile，private set）；`inspect()` 对该标志短路返回不可信 `Result`——UI 门禁弹窗显示具体原因（应用列表门禁命中时含触发应用的包名与显示名）后走既有 10 s 倒计时退出；MCP 服务与开机门禁同样经 `isTrusted() → inspect()` 读到该状态，保持 fail-closed。
