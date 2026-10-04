@@ -196,6 +196,26 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                     )
             )
             .put(
+                "jni",
+                jniCapabilities()
+            )
+            .put(
+                "packer",
+                PackerFingerprint.capabilities()
+            )
+            .put(
+                "obfusc",
+                obfuscCapabilities()
+            )
+            .put(
+                "antidebug",
+                antiDebugCapabilities()
+            )
+            .put(
+                "import",
+                importCapabilities()
+            )
+            .put(
                 "dynamic",
                 dynamicCapabilityEntry()
             )
