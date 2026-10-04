@@ -43,7 +43,7 @@ class ImportAttributionTest {
             // No DT_VERNEED, so attribution must degrade and say so.
             dynamicEntries = listOf(DynamicEntryInfo(1L, 1L))
         )
-        val r = ImportAttribution.analyze(elf, elf.data)
+        val r = ImportAttribution.analyze(elf, elf.data, listOf("libc.so"))
         assertEquals("needed_heuristic", r.getString("mode"))
         assertTrue(r.getString("evidence").contains("NOT proof of origin"))
         assertEquals(2, r.getInt("importCount"))
@@ -64,7 +64,7 @@ class ImportAttributionTest {
             relocations = emptyList(),
             strings = emptyList()
         )
-        val r = ImportAttribution.analyze(elf, elf.data)
+        val r = ImportAttribution.analyze(elf, elf.data, emptyList())
         assertEquals("needed_heuristic", r.getString("mode"))
         assertEquals(1, r.getJSONArray("unresolved").length())
     }

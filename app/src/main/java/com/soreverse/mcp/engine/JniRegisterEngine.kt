@@ -376,16 +376,20 @@ internal fun EngineRuntime.jniScan(workspaceId: String, editSessionId: String = 
         )
     }
 
-    val byClass = rows.mapNotNull { row ->
-        JniRegisterEngine.javaClassFromSymbol(row.resolvedSymbol ?: return@mapNotNull null) to row
-    }.groupBy({ it.first }, { it.second.name })
+    val byClass: Map<String, List<JniNativeMethod>> = rows
+        .mapNotNull { row ->
+            val className = JniRegisterEngine.javaClassFromSymbol(row.resolvedSymbol ?: return@mapNotNull null)
+            className to row
+        }
+        .groupBy({ it.first }, { it.second })
+    val classNames: List<String> = byClass.keys.sorted()
 
     ok(
         JSONObject()
             .put("count", rows.size)
             .put("jniOnLoadPresent", jniOnLoad != null)
             .put("jniOnLoadVa", jniOnLoad?.let { hexOf(it.value) } ?: JSONObject.NULL)
-            .put("classes", JSONArray(byClass.keys.sorted()))
+            .put("classes", JSONArray(classNames))
             .put("methods", items)
             .put(
                 "note",

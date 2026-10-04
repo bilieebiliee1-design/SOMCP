@@ -157,8 +157,11 @@ internal object ImportAttribution {
         }
     }
 
-    fun analyze(elf: ElfFile, data: ByteArray): JSONObject {
-        val needed = neededLibraries(elf, data)
+    /**
+     * [needed] is the DT_NEEDED library list; the caller resolves it because
+     * reading it needs the EngineRuntime receiver that owns the ELF bytes.
+     */
+    fun analyze(elf: ElfFile, data: ByteArray, needed: List<String>): JSONObject {
         val imported = elf.dynSymbols.filter { it.imported }
         val versioned = runCatching { parseVerneed(elf, data) }.getOrNull()
         val versym = runCatching { parseVersym(elf, data) }.getOrNull()
@@ -265,7 +268,8 @@ internal fun EngineRuntime.importTrace(workspaceId: String, editSessionId: Strin
             "Section table is empty; .gnu.version_r cannot be located. Run edit_fix_sections (or xanso_api fix_sections) first."
         )
     }
-    ok(ImportAttribution.analyze(elf, dataFor(workspaceId, editSessionId)))
+    val data = dataFor(workspaceId, editSessionId)
+    ok(ImportAttribution.analyze(elf, data, neededLibraries(elf, data)))
 }
 
 internal fun EngineRuntime.importCapabilities(): JSONObject = ImportAttribution.capabilities()

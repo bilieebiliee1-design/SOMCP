@@ -22,6 +22,16 @@ import com.soreverse.mcp.nativecore.NativeEngine
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * A CFF dispatcher is the block every real block funnels back into, so it must
+ * have several predecessors. Kept at file scope because both the detector and
+ * the runtime entry point quote these thresholds in their output.
+ */
+internal const val DISPATCHER_MIN_FANIN = 3
+
+/** A block this thin is a jump thunk or a state compare, not real work. */
+internal const val THIN_BLOCK_INSTR = 2
+
 /** A basic block as reported by Rizin's `rzCfg`. */
 internal data class CfgBlock(val addr: Long, val size: Long, val ninstr: Int, val jump: Long, val fail: Long) {
     /** Rizin uses UT64_MAX for "no target". */
@@ -68,11 +78,6 @@ internal data class ObfuscVerdict(
  * a false "this is obfuscated" is worse than an admission of not knowing.
  */
 internal object ObfuscDetector {
-
-    private const val DISPATCHER_MIN_FANIN = 3
-
-    /** A block this thin is a jump thunk, not real work. */
-    private const val THIN_BLOCK_INSTR = 2
 
     private fun parseCfg(payload: JSONObject): Pair<String, List<CfgBlock>> {
         val blocks = ArrayList<CfgBlock>()
@@ -167,7 +172,7 @@ internal object ObfuscDetector {
         }
         val notes = mutableListOf<String>()
         if (dispatchers.isNotEmpty()) {
-            notes.add("${dispatchers.size} dispatcher-like block(s): fan-in >= $DISPATCHER_MIN_FANIN with a single successor")
+            notes.add("${dispatchers.size} dispatcher-like block(s): fan-in >= $DISPATCHER_MIN_FANIN with a thin body")
         }
         if (factor >= 8.0) notes.add("flattening factor ${"%.1f".format(factor)} blocks per dispatcher")
         if (bogus >= 0.25) notes.add("${"%.0f".format(bogus * 100)}% of blocks are <= $THIN_BLOCK_INSTR instructions (bogus-edge candidates)")
@@ -239,7 +244,7 @@ internal fun EngineRuntime.obfuscScan(workspaceId: String, editSessionId: String
             .put("functions", results)
             .put(
                 "method",
-                "Structural CFG analysis: dispatcher blocks (fan-in >= $DISPATCHER_MIN_FANIN, single successor, thin) plus flattening factor and thin-block ratio. No symbol-name heuristics are used."
+                "Structural CFG analysis: dispatcher blocks (fan-in >= $DISPATCHER_MIN_FANIN with a thin body, excluding the entry block) plus flattening factor and thin-block ratio. No symbol-name heuristics are used."
             )
             .put(
                 "limits",
