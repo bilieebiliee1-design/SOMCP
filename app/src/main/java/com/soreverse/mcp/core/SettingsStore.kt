@@ -765,6 +765,34 @@ class SettingsStore(context: Context) {
             value.ifBlank { DEFAULT_AI_SYSTEM_PROMPT }
         ).apply()
 
+    // ---- Sub-agents (nested agent runs spawned by an agent or by agent_api) ----
+
+    /** Master switch. Off means no `spawn_subagent` tool is advertised and
+     *  `agent_api` refuses every action but `roles` / `capabilities`. */
+    var subAgentEnabled: Boolean
+        get() = prefs.getBoolean("subAgentEnabled", true)
+        set(value) = prefs.edit().putBoolean("subAgentEnabled", value).apply()
+
+    /** Nesting levels below the root agent: 1 = sub-agents may not spawn their own. */
+    var subAgentMaxDepth: Int
+        get() = prefs.getInt("subAgentMaxDepth", 1)
+        set(value) = prefs.edit().putInt("subAgentMaxDepth", value.coerceIn(1, 2)).apply()
+
+    /** How many sub-agent loops may run at the same time, across all sessions. */
+    var subAgentMaxConcurrent: Int
+        get() = prefs.getInt("subAgentMaxConcurrent", 2)
+        set(value) = prefs.edit().putInt("subAgentMaxConcurrent", value.coerceIn(1, 6)).apply()
+
+    /** Tool-step ceiling for a single sub-agent run. */
+    var subAgentMaxIterations: Int
+        get() = prefs.getInt("subAgentMaxIterations", 12)
+        set(value) = prefs.edit().putInt("subAgentMaxIterations", value.coerceIn(2, 40)).apply()
+
+    /** Spawn ceiling for one root session — this is the knob that bounds total quota burn. */
+    var subAgentMaxPerRun: Int
+        get() = prefs.getInt("subAgentMaxPerRun", 4)
+        set(value) = prefs.edit().putInt("subAgentMaxPerRun", value.coerceIn(1, 8)).apply()
+
     private val secureRandom = SecureRandom()
 
     fun resetAccessToken(): String {
@@ -936,6 +964,11 @@ class SettingsStore(context: Context) {
                     .put("customHeadersJson", aiCustomHeadersJson)
                     .put("customBodyJson", aiCustomBodyJson)
                     .put("systemPromptChars", aiSystemPrompt.length)
+                    .put("subAgentEnabled", subAgentEnabled)
+                    .put("subAgentMaxDepth", subAgentMaxDepth)
+                    .put("subAgentMaxConcurrent", subAgentMaxConcurrent)
+                    .put("subAgentMaxIterations", subAgentMaxIterations)
+                    .put("subAgentMaxPerRun", subAgentMaxPerRun)
             )
             .put(
                 "reporting",
@@ -961,6 +994,12 @@ class SettingsStore(context: Context) {
         fun applyInt(source: org.json.JSONObject?, key: String, apply: (Int) -> Unit) {
             if (source != null && source.has(key) && !source.isNull(key)) {
                 apply(source.optInt(key))
+                touch(key)
+            }
+        }
+        fun applyFloat(source: org.json.JSONObject?, key: String, apply: (Float) -> Unit) {
+            if (source != null && source.has(key) && !source.isNull(key)) {
+                apply(source.optDouble(key).toFloat())
                 touch(key)
             }
         }
@@ -1091,6 +1130,26 @@ class SettingsStore(context: Context) {
         applyBool(reporting, "crashReportEnabled") { crashReportEnabled = it }
         applyStr(reporting, "crashReportEndpoint") { crashReportEndpoint = it }
         applyBool(reporting, "crashReportConsentAnswered") { crashReportConsentAnswered = it }
+
+        // The `ai` group is what snapshot() emits, so these keys match its names.
+        // apiKey arrives masked in a snapshot-derived patch; '…' is the mask marker.
+        val ai = obj("ai") ?: patch
+        applyStr(ai, "provider") { aiProvider = it }
+        applyStr(ai, "endpoint") { aiEndpoint = it }
+        applyStr(ai, "model") { aiModel = it }
+        applyFloat(ai, "temperature") { aiTemperature = it }
+        applyInt(ai, "maxIterations") { aiMaxIterations = it }
+        applyInt(ai, "historySoftLimit") { aiHistorySoftLimit = it }
+        applyStr(ai, "customHeadersJson") { aiCustomHeadersJson = it }
+        applyStr(ai, "customBodyJson") { aiCustomBodyJson = it }
+        if (allowSecrets) {
+            applyStr(ai, "apiKey") { if (!it.contains('…')) aiApiKey = it }
+        }
+        applyBool(ai, "subAgentEnabled") { subAgentEnabled = it }
+        applyInt(ai, "subAgentMaxDepth") { subAgentMaxDepth = it }
+        applyInt(ai, "subAgentMaxConcurrent") { subAgentMaxConcurrent = it }
+        applyInt(ai, "subAgentMaxIterations") { subAgentMaxIterations = it }
+        applyInt(ai, "subAgentMaxPerRun") { subAgentMaxPerRun = it }
 
         // Flat key support for AI convenience: app_config set key=value
         val flatKeys = listOf(
