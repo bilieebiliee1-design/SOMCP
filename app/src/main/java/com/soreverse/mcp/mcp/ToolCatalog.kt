@@ -1343,7 +1343,7 @@ object ToolCatalog {
                     "analyze" str
                         "Inline analyze parameters as JSON (alternative to args[0]): backend, targetFunction, args, trace, dumpSize, dumpAddress."
                     "fridaTarget" str
-                        "Frida daemon connection as JSON: { host, port, connectTimeoutMillis, readTimeoutMillis }."
+                        "Frida daemon connection as JSON: { host, port, connectTimeoutMillis, readTimeoutMillis }. port defaults to the configured Frida port app setting (27042 if unchanged)."
                 }
             )
         }
