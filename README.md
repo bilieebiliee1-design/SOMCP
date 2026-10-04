@@ -78,7 +78,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 
 ## MCP 工具体系
 
-当前共 45 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
+当前共 46 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
 
 推荐工作流：
 
@@ -142,6 +142,7 @@ packer_api(action=capabilities|scan|fingerprint)
 obfusc_api(action=capabilities|scan|detect, limit=40)
 antidebug_api(action=capabilities|scan|detect)
 import_api(action=capabilities|trace|scan)
+agent_api(action=roles|run|capabilities, role=..., task=..., workspaceId=...)
 ```
 
 `jni_api` 静态还原 JNI 动态注册：扫描只读数据段里的 `JNINativeMethod` 三指针表（name / signature / fnPtr），把「Java 方法名 → 真实原生地址」直接映射出来，并解析 fnPtr 回 `.symtab` / `.dynsym` 符号。Android 上多数 native 方法不导出 `Java_*` 符号，而是在 `JNI_OnLoad` 里用 `RegisterNatives` 动态注册，因此普通符号表看不到这层映射。`packer_api` 做加固/壳静态指纹：厂商标记串（360 / 梆梆 / 爱加密 / 阿里 / 腾讯乐固 / UPX）、逐段 Shannon 熵、`e_entry` 落在 `.text` 之外的壳 stub 特征、非标准/空段名、反分析字符串。两者都是纯字节检查，不执行目标文件，对不可信输入安全；结论带证据与置信度，不会把「混淆构建」直接断言成「商业加固」。
@@ -197,6 +198,41 @@ system_control(action=status)
 
 `health/status` 会返回运行时信息，包括 APK 版本、设备 ABI、nativeLibraryDir、`librz_native.so` 大小、mtime 和 SHA-256 短指纹，用于确认设备上实际运行的是不是最新 APK。
 
+## 子代理（scoped sub-agents）
+
+前提是设置 → AI 里已填好 **API 地址、API Key、模型 ID**——子代理不另设一套凭据，全部复用这三个值（以及 provider、temperature、自定义 headers/body）。
+
+一个子代理 = 一次**独立上下文**的取证运行：它只拿到自己角色白名单内的工具、只有一个被指派的问题、有自己的迭代上限，返回紧凑证据块而不是整体报告。两侧入口共用同一个 `SubAgentRunner`：
+
+- **手机内置 agent**：AI 深度分析与动态分析的工具表里多出 `spawn_subagent(role, task)`，主模型自己决定何时派人手；子代理的工具结果不再回灌到主上下文，只回传结论，这正是省 token 的地方。
+- **电脑侧 MCP 客户端**：`agent_api` 网关。
+
+```text
+agent_api(action=roles)                  # 角色、每个角色的工具白名单、当前上限与是否已配置
+agent_api(action=run, role="xref_tracer", task="libfoo.so 里 JNI_OnLoad 注册了哪些方法，逐个给地址", workspaceId="ws_...")
+agent_api(action=capabilities)           # supported / partial / not_covered，按实说
+```
+
+内置 5 个角色（白名单只读取证类工具，永不包含 `edit_*` / `build_so` / `session_*` / `app_config`）：
+
+| 角色 | 干什么 | 迭代建议 |
+| --- | --- | --- |
+| `xref_tracer` | 调用链与交叉引用，含 `RegisterNatives` 动态注册入口 | 14 |
+| `crypto_locator` | 算法常量 / S-box / 密钥调度定位与调用点 | 14 |
+| `packer_profiler` | 壳、控制流混淆、反调试、导入来源画像 | 10 |
+| `dyn_probe` | unidbg 模拟或 Frida 真机跑目标函数采证 | 12 |
+| `generalist` | 上述都不匹配时的通用静态取证 | 12 |
+
+`workspaceId` 由调用方继承：子代理拿得到同一个工作区，不会重复 `so_open` 再解析一遍目标。角色白名单里若出现目录里不存在的工具名，`action=roles` 会同时列 `declared_tools` 与 `unresolved_tools`——漂移可见，不会静默缩水。
+
+三道闸门（设置 → AI → 子代理，`agent_api(action=roles)` 的 `limits` 原样回报）：
+
+- **嵌套深度上限**（默认 1，最大 2）：=1 时子代理不再拿到 `spawn_subagent`，杜绝自我复制。
+- **单次会话子代理配额**（默认 4）：**这一项才是约束 API 花销的**；用完时 `spawn_subagent` 回 `sub_agent_budget_exhausted`，主模型继续自己做完，而不是整轮失败。
+- **单子代理迭代上限**（默认 12）与**并发子代理数**（默认 2）：迭代数按 `min(角色建议, 该上限)` 生效；并发是全进程槽位池，改设置只影响之后的派生。
+
+失败与边界的处理是明确的：子代理抛错回 `sub_agent_failed`（父代理改用直接工具），槽位被占满等 5 分钟后回 `sub_agent_queue_timeout`，跑满迭代上限时**保留已取到的部分证据**并标注在何处停止。子代理之间、子代理与父代理之间不共享对话历史，也没有跨会话记忆。
+
 ## 设置项
 
 - MCP 访问控制：token、绑定地址、访问 URL。
@@ -206,6 +242,8 @@ system_control(action=status)
 - 工具暴露：lean tools、自适应 lean、禁用工具列表、工具结果字符上限、工具调用频率限制。
 - 性能保护：重型工具并发上限、请求超时、工具统计持久化。
 - 原生执行：Unidbg 模拟执行开关。
+- AI 深度分析：provider、API 地址、API Key、模型 ID（可从 `action=roles` 旁的端点拉取模型列表）、temperature、最大迭代、历史压缩阈值、自定义 headers/body、系统提示词。
+- 子代理：启用开关、嵌套深度上限、单次会话派生配额、单子代理迭代上限、并发子代理数（详见「子代理」一节；凭据复用上面的 AI 配置，不单独设置）。
 - Blutter：查看内置 Flutter 3.44 / Dart 3.12.2 Runner、离线执行方式和精确兼容性规则。
 - Cloudflare Tunnel：quick/named、目标端口、协议、IP 版本、日志等级、keepalive、重连退避。
 - APK MCP 桥接：APK MCP URL、自动探测、工具合并、转发超时。
