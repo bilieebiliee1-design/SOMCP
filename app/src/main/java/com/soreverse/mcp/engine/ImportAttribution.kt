@@ -177,11 +177,15 @@ internal object ImportAttribution {
         imported.forEachIndexed { index, sym ->
             val versionIndex = versym?.getOrNull(index)
             val candidates = versionIndex?.let { versioned?.get(it) }
-            val attribution = when {
-                !candidates.isNullOrEmpty() -> candidates to "gnu_version_r"
-                else -> needed to "needed_heuristic"
+            // Narrow once, up front: isNullOrEmpty() carries no contract, so it
+            // would NOT smart-cast `candidates` in the versioned branch and the
+            // resulting Pair would degrade to Pair<List<String>?, String>.
+            val resolved = candidates?.takeIf { it.isNotEmpty() }
+            val (libs, evidence) = if (resolved != null) {
+                resolved to "gnu_version_r"
+            } else {
+                needed to "needed_heuristic"
             }
-            val (libs, evidence) = attribution
             val target = libs.firstOrNull()
             val record = JSONObject()
                 .put("symbol", sym.name)

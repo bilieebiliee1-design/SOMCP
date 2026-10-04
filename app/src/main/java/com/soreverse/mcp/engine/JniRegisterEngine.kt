@@ -378,7 +378,9 @@ internal fun EngineRuntime.jniScan(workspaceId: String, editSessionId: String = 
 
     val byClass: Map<String, List<JniNativeMethod>> = rows
         .mapNotNull { row ->
-            val className = JniRegisterEngine.javaClassFromSymbol(row.resolvedSymbol ?: return@mapNotNull null)
+            // mapNotNull drops the row entirely when the symbol is absent or
+            // does not unmangle, so the key stays non-null String.
+            val className = JniRegisterEngine.javaClassFromSymbol(row.resolvedSymbol ?: "") ?: return@mapNotNull null
             className to row
         }
         .groupBy({ it.first }, { it.second })
