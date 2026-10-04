@@ -12,14 +12,22 @@
 //
 package com.soreverse.mcp.mcp
 
+import com.soreverse.mcp.core.AgentKernel
 import com.soreverse.mcp.core.DynamicAnalysisService
 import com.soreverse.mcp.core.HexCodec
+import com.soreverse.mcp.core.SubAgentRoles
 import com.soreverse.mcp.core.bool
 import com.soreverse.mcp.core.doubleValue
 import com.soreverse.mcp.core.err
 import com.soreverse.mcp.core.intValue
 import com.soreverse.mcp.core.ok
+import com.soreverse.mcp.core.resolveSubAgentLanguage
+import com.soreverse.mcp.core.runScopedSubAgent
 import com.soreverse.mcp.core.str
+import com.soreverse.mcp.core.subAgentCapabilities
+import com.soreverse.mcp.core.subAgentLimits
+import com.soreverse.mcp.core.subAgentRoleCatalog
+import com.soreverse.mcp.core.toJsonArray
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -1487,6 +1495,98 @@ object ToolCatalog {
         }
     }
 
+    /**
+     * External sub-agent gateway. The built-in deep-analysis agent gets the same
+     * capability as its `spawn_subagent` tool; this is the PC-side door onto the
+     * same runner, so a desktop MCP client can fan evidence-gathering out to the
+     * phone instead of pulling every tool result into its own context.
+     */
+    private val agentApi = object : ToolHandler {
+        override val meta = ToolMeta(
+            "agent_api",
+            "子代理网关（roles / run / capabilities：在手机上是独立上下文的专职取证代理）",
+            "Sub-agent gateway: list preset evidence roles, run one scoped sub-agent on-device (separate context, role-limited MCP tools, same configured AI endpoint), or report its limits.",
+            "agent",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf("roles (default) | run | capabilities", "roles", "run", "capabilities")
+                    "role" str "Role id returned by action=roles (required for action=run)"
+                    "task" str "The single self-contained question the sub-agent must answer"
+                    "workspaceId" str "Workspace to inherit from so_open so the sub-agent does not re-open the target"
+                    "zh" bool "Report language for action=run (default: follow the language of task)"
+                }
+            )
+        }
+
+        override fun handle(ctx: ToolContext, args: JSONObject): JSONObject {
+            val settings = ctx.settings
+            if (!settings.subAgentEnabled) {
+                return err(
+                    "SUBAGENT_DISABLED",
+                    "Sub-agents are switched off. Enable them in Settings → AI → 子代理 (Sub-agents), then call agent_api again."
+                )
+            }
+            return when (val action = args.str("action").ifBlank { "roles" }) {
+                "roles" -> ok(
+                    JSONObject()
+                        .put("roles", subAgentRoleCatalog(settings))
+                        .put("limits", subAgentLimits(settings))
+                )
+
+                "capabilities" -> ok(subAgentCapabilities(settings))
+
+                "run" -> {
+                    val role = SubAgentRoles.byId(args.str("role"))
+                        ?: return err(
+                            "UNKNOWN_ROLE",
+                            "Unknown sub-agent role. Call agent_api(action=roles) for the current list.",
+                            "role",
+                            args.str("role")
+                        )
+                    val task = args.str("task").trim()
+                    if (task.isBlank()) {
+                        return err(
+                            "TASK_REQUIRED",
+                            "action=run needs a task: one self-contained question naming the target function or address."
+                        )
+                    }
+                    val missing = AgentKernel.missingConfig(settings)
+                    if (missing.isNotEmpty()) {
+                        return err(
+                            "AI_NOT_CONFIGURED",
+                            "Sub-agents reuse the app's AI settings, and these are still empty: " +
+                                missing.joinToString(", ") +
+                                ". Configure endpoint, API key and model in Settings → AI.",
+                            "missing",
+                            missing.toJsonArray()
+                        )
+                    }
+                    runScopedSubAgent(
+                        ctx = ctx,
+                        role = role,
+                        task = task.take(4000),
+                        zh = resolveSubAgentLanguage(
+                            settings = settings,
+                            task = task,
+                            explicit = if (args.has("zh")) args.bool("zh") else null
+                        ),
+                        workspaceId = args.str("workspaceId")
+                    )
+                }
+
+                else -> err(
+                    "UNSUPPORTED_ACTION",
+                    "action must be one of roles, run, capabilities.",
+                    "action",
+                    action
+                )
+            }
+        }
+    }
+
     private val unidbgSession = EngineToolHandler(
         ToolMeta(
             "unidbg_session",
@@ -2451,7 +2551,7 @@ object ToolCatalog {
         emulateCall, emulateDump,
         unidbgSession, unidbgMemory, unidbgDebug, unidbgBatch,
         diffSo,
-        rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi,
+        rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi, agentApi,
         jniApi, packerApi, obfuscApi, antiDebugApi, importApi,
         sessionOpen, sessionHistory, sessionAudit,
         buildSo,

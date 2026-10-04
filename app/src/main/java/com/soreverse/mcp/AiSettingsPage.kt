@@ -172,6 +172,11 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
     var temperature by remember { mutableStateOf(settings.aiTemperature.toString()) }
     var maxIterations by remember { mutableStateOf(settings.aiMaxIterations.toString()) }
     var historySoftLimit by remember { mutableStateOf(settings.aiHistorySoftLimit.toString()) }
+    var subAgentEnabled by remember { mutableStateOf(settings.subAgentEnabled) }
+    var subAgentMaxDepth by remember { mutableStateOf(settings.subAgentMaxDepth.toString()) }
+    var subAgentMaxConcurrent by remember { mutableStateOf(settings.subAgentMaxConcurrent.toString()) }
+    var subAgentMaxIterations by remember { mutableStateOf(settings.subAgentMaxIterations.toString()) }
+    var subAgentMaxPerRun by remember { mutableStateOf(settings.subAgentMaxPerRun.toString()) }
     var headerFields by remember {
         mutableStateOf(parseRequestFields(settings.aiCustomHeadersJson))
     }
@@ -393,6 +398,69 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
                 settings.aiHistorySoftLimit = it
                 historySoftLimit = settings.aiHistorySoftLimit.toString()
             }, if (t.zh) "条消息" else "msgs")
+        }
+        GlassGroup(
+            title = if (t.zh) "子代理" else "Sub-agents",
+            footer =
+            if (t.zh) {
+                "子代理沿用上面的端点、API Key 与模型，在独立上下文里只做一件被指派的取证任务，且只拿到该角色的工具白名单。" +
+                    "「嵌套深度上限」=1 表示子代理不能再派子代理；「单次会话子代理配额」是真正约束 API 花销的那一项。" +
+                    "关闭后，深度分析里的 spawn_subagent 工具与对外的 agent_api 都会拒绝。"
+            } else {
+                "Sub-agents reuse the endpoint, API key and model above. Each answers one assigned evidence question in its own " +
+                    "context, with only its role's tool whitelist. Depth 1 means a sub-agent cannot spawn further sub-agents; " +
+                    "“spawns per session” is the knob that bounds API spend. Turning this off rejects both spawn_subagent inside " +
+                    "the analysis agent and the external agent_api tool."
+            }
+        ) {
+            ToggleRow(if (t.zh) "启用子代理" else "Enable sub-agents", subAgentEnabled) {
+                subAgentEnabled = it
+                settings.subAgentEnabled = it
+            }
+            GroupDivider()
+            NumberSettingRow(
+                if (t.zh) "嵌套深度上限" else "Max nesting depth",
+                subAgentMaxDepth,
+                { subAgentMaxDepth = it },
+                {
+                    settings.subAgentMaxDepth = it
+                    subAgentMaxDepth = settings.subAgentMaxDepth.toString()
+                },
+                if (t.zh) "层" else "levels"
+            )
+            GroupDivider()
+            NumberSettingRow(
+                if (t.zh) "并发子代理数" else "Concurrent sub-agents",
+                subAgentMaxConcurrent,
+                { subAgentMaxConcurrent = it },
+                {
+                    settings.subAgentMaxConcurrent = it
+                    subAgentMaxConcurrent = settings.subAgentMaxConcurrent.toString()
+                },
+                if (t.zh) "个" else "slots"
+            )
+            GroupDivider()
+            NumberSettingRow(
+                if (t.zh) "单子代理迭代上限" else "Steps per sub-agent",
+                subAgentMaxIterations,
+                { subAgentMaxIterations = it },
+                {
+                    settings.subAgentMaxIterations = it
+                    subAgentMaxIterations = settings.subAgentMaxIterations.toString()
+                },
+                if (t.zh) "轮" else "steps"
+            )
+            GroupDivider()
+            NumberSettingRow(
+                if (t.zh) "单次会话子代理配额" else "Spawns per session",
+                subAgentMaxPerRun,
+                { subAgentMaxPerRun = it },
+                {
+                    settings.subAgentMaxPerRun = it
+                    subAgentMaxPerRun = settings.subAgentMaxPerRun.toString()
+                },
+                if (t.zh) "次" else "spawns"
+            )
         }
         GlassGroup(
             title = if (t.zh) "自定义请求" else "Custom request",

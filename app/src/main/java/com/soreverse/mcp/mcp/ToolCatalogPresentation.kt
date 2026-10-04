@@ -30,6 +30,15 @@ object ToolCatalogPresentation {
                         "JNI / packer / obfusc / antidebug / import"
                 }
                 ),
+        "agent" to
+            (
+                if (zh) {
+                    "子代理：在手机上跑独立上下文的专职取证代理（角色白名单、深度与配额上限）"
+                } else {
+                    "Sub-agents: scoped on-device evidence agents with role tool whitelists, " +
+                        "nesting depth and per-session quota limits"
+                }
+                ),
         "session" to (if (zh) "编辑会话：打开、历史管理、审计" else "Edit session: open, history, audit"),
         "build" to (if (zh) "构建：输出补丁后的 SO 文件" else "Build: export patched SO file"),
         "system" to (if (zh) "系统控制：隧道、APK MCP 桥" else "System: tunnel, APK MCP bridge"),

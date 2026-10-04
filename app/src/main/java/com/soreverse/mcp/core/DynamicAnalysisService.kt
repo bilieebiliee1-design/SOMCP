@@ -20,10 +20,7 @@ package com.soreverse.mcp.core
 
 import android.content.Context
 import android.util.Log
-import com.soreverse.mcp.mcp.SchemaBuilder
-import com.soreverse.mcp.mcp.ToolCatalog
 import com.soreverse.mcp.mcp.ToolContext
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,8 +28,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import org.json.JSONObject
 
 data class DynamicAnalysisEvent(val kind: Kind, val text: String, val toolName: String = "") {
     enum class Kind { STATUS, THINKING, TOOL, FINALIZING, TEXT, ERROR, DONE }
@@ -52,22 +47,10 @@ class DynamicAnalysisService(private val appContext: Context) {
 
     suspend fun analyze(dynamicRun: String, path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            requireConfigured(settings)
+            AgentKernel.requireConfigured(settings)
             emit(DynamicAnalysisEvent.Kind.STATUS, if (zh) "正在初始化动态分析 AI 会话…" else "Initializing dynamic-analysis AI session…")
             val userPrompt = buildUserPrompt(dynamicRun, path, zh, request)
-            val engine = RikkaAgentEngine(
-                client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS)
-                    .readTimeout(10, TimeUnit.MINUTES)
-                    .writeTimeout(120, TimeUnit.SECONDS)
-                    .retryOnConnectionFailure(true).build(),
-                provider = settings.aiProvider,
-                endpoint = settings.aiEndpoint,
-                apiKey = settings.aiApiKey,
-                model = settings.aiModel,
-                temperature = settings.aiTemperature,
-                customHeaders = parseStringMap(settings.aiCustomHeadersJson),
-                customBody = buildAdditionalProperties(settings)
-            )
+            val engine = AgentKernel.engine(settings)
             val tools = buildRikkaTools(settings, zh)
             var lastReasoning = ""
             val finalReport = engine.run(
@@ -131,67 +114,31 @@ Requirements:
     }
 
     private fun buildRikkaTools(settings: SettingsStore, zh: Boolean): List<RikkaTool> {
-        val engine = EngineProvider.get(appContext)
-        val ctx = ToolContext(appContext, settings, engine)
-        return DYNAMIC_TOOL_NAMES.mapNotNull { name ->
-            val handler = ToolCatalog.byName[name] ?: return@mapNotNull null
-            val schema = handler.meta.schemaBuilder.invoke(SchemaBuilder)
-            RikkaTool(
-                name = name,
-                description = if (zh) handler.meta.zh else handler.meta.en,
-                schema = schema
-            ) { args ->
-                emit(DynamicAnalysisEvent.Kind.TOOL, if (zh) "调用工具 $name" else "Calling tool $name", name)
-                runCatching { handler.handle(ctx, args) }
-                    .onSuccess { AppLog.i("dynamic AI tool completed $name") }
-                    .onFailure { AppLog.e("dynamic AI tool failed $name", it) }
-                    .getOrThrow()
-                    .let { payload ->
-                        val text = payload.toString()
-                        val limit = settings.toolResultMaxChars
-                        if (limit <= 0 || text.length <= limit) text else text.take(limit) + "…"
-                    }
+        val ctx = ToolContext(appContext, settings, EngineProvider.get(appContext))
+        val catalog = AgentKernel.catalogTools(
+            ctx,
+            DYNAMIC_TOOL_NAMES,
+            AgentToolHooks(
+                zh = zh,
+                onToolStart = { name ->
+                    emit(DynamicAnalysisEvent.Kind.TOOL, if (zh) "调用工具 $name" else "Calling tool $name", name)
+                },
+                onToolDone = { name ->
+                    emit(DynamicAnalysisEvent.Kind.TOOL, if (zh) "工具完成 $name" else "Tool completed $name", name)
+                }
+            )
+        )
+        catalog.unresolved.forEach { AppLog.w("Dynamic analysis: tool not in catalog: $it") }
+        if (!settings.subAgentEnabled) return catalog.tools
+        return catalog.tools + subAgentSpawnTool(
+            ctx = ctx,
+            zh = zh,
+            depth = 1,
+            budget = SubAgentBudget(settings.subAgentMaxPerRun),
+            onProgress = { text ->
+                _events.tryEmit(DynamicAnalysisEvent(DynamicAnalysisEvent.Kind.STATUS, text))
             }
-        }
-    }
-
-    private fun parseStringMap(raw: String): Map<String, String> {
-        val obj = runCatching { org.json.JSONObject(raw.ifBlank { "{}" }) }.getOrNull() ?: return emptyMap()
-        val map = linkedMapOf<String, String>()
-        val keys = obj.keys()
-        while (keys.hasNext()) {
-            val key = keys.next().trim()
-            if (key.isNotBlank()) map[key] = obj.optString(key)
-        }
-        return map
-    }
-
-    private fun buildAdditionalProperties(settings: SettingsStore): Map<String, kotlinx.serialization.json.JsonElement> {
-        val properties = linkedMapOf<String, kotlinx.serialization.json.JsonElement>()
-        val body = runCatching { JsonUtilBody.parse(settings.aiCustomBodyJson) }.getOrNull() ?: return properties
-        val keys = body.keys()
-        val json = kotlinx.serialization.json.Json
-        while (keys.hasNext()) {
-            val key = keys.next().trim()
-            if (key.isBlank()) continue
-            val value = body.opt(key)
-            properties[key] = runCatching {
-                json.parseToJsonElement(
-                    when (value) {
-                        null, org.json.JSONObject.NULL -> "null"
-                        is String -> org.json.JSONObject.quote(value)
-                        else -> value.toString()
-                    }
-                )
-            }.getOrElse { kotlinx.serialization.json.JsonPrimitive(value?.toString().orEmpty()) }
-        }
-        return properties
-    }
-
-    private fun requireConfigured(settings: SettingsStore) {
-        if (settings.aiApiKey.isBlank()) error("AI API key is empty")
-        if (settings.aiModel.isBlank()) error("AI model is empty")
-        if (settings.aiEndpoint.isBlank()) error("AI endpoint is empty")
+        )
     }
 
     private suspend fun emit(kind: DynamicAnalysisEvent.Kind, text: String, toolName: String = "") {
@@ -210,9 +157,4 @@ Requirements:
             "meta_info"
         )
     }
-}
-
-/** Minimal org.json holder to avoid pulling JsonUtil internals into the AI path. */
-private object JsonUtilBody {
-    fun parse(raw: String): org.json.JSONObject = org.json.JSONObject(raw.ifBlank { "{}" })
 }
