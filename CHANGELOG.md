@@ -178,6 +178,21 @@
   - 根因：dcc（pinned `17de4fd`）的 `dcc_main` 对 APK 输入**无条件**调用 `sign()`（argparse 里的 `--sign` 是死参数，没接进主流程），`sign()` 用 `java -jar tools/signapk.jar` 签测试 key，而 signapk import 了 `sun.misc.BASE64Encoder`——JDK 9 起已移除，工作流开头 setup 的恰是 Java 17。dcc 是 2019 生态的项目，在其自家环境（JDK 8）下没问题，换现代 JDK 必炸。
   - 修复（最小 diff）：clone dcc 后用一段内嵌 python 把 `sign()` 里的 signapk 调用替换为 `shutil.copyfile(unsigned_apk, signed_apk)`（dcc.py 已 import shutil）。语义上等价省事：dcc 的测试 key 签名本就是废弃中间产物，该步随后用 zipalign + apksigner 以 release key 重签（v1–v4 全开）；未签名的输出 APK 不影响 zipalign/apksigner。补丁带 assert——若 pinned dcc 的这一行被上游改动即显式失败，不会静默漏签。发布步骤用 `softprops/action-gh-release@v2`，可复用已存在的空 release（run 失败时已创建、零资产）。
 
+- **修复子代理调不动：5 分钟排队超时被套在了整个运行外面**（`core/SubAgentRunner.kt`）。
+  - 失效现象：`spawn_subagent` / `agent_api(action=run)` 派生出的子代理跑到 5 分钟必被掐掉，回给父模型一个 `sub_agent_queue_timeout`、提示「并发槽被占满，请稍后重试」；主模型据此认为只是排队，于是放弃取证或反复重派，怎么派都不出结果。真实原因与并发毫无关系。
+  - 根因：`withTimeout(QUEUE_WAIT_MS) { gate.withPermit { …整个 engine.run… } }` —— 超时窗口套在**整个子代理运行**外层，而常量名 `QUEUE_WAIT_MS`、错误码 `sub_agent_queue_timeout` 与提示文案三处都写明本意只是限制「等槽」。`AgentKernel.httpClient()` 的 `readTimeout` 是 10 分钟、子代理迭代建议值 10～14 轮，正常取证必然跑过 5 分钟，于是 100% 命中。
+  - 修复（最小 diff）：超时收窄到只包 `gate.acquire()`，运行主体移入 `try`，`release()` 放进 `finally`。排队超时从此只在真的等不到槽时抛出，错误码与文案恢复原义。
+  - 顺带修掉同一条链路上另外两处被这个 bug 掩盖的问题：① **嵌套时预算被重置** —— 每层嵌套都 `SubAgentBudget(settings.subAgentMaxPerRun)` 新开一份满额配额，把「单次会话配额」这个用户真正用来压开销的上限按扇出倍数放大；现由 `run(budget = …)` 把父级的同一个预算实例一路传下去，一个会话一份配额。② **嵌套运行会跟自己死锁** —— 嵌套子代理再去抢一个并发槽，而父代理正占着槽；`subAgentMaxConcurrent = 1` 时子代理必然等满 5 分钟才被允许启动。嵌套本就在父许可内、且引擎逐条落地 tool call，现按 `depth > 1` 跳过闸门（`subAgentGateFor`，纯函数可单测）。
+  - 回归测试：`SubAgentRolesTest` 新增 4 例（`SubAgentGateTest` 三例覆盖「根级排队 / 嵌套不排队 / 同上限共用同一池」，`oneSharedBudgetBoundsTheWholeSessionNotEachLevel` 覆盖预算不按层重置）。验证方式（未本地编译、未查询 CI）：用与 CI 同版本的 ktlint 1.5.0 对全部改动 `.kt` 跑通零告警；闸门与预算判定均已抽为纯函数，由上述用例在 JVM 层直接断言。
+
+- **修复对外 MCP 客户端看不到子代理：`agent_api` 被 lean 模式挡在 `tools/list` 之外**（`mcp/ToolCatalogRegistry.kt`）。
+  - 失效现象：电脑侧 MCP 客户端 `tools/list` 里根本没有子代理入口，`meta_info(action=tools)` 却能查到 `agent_api` —— 能力「存在但不可达」。用户只能去关掉 lean 模式或手工拼工具名才能用上子代理。
+  - 根因：`leanNames()` 只放行 `ToolClass.CORE` / `META` 与 `category == "lowlevel"` 三类。`agent_api` 是 `EXTRA` + `category = "agent"`，两条都不沾；而 `EXTRA` 进 lean 的唯一途径是 `popularity` 晋级 —— **晋级要求此前成功调用过**，于是「从没用过的入口」永远进不了名单。又因 `leanTools` 默认 `true`，这是开箱即中的状态。
+  - 附带证据：README 第 81 行原本就写「默认 lean 模式会广告核心、**底层网关**和 meta 工具」—— `agent_api` 就是一个底层网关（子代理网关），实现与自身声明不一致。
+  - 修复：抽出网关类判定（`category in {lowlevel, agent}`），与 CORE / META 同等放行；同时把网关排除在热度晋级之外，避免同一个工具既在基础名单又被晋级名单重复追加。`analyze_esil` / `edit_symbol` / `edit_fix_sections` / `diff_so` / `dynamic_analyze_ai` / `session_audit` 仍需热度晋级，lean 模式的上下文成本约束没有被削弱。
+  - 实际影响：默认 lean 名单 39 → 40，**只多出 `agent_api` 一个**，其余 39 个工具可见性逐条比对无变化。
+  - 回归测试：新增 `app/src/test/java/com/soreverse/mcp/mcp/ToolCatalogLeanTest.kt`（`AGPL-3.0-only`，5 例）：网关类默认全部可见、`agent_api` 在无 popularity 且关闭晋级时仍可见、非网关 EXTRA 仍需晋级、晋级不会造成网关重复、完整目录不受影响。
+
 - **新增子代理：内置 agent 可派生专职取证代理，对外同步开出 `agent_api` 网关**（`core/AgentKernel.kt` 新增 163、`core/SubAgentRunner.kt` 新增 589、`core/DeepAnalysisService.kt` +40/−122、`core/DynamicAnalysisService.kt` +26/−84、`core/SettingsStore.kt` +59、`mcp/ToolCatalog.kt` +101/−1、`mcp/ToolCatalogPresentation.kt` +9、`mcp/McpHttpServer.kt` +15、`AiSettingsPage.kt` +68、`app/src/test/java/com/soreverse/mcp/core/SubAgentRolesTest.kt` 新增、`README.md` 新增「子代理」一节）。前提条件只有一个：设置 → AI 里已配好 **API 地址 / API Key / 模型 ID**——子代理不另立凭据，provider、endpoint、key、model、temperature、自定义 headers/body 全部复用，因此不存在「子代理偷偷用另一个账号花钱」的暗道。
   - 为什么值得做：深度分析是一条 20+ 轮的长上下文，一次 `analyze_xrefs` 或 `search_strings` 的原始结果就能占掉父会话几千 token，而其中真正进结论的只有几行。子代理把这类「要跑很多步、但只回一句话」的取证挪到**独立上下文**里做完，只把紧凑证据块回灌父会话，父上下文不再被中间结果污染。
   - 两侧入口共用同一个 `SubAgentRunner`：内置侧给深度/动态分析的工具表追加 `spawn_subagent(role, task)`；对外侧新增 `agent_api(action=roles|run|capabilities)`（`ToolClass.EXTRA` + `heavy=true`，lean 模式不广告）。工具执行一律经 `ToolContext` **进程内**调用 `ToolCatalog` handler，不走 MCP HTTP 层——这与既有 `dynamic_analyze_ai` 同一路线，因此嵌套运行不会去抢 heavy gate 的票，自锁死的路径被排除在设计外。
