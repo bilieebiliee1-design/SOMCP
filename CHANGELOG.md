@@ -177,6 +177,12 @@
   - 失败与降级都编了码：`unknown_role` / `task_required` / `sub_agent_failed` / `sub_agent_queue_timeout`（等槽 5 分钟）/ `SUBAGENT_DISABLED` / `AI_NOT_CONFIGURED`（错误里直接列出缺哪几项）；跑满迭代上限时保留已取到的部分证据并标注在何处停止，不返回空结果。`action=roles` 同时输出 `declared_tools` 与 `unresolved_tools`，角色白名单一旦指向被改名的工具会当场可见。
   - 不做的事（`agent_api(action=capabilities)` 的 `not_covered` 里同样如实写）：子代理之间及与父代理之间不共享对话历史；没有跨会话记忆；同一轮内的多个 `spawn_subagent` 是串行执行（`RikkaAgentEngine` 逐条落地 tool call），并行度受步数预算而非线程限制；`dyn_probe` 是唯一带运行时副作用的角色（真跑 unidbg / Frida）。
   - 内置工具 45 → 46。验证方式：**本机未编译**（Gradle 死于 PKIX，依既有约定交 CI），已用与 CI 同版本 ktlint 1.5.0 对全部 10 个改动/新增 `.kt` 跑通零告警，新增 9 个纯 JVM 用例（预算 CAS、深度与迭代裁剪、角色白名单只读约束、大小写/空格容忍的角色解析）。
+- **自动回复：无日志的 issue 一律不受理**（`.github/workflows/issues-auto-reply.yml`，新增 `Reject issue without logs` 步骤）。此前 `issues: opened` 一律触发 LLM 回复，提交者只写一句「闪退」也能得到一篇基于仓库代码的长篇分析与追问，回复成本高、结论不可靠；现在正文与附件里检测不到任何日志/堆栈线索时，bot 直接发一条固定评论说明补齐要求（版本号、设备与系统信息、崩溃/报错日志，并给出无ROOT 场景下LogFox + Shizuku 的免电脑抓取路径）并关闭 issue，同时跳过后续 LLM 生成与发布两步。
+  - 「有日志」的判定为四类信号任一命中：① 正文含 GitHub 附件链接（`user-attachments/files/<id>/` 或 `user-attachments/assets/<uuid>`，与既有附件下载步骤的两种路径一致）；② 正文含代码块 ```；③ 正文含典型日志/堆栈标记（`logcat`、`AndroidRuntime`、`FATAL EXCEPTION`、`Caused by:`、`backtrace`、`stack trace`、`libc Fatal`、`*.Exception`、`Error`、`SIGSEGV` / `SIGABRT` / `SEGV`、`DEBUG`、`VERBOSE`）；④ 正文含中文线索词（日志、堆栈、报错、错误、崩溃、闪退、异常、复现步骤、抓取，英文 `log` / `crash` 按词边界匹配以免命中 `catalog` / `dialog`）。
+  - 两条正则刻意**不用** `\b` 包住整组：`java.lang.IllegalStateException` 里的 `Exception` 前面是字母，`\bException\b` 匹配不到；`Caused by:` 结尾是冒号、后面未必紧跟词字符，`\b` 同样失配——初版即因此把「只贴了一段纯文本报错」的正常 bug 报告误判成无日志，故改成 `[A-Za-z]Exception\b` 这类分类写法。
+  - 维护者豁免：仓库所有者或 `author_association` 为 `OWNER` / `MEMBER` / `COLLABORATOR` / `COLLABORATOR_ON_BEHALF_OF` 的 issue 不做无日志拒收，与重复 issue 检测同一口径；其余关闭动作复用既有的 `LLM_ISSUE_AUTO_CLOSE` 开关（置 `false` 则只评论不关闭）。
+  - 仅在 `issues: opened` 时执行；`issue_comment` 与手动补跑（`workflow_dispatch`）不触发，因此在评论里补上日志不会被这条规则误杀。
+  - 验证：YAML 解析通过、内嵌脚本经 `node --check` 语法校验；判定逻辑抽成纯函数在 Node 上跑 12 条用例全绿（含空正文/纯提问/提新功能判拒，含代码块/两种附件路径/`Caused by:` 纯文本/内嵌 `Exception`/中文崩溃/logcat 判受理，以及 `catalog`、`dialog` 两个防误伤反例）。**GitHub Actions 未实跑**（本机禁本地构建与 CI 查询），随 CI 补验。
 
 ## 1.0.21
 
