@@ -829,11 +829,20 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean("crashReportConsentAnswered", false)
         set(value) = prefs.edit().putBoolean("crashReportConsentAnswered", value).apply()
 
+    /**
+     * True when [value] is a redaction placeholder produced by [snapshot]'s
+     * masking rather than a real credential. Secrets arrive masked in a
+     * snapshot-derived patch, so writing a placeholder back would replace the
+     * user's live credential with something like "abcd…wxyz" and silently
+     * break authentication / the MCP bridge.
+     */
+    private fun isMaskedSecret(value: String): Boolean = value == MASK_PLACEHOLDER || value.contains(MASK_SEPARATOR)
+
     fun snapshot(maskSecrets: Boolean = true): org.json.JSONObject {
         fun mask(value: String): String {
             if (!maskSecrets || value.isBlank()) return value
-            if (value.length <= 8) return "****"
-            return value.take(4) + "…" + value.takeLast(4)
+            if (value.length <= 8) return MASK_PLACEHOLDER
+            return value.take(4) + MASK_SEPARATOR + value.takeLast(4)
         }
         return org.json.JSONObject()
             .put(
@@ -1009,6 +1018,20 @@ class SettingsStore(context: Context) {
                 touch(key)
             }
         }
+
+        // Credential fields additionally drop redaction placeholders: a snapshot
+        // taken with maskSecrets=true must not overwrite a live token/key with
+        // "abcd…wxyz". Skipping keeps the current value, which is what "this
+        // backup did not carry my secret" should mean.
+        fun applySecret(source: org.json.JSONObject?, key: String, apply: (String) -> Unit) {
+            if (source != null && source.has(key) && !source.isNull(key)) {
+                val value = source.optString(key)
+                if (!isMaskedSecret(value)) {
+                    apply(value)
+                    touch(key)
+                }
+            }
+        }
         val appearance = obj("appearance") ?: patch
         applyStr(appearance, "language") { language = it }
         applyStr(appearance, "themeMode") { themeMode = it }
@@ -1029,7 +1052,7 @@ class SettingsStore(context: Context) {
         if (allowSecrets &&
             allowSecurityFields
         ) {
-            applyStr(service, "accessToken") { accessToken = it }
+            applySecret(service, "accessToken") { accessToken = it }
         }
         applyStr(service, "defaultWorkDirPath") { defaultWorkDirPath = it }
         applyBool(service, "useDefaultWorkDir") { useDefaultWorkDir = it }
@@ -1091,7 +1114,7 @@ class SettingsStore(context: Context) {
         if (allowSecrets &&
             allowSecurityFields
         ) {
-            applyStr(tunnel, "tunnelNamedToken") { tunnelNamedToken = it }
+            applySecret(tunnel, "tunnelNamedToken") { tunnelNamedToken = it }
         }
         applyStr(tunnel, "tunnelProtocol") { tunnelProtocol = it }
         applyStr(tunnel, "tunnelEdgeIpVersion") { tunnelEdgeIpVersion = it }
@@ -1103,18 +1126,31 @@ class SettingsStore(context: Context) {
 
         val apk = obj("apkBridge") ?: patch
         applyStr(apk, "apkMcpUrl") { apkMcpUrl = it }
-        if (allowSecrets) applyStr(apk, "apkMcpToken") { apkMcpToken = it }
+        if (allowSecrets) applySecret(apk, "apkMcpToken") { apkMcpToken = it }
         // Support setting multiple bridge configs via JSON array
         if (apk.has("apkMcpConfigs") && !apk.isNull("apkMcpConfigs")) {
             try {
                 val arr = apk.optJSONArray("apkMcpConfigs")
                 if (arr != null && arr.length() > 0) {
+                    // A masked or absent token means "this backup carries no credential for
+                    // this bridge", so keep the live one instead of writing an
+                    // empty token and locking the user out. Order matters: the
+                    // apkMcpUrl assignment above has already renamed entry 0, so
+                    // liveByUrl is keyed by the incoming URL and an unchanged
+                    // credential still matches after a URL edit. Reading it
+                    // before that assignment would miss and drop the token.
+                    val liveByUrl = apkMcpConfigs.associateBy { it.url }
                     val configs = mutableListOf<BridgeConfig>()
                     for (i in 0 until arr.length()) {
                         val obj = arr.getJSONObject(i)
                         val url = obj.optString("url", "").trim()
                         if (url.isNotBlank()) {
-                            val token = if (allowSecrets) obj.optString("token", "") else ""
+                            val incoming = obj.optString("token", "")
+                            val token = if (!allowSecrets || incoming.isBlank() || isMaskedSecret(incoming)) {
+                                liveByUrl[url]?.token.orEmpty()
+                            } else {
+                                incoming
+                            }
                             configs.add(BridgeConfig(url, token))
                         }
                     }
@@ -1132,7 +1168,7 @@ class SettingsStore(context: Context) {
         applyBool(reporting, "crashReportConsentAnswered") { crashReportConsentAnswered = it }
 
         // The `ai` group is what snapshot() emits, so these keys match its names.
-        // apiKey arrives masked in a snapshot-derived patch; '…' is the mask marker.
+        // apiKey arrives masked in a snapshot-derived patch; applySecret drops it.
         val ai = obj("ai") ?: patch
         applyStr(ai, "provider") { aiProvider = it }
         applyStr(ai, "endpoint") { aiEndpoint = it }
@@ -1143,7 +1179,7 @@ class SettingsStore(context: Context) {
         applyStr(ai, "customHeadersJson") { aiCustomHeadersJson = it }
         applyStr(ai, "customBodyJson") { aiCustomBodyJson = it }
         if (allowSecrets) {
-            applyStr(ai, "apiKey") { if (!it.contains('…')) aiApiKey = it }
+            applySecret(ai, "apiKey") { aiApiKey = it }
         }
         applyBool(ai, "subAgentEnabled") { subAgentEnabled = it }
         applyInt(ai, "subAgentMaxDepth") { subAgentMaxDepth = it }
@@ -1241,8 +1277,7 @@ class SettingsStore(context: Context) {
                 "accessToken" -> if (allowSecrets &&
                     allowSecurityFields
                 ) {
-                    accessToken = patch.optString(key)
-                    touch(key)
+                    applySecret(patch, key) { accessToken = it }
                 }
 
                 "floatingEnabled" -> {
@@ -1323,8 +1358,7 @@ class SettingsStore(context: Context) {
                 "tunnelNamedToken" -> if (allowSecrets &&
                     allowSecurityFields
                 ) {
-                    tunnelNamedToken = patch.optString(key)
-                    touch(key)
+                    applySecret(patch, key) { tunnelNamedToken = it }
                 }
 
                 "tunnelProtocol" -> {
@@ -1338,8 +1372,7 @@ class SettingsStore(context: Context) {
                 }
 
                 "apkMcpToken" -> if (allowSecrets) {
-                    apkMcpToken = patch.optString(key)
-                    touch(key)
+                    applySecret(patch, key) { apkMcpToken = it }
                 }
 
                 "apkMcpAutoProbe" -> {
@@ -1465,11 +1498,22 @@ class SettingsStore(context: Context) {
     /** Export all settings as a formatted JSON string. */
     fun toJsonString(maskSecrets: Boolean = true): String = snapshot(maskSecrets).toString(2)
 
-    /** Import settings from a JSON string. Returns the applyPatch result. */
-    fun fromJsonString(json: String, allowSecrets: Boolean = false): org.json.JSONObject = applyPatch(
+    /**
+     * Import settings from a JSON string produced by [toJsonString]. Returns the
+     * applyPatch result.
+     *
+     * Restoring a backup is not gated on whether that backup carries secrets:
+     * whether a credential is written is decided per field by the redaction
+     * check in [applyPatch], so a masked snapshot leaves live keys untouched
+     * while an unmasked one restores them. Tying this to a UI toggle (the old
+     * behaviour) meant a user who exported without secrets silently lost
+     * bindHost/authEnabled too, and one who did export them had to remember to
+     * flip the same toggle again before importing.
+     */
+    fun fromJsonString(json: String): org.json.JSONObject = applyPatch(
         org.json.JSONObject(json),
-        allowSecrets = allowSecrets,
-        allowSecurityFields = allowSecrets
+        allowSecrets = true,
+        allowSecurityFields = true
     )
 
     companion object {
@@ -1494,6 +1538,12 @@ Rules:
 
         /** Maximum number of backup export records kept in the history list. */
         const val MAX_BACKUP_HISTORY = 10
+
+        /** Stand-in written by [snapshot] in place of a secret of 8 characters or fewer. */
+        private const val MASK_PLACEHOLDER = "****"
+
+        /** Joins the visible head and tail of a masked secret in [snapshot] output. */
+        private const val MASK_SEPARATOR = '…'
     }
 }
 
