@@ -101,6 +101,12 @@ jobs:
 
             const hasAttachment = /github\.com\/user-attachments\/(?:files\/\d+\/|assets\/[A-Za-z0-9._-]+)/i.test(txt);
             const hasCodeFence = txt.indexOf('```') >= 0;
+            // 自动崩溃采集工具（AppErrorsTracking / Crashlytics 风格）导出的
+            // 报告有固定的键值头，正文哪怕一个日志字样都不含也一定是完整
+            // 现场（#138 即此类：16821 字的 native 报告 + [Error Type] /
+            // [Crash Time] / [Stack Trace] 头）。这类头部是结构化证据，不该
+            // 依赖「正文里恰好出现了 backtrace」这种偶然。
+            const hasTrackerHeader = /\[\s*(?:Error\s+Type|Crash\s+Time|Stack\s+Trace|Android\s+Version|Version\s+Code)\s*\]/i.test(txt);
             // 注意两条正则都不能用 \b 包住整组：Java 异常类名是内嵌的
             // （java.lang.IllegalStateException 里的 Exception 前面是字母，
             // \bException\b 匹配不到），而 "Caused by:" 结尾是冒号（后面未必
@@ -110,7 +116,14 @@ jobs:
             // 留在表里等同于放行一切。Exception 家族（IllegalStateException
             // 等）、FATAL EXCEPTION、Caused by:、backtrace、信号名则是崩溃
             // 报告的必有成分。
-            const hasAsciiMark = /logcat|AndroidRuntime|FATAL\s+EXCEPTION|Caused\s+by:|backtrace|stack\s?trace|libc\s*Fatal|[A-Za-z]Exception\b|\bSIGSEGV\b|\bSIGABRT\b|\bSEGV\b|\bDEBUG\b|\bVERBOSE\b/i.test(txt);
+            // \bSIG[A-Z]{2,}\b 覆盖全部信号名（SIGBUS / SIGILL / SIGFPE /
+            // SIGTRAP / SIGSEGV / SIGABRT ...）。此前只枚举 SIGSEGV、SIGABRT、
+            // SEGV 三项，而 #138 这类 AppErrorsTracking 报告恰是 native 崩溃
+            // —— 换成 SIGBUS/SIGILL 的同类报告会被漏判。形态约束（SIG + 至少
+            // 两个全大写字母 + 词边界）在描述性文本里几乎不出现，无误伤面。
+            // Abort message / Build fingerprint 是 tombstone 与 Java 崩溃
+            // 报告的头部标记。
+            const hasAsciiMark = /logcat|AndroidRuntime|FATAL\s+EXCEPTION|Caused\s+by:|backtrace|stack\s?trace|libc\s*Fatal|[A-Za-z]Exception\b|\bSIG[A-Z]{2,}\b|\bSEGV\b|Abort\s+message|Build\s+fingerprint|\bDEBUG\b|\bVERBOSE\b/i.test(txt);
             // 中文只认「日志实体词」，不认「症状词」。症状词（崩溃/闪退/报错/
             // 错误/异常）是提交者描述问题的自然用词，几乎每条真·无日志的
             // 反馈都会写（历史 bug：#145「最新版somcp 18点过更新的软件直接
@@ -122,7 +135,7 @@ jobs:
             // 描述性用法会让规则失效，属于同一类误伤。
             const hasCjkMark = /日志|logcat|堆栈|复现步骤|抓取/i.test(txt);
 
-            if (hasAttachment || hasCodeFence || hasAsciiMark || hasCjkMark) {
+            if (hasAttachment || hasCodeFence || hasTrackerHeader || hasAsciiMark || hasCjkMark) {
               console.log('Issue #' + issue_number + ' carries log/attachment evidence; keep it open.');
               core.setOutput('rejected', 'false');
               return;
