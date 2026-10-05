@@ -38,6 +38,15 @@ object IntegrityGuard {
 
     private val scheduleLock = Any()
 
+    /**
+     * The one component factory a genuine build of this app can declare:
+     * `androidx.core:core` (transitive, via `androidx.activity:activity-compose`)
+     * puts it in its own manifest and the merger copies it into the shipped
+     * APK. Read as a constant rather than a literal at the comparison site so
+     * the allowlist has one definition to audit.
+     */
+    private const val ANDROIDX_COMPONENT_FACTORY = "androidx.core.app.CoreComponentFactory"
+
     @Volatile private var recheckStarted = false
 
     /** Failure recorded by [enforceEarly]; consumed (fail-closed) by [enforce]. */
@@ -261,12 +270,19 @@ object IntegrityGuard {
         // service gate, the boot receiver gate - must see the untrusted state
         // until the reason is surfaced and the process exits.
         startupFailure?.let { failure ->
+            // `expected` is the pinned digest, never null, but `actual` is: the
+            // UI renders "expected" against "actual" and an empty `actual` made
+            // a pure environment-threat failure read as an identity mismatch.
+            // Read the installed fingerprints here so the gate can show both
+            // sides and let the user see which one actually failed.
+            val actual = runCatching {
+                installFingerprints(context).map { it.normalizeDigest() }
+            }.getOrDefault(emptyList())
             return Result(
                 false,
                 failure,
                 NativeProbe.pinnedFingerprint().normalizeDigest(),
-                emptyList(),
-                listOf(failure)
+                actual
             )
         }
         cached?.let { (time, result) ->
@@ -397,19 +413,30 @@ object IntegrityGuard {
     /**
      * Detects a Parcel/Creator substitution of the PackageManager result
      * (SoLab "normal"/"original_apk" signature-bypass templates, DPatch's
-     * loader): these frameworks install their own Creator class as
-     * [PackageInfo.CREATOR] so every getPackageInfo() response is rewritten
-     * with the original signatures during unparceling. The genuine Creator is
-     * a framework class loaded by the boot classloader (reported as null);
-     * anything the repack ships is loaded by an app-visible classloader.
+     * loader, LSPatch's `PackageInfo.CREATOR` proxy): these frameworks install
+     * their own Creator class as [PackageInfo.CREATOR] so every
+     * getPackageInfo() response is rewritten with the original signatures
+     * during unparceling.
+     *
+     * The criterion is loader *identity*, not "classLoader is null". The
+     * genuine creator is the anonymous class `PackageInfo$1`, and a nested
+     * class is always defined by the same loader that defined its outer class,
+     * so the only invariant that holds on every ROM is
+     * `CREATOR.classLoader === PackageInfo.classLoader`. Testing for null
+     * instead reports the genuine build as tampered wherever the framework
+     * jars are loaded by a named loader rather than the boot loader (ART
+     * modules / APEX since Android 14, and OEM framework layouts), because
+     * those also return a non-null loader for a class that was never
+     * replaced. A repack's own Creator is necessarily defined by a different,
+     * app-visible loader, which this still catches.
      */
     private fun creatorIntegrityThreat(): String? = runCatching {
         val creator = PackageInfo::class.java.getField("CREATOR").get(null)
         when {
             creator == null -> "PackageInfo.CREATOR is null"
 
-            creator.javaClass.classLoader != null ->
-                "PackageInfo.CREATOR replaced by a non-boot classloader"
+            creator.javaClass.classLoader !== PackageInfo::class.java.classLoader ->
+                "PackageInfo.CREATOR replaced by a foreign classloader"
 
             else -> null
         }
@@ -418,17 +445,29 @@ object IntegrityGuard {
     /**
      * DPatch takes over process startup by rewriting the manifest's
      * appComponentFactory (to com.pandora.core.AppFactory) before the app's
-     * own code ever runs. This app declares no component factory, so any
-     * non-empty value means the installed manifest was hijacked.
+     * own code ever runs, so any value outside the allowlist in
+     * [foreignFactoryThreat] means the installed manifest was hijacked.
+     *
+     * The allowlist is load-bearing, not padding. The app's own manifest
+     * declares no factory, but `androidx.core:core` - a transitive dependency
+     * of `androidx.activity:activity-compose` - ships one in *its* manifest,
+     * and the manifest merger copies it into the shipped APK. Treating "any
+     * non-empty value" as hostile therefore flagged every genuine build of
+     * this app, not just repacks. Matching stays exact (full class name, or
+     * the app's own package prefix); no substring heuristics, since the value
+     * is attacker-chosen and a loose match would be trivially satisfied.
      */
     private fun factoryHijackThreat(context: Context): String? = runCatching {
-        val factory = context.applicationInfo?.appComponentFactory
-        if (!factory.isNullOrEmpty()) {
-            "foreign appComponentFactory declared (value withheld)"
-        } else {
-            null
-        }
+        foreignFactoryThreat(context.applicationInfo?.appComponentFactory, context.packageName)
     }.getOrNull()
+
+    /** Pure decision, split out so the allowlist is unit-testable off-device. */
+    internal fun foreignFactoryThreat(factory: String?, ownPackage: String): String? {
+        val genuine = factory.isNullOrEmpty() ||
+            factory == ANDROIDX_COMPONENT_FACTORY ||
+            factory.startsWith("$ownPackage.")
+        return if (genuine) null else "foreign appComponentFactory declared (value withheld)"
+    }
 
     /**
      * A proxy Application that subclasses ours (so the manifest entry still
