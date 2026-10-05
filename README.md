@@ -74,7 +74,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - 导入符号溯源（`import_api`）：经 `.gnu.version_r` 把导入符号精确归属到源库，标注 Bionic 库用途。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
 - APK 内 SO 使用流式扫描与按需提取，分析页可一键释放工作区、索引缓存和已结束的 Blutter 数据。
-- 精简工具列表：默认只暴露核心 + meta 工具，完整能力通过 `meta_info(action=describe)` 发现。
+- 精简工具列表：默认暴露核心 + 网关（`lowlevel` 与 `agent`）+ meta 工具，完整能力通过 `meta_info(action=describe)` 发现。网关类不参与热度晋级——它们是入口而非证据调用，藏起来等于让对应能力不可达。
 
 ## MCP 工具体系
 
@@ -205,7 +205,7 @@ system_control(action=status)
 一个子代理 = 一次**独立上下文**的取证运行：它只拿到自己角色白名单内的工具、只有一个被指派的问题、有自己的迭代上限，返回紧凑证据块而不是整体报告。两侧入口共用同一个 `SubAgentRunner`：
 
 - **手机内置 agent**：AI 深度分析与动态分析的工具表里多出 `spawn_subagent(role, task)`，主模型自己决定何时派人手；子代理的工具结果不再回灌到主上下文，只回传结论，这正是省 token 的地方。
-- **电脑侧 MCP 客户端**：`agent_api` 网关。
+- **电脑侧 MCP 客户端**：`agent_api` 网关。它属于网关类，默认 lean 模式就会出现在 `tools/list` 里（早期版本把它按普通 EXTRA 处理，导致客户端根本看不到子代理入口）。
 
 ```text
 agent_api(action=roles)                  # 角色、每个角色的工具白名单、当前上限与是否已配置
