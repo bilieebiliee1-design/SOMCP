@@ -60,6 +60,85 @@ jobs:
             -o /tmp/manual-issue.json
           echo "issue_number=${{ inputs.issue_number }}" >> "$GITHUB_OUTPUT"
 
+      # 无日志 issue 一律不受理：正文与附件里都找不到任何日志/报错线索时，
+      # 直接发固定评论说明补齐要求并关闭 issue，同时跳过后续 LLM 回复
+      # （与重复 issue 处置一致，避免消耗重复警告配额）。
+      # 仅在新 issue 打开时执行；评论与手动补跑不触发。
+      # 判定为「有日志」的信号（任一命中即受理）：
+      #   1) 正文含 GitHub 附件链接（files/<id>/ 或 assets/<uuid>）；
+      #   2) 正文含代码块 ```；
+      #   3) 正文含典型日志/堆栈标记（logcat、FATAL EXCEPTION、AndroidRuntime、
+      #      Caused by:、backtrace、tombstone、Exception、SIGSEGV/SEGV 等）；
+      #   4) 正文含中文日志/报错线索词（日志、堆栈、报错、崩溃、异常 等）。
+      # 维护者（仓库所有者或 author_association 具备写权限）豁免，与重复 issue
+      # 的豁免口径一致。
+      - name: Reject issue without logs
+        id: nolog
+        uses: actions/github-script@v7
+        if: github.event_name == 'issues'
+        env:
+          # Kill switch：设为 "false" 时不再自动关闭，只发评论提醒补日志。
+          AUTO_CLOSE: ${{ vars.LLM_ISSUE_AUTO_CLOSE }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.ISSUE_NUMBER || context.issue.number);
+            const issue = context.payload.issue || {};
+            const author = (issue.user || {}).login || '';
+            const body = String(issue.body || '');
+            const title = String(issue.title || '');
+            const txt = title + '\n' + body;
+
+            const MAINTAINER_ASSOC = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'COLLABORATOR_ON_BEHALF_OF']);
+            if (!author) { console.log('No author on issue; skip.'); return; }
+            if (author.toLowerCase() === owner.toLowerCase() ||
+                MAINTAINER_ASSOC.has(String(issue.author_association || ''))) {
+              console.log('Author ' + author + ' is a maintainer; skip no-log rejection.');
+              core.setOutput('rejected', 'false');
+              return;
+            }
+
+            const hasAttachment = /github\.com\/user-attachments\/(?:files\/\d+\/|assets\/[A-Za-z0-9._-]+)/i.test(txt);
+            const hasCodeFence = txt.indexOf('```') >= 0;
+            // 注意两条正则都不能用 \b 包住整组：Java 异常类名是内嵌的
+            // （java.lang.IllegalStateException 里的 Exception 前面是字母，
+            // \bException\b 匹配不到），而 "Caused by:" 结尾是冒号（后面未必
+            // 紧跟词字符），\b 同样会失配。实测漏判过一次，故改为分类处理。
+            const hasAsciiMark = /logcat|AndroidRuntime|FATAL\s+EXCEPTION|Caused\s+by:|backtrace|stack\s?trace|libc\s*Fatal|[A-Za-z]Exception\b|\bError\b|\bSIGSEGV\b|\bSIGABRT\b|\bSEGV\b|\bDEBUG\b|\bVERBOSE\b/i.test(txt);
+            const hasCjkMark = /日志|堆栈|报错|错误|崩溃|闪退|异常|复现步骤|抓取|\blog\b|\bcrash\b/i.test(txt);
+
+            if (hasAttachment || hasCodeFence || hasAsciiMark || hasCjkMark) {
+              console.log('Issue #' + issue_number + ' carries log/attachment evidence; keep it open.');
+              core.setOutput('rejected', 'false');
+              return;
+            }
+
+            const autoClose = process.env.AUTO_CLOSE !== 'false';
+            const msg = '## Issue 已因缺少日志被自动关闭（本 issue 不予受理）\n\n' +
+              '本 issue 正文与附件中未检测到任何日志、报错堆栈或崩溃信息，无法定位问题，**一律不予受理**，已自动关闭。\n\n' +
+              '如需反馈问题，请重新提交并包含以下信息：\n' +
+              '1. **应用版本号**（设置页或关于页面可见）；\n' +
+              '2. **设备与系统信息**（机型、Android 版本、是否 ROOT）；\n' +
+              '3. **崩溃/报错日志**：直接把日志文本粘贴在代码块里，或作为附件上传（`.txt` / `.log` 均可）。\n\n' +
+              '抓日志可参考：已ROOT 用 `adb logcat`；**无 ROOT** 请用 [LogFox](https://github.com/F0x1d/LogFox)（后端选 Shizuku，需先通过无线调试启动 [Shizuku](https://github.com/RikkaApps/Shizuku)）在手机上直接抓取。\n\n' +
+              '补充日志后重开 issue 或在原 issue 下补充即可，附上日志的工单会优先处理。';
+            try { await github.rest.issues.createComment({ owner, repo, issue_number, body: msg }); } catch (e) {
+              console.log('createComment failed (ignored): ' + e.message);
+            }
+            if (autoClose) {
+              try {
+                const cur = (await github.rest.issues.get({ owner, repo, issue_number })).data;
+                if (cur.state === 'open' && !cur.pull_request) {
+                  await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
+                  console.log('Closed issue #' + issue_number + ' (no log evidence, author ' + author + ').');
+                }
+              } catch (e) {
+                console.log('Auto close failed (ignored): ' + e.message);
+              }
+            }
+            core.setOutput('rejected', 'true');
+
       # 重复 issue 检查（支持跨作者）：
       #   1) 同作者重复（当前作者自己的历史 issue 与本次内容重复）：计 1 次警告
       #      （打 作者-时间戳 标签以跨运行持久化计数），连续 7 天内累计 5 次警告
@@ -677,10 +756,13 @@ jobs:
 
       - name: Generate LLM reply
         id: llm
-        # 重复 issue 或作者已受限制时跳过 LLM 回复（该 issue 已被关闭）。
-        # issue_comment / workflow_dispatch 时 restrict 步骤未运行，这些输出为空，
+        # 重复 issue / 作者已受限制 / 无日志被拒时跳过 LLM 回复（该 issue 已被关闭）。
+        # issue_comment / workflow_dispatch 时 restrict 与 nolog 步骤未运行，这些输出为空，
         # 条件成立（空 != "true"），LLM 回复仍会正常执行。
-        if: steps.restrict.outputs.restricted != 'true' && steps.restrict.outputs.duplicate != 'true'
+        if: >-
+          steps.restrict.outputs.restricted != 'true' &&
+          steps.restrict.outputs.duplicate != 'true' &&
+          steps.nolog.outputs.rejected != 'true'
         env:
           USER_AGENT: ${{ secrets.USER_AGENT }}
           LLM_MODEL: ${{ secrets.LLM }}
@@ -787,9 +869,11 @@ jobs:
           fi
 
       - name: Post LLM reply comment
-        if: steps.llm.outputs.skip == 'false' &&
-            steps.restrict.outputs.restricted != 'true' &&
-            steps.restrict.outputs.duplicate != 'true'
+        if: >-
+          steps.llm.outputs.skip == 'false' &&
+          steps.restrict.outputs.restricted != 'true' &&
+          steps.restrict.outputs.duplicate != 'true' &&
+          steps.nolog.outputs.rejected != 'true'
         uses: actions/github-script@v7
         with:
           script: |
