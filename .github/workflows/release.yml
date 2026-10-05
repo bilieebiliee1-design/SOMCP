@@ -317,6 +317,38 @@ jobs:
               print('missing entry: %s' % n)
           sys.exit(1 if missing else 0)
           PY
+          cat > "$WORK/filtercheck.py" <<'PY'
+          import sys
+
+          filter_path, compiled_path = sys.argv[1], sys.argv[2]
+
+          # "=" entries in the filter are exact full-name matches (dcc puts
+          # them in a set and tests string equality, no regex), so each has to
+          # appear verbatim in the converted set. dcc reports nothing for a
+          # target it cannot find, so this check is what keeps a stale name
+          # from silently shipping the method as bytecode.
+          targets = []
+          with open(filter_path) as fp:
+              for line in fp:
+                  line = line.strip()
+                  if line.startswith('='):
+                      targets.append(line[1:].strip())
+
+          with open(compiled_path) as fp:
+              converted = set(fp.read().splitlines())
+
+          missing = [t for t in targets if t not in converted]
+          for name in missing:
+              print('not converted: %s' % name)
+          if missing:
+              sys.exit(1)
+
+          # Written without a trailing newline by dcc, so report the real
+          # count instead of wc -l.
+          print('%d/%d filter target(s) converted' % (len(targets), len(targets)))
+          for name in targets:
+              print('    %s' % name)
+          PY
 
           cd "$WORK/dcc"
           for apk in "$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*.apk; do
@@ -355,12 +387,13 @@ jobs:
               exit 1
             }
             converted="$src/jni/nc/compiled_methods.txt"
-            grep -q '^Lcom/soreverse/mcp/core/BackupCrypto;' "$converted" || {
-              echo "::error::$base: BackupCrypto methods missing from the converted set ($converted)"
+            # Assert every "=" target in the filter really was converted. A
+            # class-prefix grep is not enough: one surviving method would keep
+            # it green while the other seven silently ship as bytecode.
+            "$WORK/venv/bin/python" "$WORK/filtercheck.py" "$FILTER" "$converted" | sed 's/^/    /' || {
+              echo "::error::$base: a tools/dex2c/filter.txt target is missing from $converted"
               exit 1
             }
-            echo "[dex2c] $base: $(wc -l < "$converted" | tr -d ' ') method(s) converted"
-            sed 's/^/    /' "$converted"
 
             for abi in $abis; do
               "$WORK/venv/bin/python" "$WORK/zipcheck.py" "$out" "lib/$abi/libnc.so" || {

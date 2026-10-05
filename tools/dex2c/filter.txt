@@ -26,19 +26,49 @@
 # A regex is re.search()ed against the concatenation
 # "<class descriptor><method name><method descriptor>", e.g.
 #   Lcom/soreverse/mcp/core/BackupCrypto;encrypt(Ljava/lang/String;Ljava/lang/String;)[B
+# "=" entries are NOT regexes: they land in a set and are tested for string
+# equality against that same concatenation, which is why they need no escaping
+# of the "(" / "[" the regex form would.
 
 # Constructors and static initializers are never valid targets: the
 # System.loadLibrary("nc") call that makes the converted methods resolvable
 # lives in BackupCrypto's <clinit>, so converting it would be self-defeating.
 !<clinit|init>
 
-# Scope: BackupCrypto only (first Dex2C target; see CHANGELOG 1.0.22).
+# Scope: the crypto core of com.soreverse.mcp.core.BackupCrypto (see CHANGELOG
+# 1.0.22). Enumerated per method with "=" instead of one class-wide regex:
+# a class-level pattern silently swallows every method added to the class
+# later, and dcc reports nothing for a rule that matches nothing - the release
+# would claim to be hardened while a new method still ships as bytecode.
 #
-# R8 minifies the release dex, so a class can only be listed here while it still
-# carries its original name after shrinking. proguard-rules.pro already keeps
-# BackupCrypto (and its member names) intact for other reasons, therefore this
-# line matches the shipped dex without going through mapping.txt. Verified
-# against the 1.0.21 release dex: all 10 methods are matched and generate C.
-# Every class added here needs the same guarantee - either an existing -keep
-# rule, or the R8-renamed name read back from build/outputs/mapping/release/.
-Lcom/soreverse/mcp/core/BackupCrypto;
+# Every name below must survive R8 verbatim. proguard-rules.pro keeps
+# BackupCrypto and all of its members (`-keep class ... { *; }`), which also
+# keeps them from being inlined away, so these strings match the shipped dex
+# without going through mapping.txt. A class without that guarantee has to be
+# listed under its R8-renamed name, read back from
+# build/outputs/mapping/release/. Verified against the 1.0.21 arm64-v8a
+# release dex: all 8 hit and generate C.
+#
+# The workflow asserts each "=" line appears in dcc's compiled_methods.txt, so
+# a stale name fails the release instead of quietly dropping the method.
+
+# --- Binary container format (magic + salt + nonce header, then ciphertext) ---
+=Lcom/soreverse/mcp/core/BackupCrypto;encrypt(Ljava/lang/String;Ljava/lang/String;)[B
+=Lcom/soreverse/mcp/core/BackupCrypto;decrypt([BLjava/lang/String;)Ljava/lang/String;
+
+# --- JSON envelope format ({v, alg, salt, nonce, ciphertext}, base64 fields) ---
+=Lcom/soreverse/mcp/core/BackupCrypto;encrypt([BLjava/lang/String;)Lorg/json/JSONObject;
+=Lcom/soreverse/mcp/core/BackupCrypto;decrypt(Lorg/json/JSONObject;Ljava/lang/String;)[B
+
+# --- Argon2id key derivation, both formats (identical params, separate funcs) ---
+=Lcom/soreverse/mcp/core/BackupCrypto;deriveKeyBinary(Ljava/lang/String;[B)[B
+=Lcom/soreverse/mcp/core/BackupCrypto;deriveKey(Ljava/lang/String;[B)[B
+
+# --- Shared AES-256-GCM primitives behind both formats ---
+=Lcom/soreverse/mcp/core/BackupCrypto;aesGcmEncrypt([B[B[B)[B
+=Lcom/soreverse/mcp/core/BackupCrypto;aesGcmDecrypt([B[B[B)[B
+
+# Deliberately NOT converted: isEncrypted([B)Z and isEncryptedBackup(
+# Lorg/json/JSONObject;)Z. Both sniff the container shape (magic bytes, JSON
+# keys) without touching key material, so leaving them as bytecode exposes
+# nothing, and keeping them out avoids a JNI hop on every backup import.
