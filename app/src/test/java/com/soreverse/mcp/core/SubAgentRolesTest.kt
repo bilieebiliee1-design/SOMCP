@@ -19,7 +19,9 @@ package com.soreverse.mcp.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -123,5 +125,39 @@ class SubAgentBudgetTest {
         threads.forEach { it.join() }
         assertEquals("CAS must not oversubscribe", 8, budget.consumedCount())
         assertEquals(0, budget.remaining())
+    }
+
+    @Test
+    fun oneSharedBudgetBoundsTheWholeSessionNotEachLevel() {
+        // A nested run reuses the parent's budget instead of minting a fresh one,
+        // so fan-out multiplies work but never the spend ceiling.
+        val session = SubAgentBudget(2)
+        assertTrue(session.tryConsume())
+        assertTrue("second spawn in the same tree", session.tryConsume())
+        assertFalse("a grandchild must not reset the ceiling", session.tryConsume())
+    }
+}
+
+class SubAgentGateTest {
+    @Test
+    fun rootRunsQueueForAPermit() {
+        assertNotNull("depth 1 is a root-level run", subAgentGateFor(depth = 1, maxConcurrent = 2))
+    }
+
+    @Test
+    fun nestedRunsDoNotQueueBehindTheirOwnParent() {
+        // Taking a second permit here would deadlock the child against the parent
+        // that is already holding the only slot when subAgentMaxConcurrent == 1.
+        assertNull(subAgentGateFor(depth = 2, maxConcurrent = 1))
+        assertNull(subAgentGateFor(depth = 3, maxConcurrent = 6))
+    }
+
+    @Test
+    fun theSameCeilingYieldsTheSamePool() {
+        assertSame(
+            "permits are pooled per ceiling so slots are shared across sessions",
+            subAgentGateFor(depth = 1, maxConcurrent = 3),
+            subAgentGateFor(depth = 1, maxConcurrent = 3)
+        )
     }
 }
