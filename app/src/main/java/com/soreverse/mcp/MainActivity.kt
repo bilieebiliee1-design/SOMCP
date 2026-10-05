@@ -150,8 +150,22 @@ private fun IntegrityGate(content: @Composable () -> Unit) {
                 title = { Text("应用完整性校验失败", fontWeight = FontWeight.SemiBold) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // The headline used to assert a signature mismatch
+                        // unconditionally, but the failure may equally be a
+                        // runtime-instrumentation hit on a correctly signed
+                        // build. Naming the wrong cause sent users looking for
+                        // a repack that does not exist; pick the sentence from
+                        // the evidence instead.
+                        val identityMatched = result.expected.isNotBlank() &&
+                            result.actual.any { it == result.expected }
                         Text(
-                            "检测到当前安装包签名与官方发布签名不一致，或运行环境存在调试、注入、Hook 风险。为保护本地数据、MCP 服务和原生编辑能力，应用将在 $remaining 秒后退出。"
+                            if (identityMatched) {
+                                "安装包签名与官方发布签名一致，但运行环境存在调试、注入或 Hook 风险。" +
+                                    "为保护本地数据、MCP 服务和原生编辑能力，应用将在 $remaining 秒后退出。"
+                            } else {
+                                "检测到当前安装包签名与官方发布签名不一致，或运行环境存在调试、注入、Hook 风险。" +
+                                    "为保护本地数据、MCP 服务和原生编辑能力，应用将在 $remaining 秒后退出。"
+                            }
                         )
                         Text("原因: ${result.reason}", style = MaterialTheme.typography.bodySmall)
                         if (result.expected.isNotBlank()) {
@@ -161,19 +175,12 @@ private fun IntegrityGate(content: @Composable () -> Unit) {
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-                        if (result.actual.isNotEmpty()) {
+                        result.actual.forEach {
                             Text(
-                                "实际: ${result.actual.joinToString {
-                                    it.take(16) + "..." + it.takeLast(16)
-                                }}",
+                                "实际: ${it.take(16)}...${it.takeLast(16)}" +
+                                    if (it == result.expected) "（一致）" else "（不一致）",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace
-                            )
-                        }
-                        if (result.threats.isNotEmpty()) {
-                            Text(
-                                "威胁: ${result.threats.joinToString()}",
-                                style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }
