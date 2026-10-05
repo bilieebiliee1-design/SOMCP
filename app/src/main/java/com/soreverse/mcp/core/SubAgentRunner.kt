@@ -27,7 +27,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
@@ -208,91 +207,116 @@ internal data class SubAgentOutcome(
 }
 
 internal class SubAgentRunner(private val ctx: ToolContext) {
-    fun runSync(role: SubAgentRole, task: String, zh: Boolean, depth: Int, workspaceId: String = "", onTool: (String) -> Unit = {}): SubAgentOutcome =
-        runBlocking(Dispatchers.IO) {
-            run(role, task, zh, depth, workspaceId, onTool)
-        }
+    fun runSync(
+        role: SubAgentRole,
+        task: String,
+        zh: Boolean,
+        depth: Int,
+        workspaceId: String = "",
+        budget: SubAgentBudget? = null,
+        onTool: (String) -> Unit = {}
+    ): SubAgentOutcome = runBlocking(Dispatchers.IO) {
+        run(role, task, zh, depth, workspaceId, budget, onTool)
+    }
 
-    suspend fun run(role: SubAgentRole, task: String, zh: Boolean, depth: Int, workspaceId: String = "", onTool: (String) -> Unit = {}): SubAgentOutcome =
-        withContext(Dispatchers.IO) {
-            val settings = ctx.settings
-            AgentKernel.requireConfigured(settings)
-            val workspace = java.util.concurrent.atomic.AtomicReference(workspaceId)
-            val toolsUsed = java.util.concurrent.CopyOnWriteArrayList<String>()
-            val gate = concurrencyGate(settings.subAgentMaxConcurrent)
-            withTimeout(QUEUE_WAIT_MS) {
-                gate.withPermit {
-                    val catalog = AgentKernel.catalogTools(
-                        ctx,
-                        role.toolNames,
-                        AgentToolHooks(
-                            zh = zh,
-                            workspaceId = { workspace.get().orEmpty() },
-                            onWorkspaceOpened = { workspace.set(it) },
-                            onToolStart = { name ->
-                                toolsUsed.add(name)
-                                onTool(name)
-                            }
-                        )
+    suspend fun run(
+        role: SubAgentRole,
+        task: String,
+        zh: Boolean,
+        depth: Int,
+        workspaceId: String = "",
+        budget: SubAgentBudget? = null,
+        onTool: (String) -> Unit = {}
+    ): SubAgentOutcome = withContext(Dispatchers.IO) {
+        val settings = ctx.settings
+        AgentKernel.requireConfigured(settings)
+        val workspace = java.util.concurrent.atomic.AtomicReference(workspaceId)
+        val toolsUsed = java.util.concurrent.CopyOnWriteArrayList<String>()
+        // One session, one quota. Handing a nested run a fresh SubAgentBudget would
+        // multiply the parent's ceiling by the fan-out, which is the one number the
+        // user actually caps their spend with.
+        val sessionBudget = budget ?: SubAgentBudget(settings.subAgentMaxPerRun)
+        // A nested run already sits inside its parent's permit and must not take a
+        // second one; only root-level runs queue. See [subAgentGateFor].
+        val gate = subAgentGateFor(depth, settings.subAgentMaxConcurrent)
+        // The ceiling bounds the wait for a slot only. It used to wrap the whole
+        // run, so any sub-agent that needed more than five minutes of evidence was
+        // cancelled and then reported as "all slots busy" — a concurrency lie that
+        // hid the real cause from both the model and the log.
+        gate?.let { withTimeout(QUEUE_WAIT_MS) { it.acquire() } }
+        try {
+            val catalog = AgentKernel.catalogTools(
+                ctx,
+                role.toolNames,
+                AgentToolHooks(
+                    zh = zh,
+                    workspaceId = { workspace.get().orEmpty() },
+                    onWorkspaceOpened = { workspace.set(it) },
+                    onToolStart = { name ->
+                        toolsUsed.add(name)
+                        onTool(name)
+                    }
+                )
+            )
+            val childDepth = depth + 1
+            val tools = catalog.tools + if (
+                settings.subAgentEnabled &&
+                SubAgentPolicy.spawnAllowed(childDepth, settings.subAgentMaxDepth)
+            ) {
+                listOf(
+                    subAgentSpawnTool(
+                        ctx = ctx,
+                        zh = zh,
+                        depth = childDepth,
+                        budget = sessionBudget,
+                        workspaceId = { workspace.get().orEmpty() },
+                        onProgress = onTool
                     )
-                    val childDepth = depth + 1
-                    val tools = catalog.tools + if (
-                        settings.subAgentEnabled &&
-                        SubAgentPolicy.spawnAllowed(childDepth, settings.subAgentMaxDepth)
-                    ) {
-                        listOf(
-                            subAgentSpawnTool(
-                                ctx = ctx,
-                                zh = zh,
-                                depth = childDepth,
-                                budget = SubAgentBudget(settings.subAgentMaxPerRun),
-                                workspaceId = { workspace.get().orEmpty() },
-                                onProgress = onTool
-                            )
-                        )
+                )
+            } else {
+                emptyList()
+            }
+            val lastParts = java.util.concurrent.atomic.AtomicReference<List<RikkaPart>>(emptyList())
+            val engine = AgentKernel.engine(settings)
+            val maxSteps = SubAgentPolicy.iterationsFor(role, settings.subAgentMaxIterations)
+            // A sub-agent that hits its step ceiling still owes the parent the
+            // evidence it collected, so the partial text is kept, not discarded.
+            val report = runCatching {
+                engine.run(
+                    systemPrompt = buildSystemPrompt(role, zh, tools.map { it.name }),
+                    userPrompt = buildUserPrompt(role, task, zh, workspace.get()),
+                    tools = tools,
+                    maxSteps = maxSteps,
+                    onParts = { parts -> lastParts.set(parts) }
+                )
+            }.getOrElse { failure ->
+                if (failure is CancellationException) throw failure
+                val partial = lastParts.get()
+                    .filterIsInstance<RikkaPart.Text>()
+                    .joinToString("") { it.text }
+                    .trim()
+                if (partial.isNotEmpty() && failure.message?.contains("Maximum tool steps exceeded") == true) {
+                    partial + if (zh) {
+                        "\n\n（已在 $maxSteps 轮上限处停止，以上为截至此刻取到的证据）"
                     } else {
-                        emptyList()
+                        "\n\n(Stopped at the $maxSteps-step ceiling; the above is the evidence gathered so far)"
                     }
-                    val lastParts = java.util.concurrent.atomic.AtomicReference<List<RikkaPart>>(emptyList())
-                    val engine = AgentKernel.engine(settings)
-                    val maxSteps = SubAgentPolicy.iterationsFor(role, settings.subAgentMaxIterations)
-                    // A sub-agent that hits its step ceiling still owes the parent the
-                    // evidence it collected, so the partial text is kept, not discarded.
-                    val report = runCatching {
-                        engine.run(
-                            systemPrompt = buildSystemPrompt(role, zh, tools.map { it.name }),
-                            userPrompt = buildUserPrompt(role, task, zh, workspace.get()),
-                            tools = tools,
-                            maxSteps = maxSteps,
-                            onParts = { parts -> lastParts.set(parts) }
-                        )
-                    }.getOrElse { failure ->
-                        if (failure is CancellationException) throw failure
-                        val partial = lastParts.get()
-                            .filterIsInstance<RikkaPart.Text>()
-                            .joinToString("") { it.text }
-                            .trim()
-                        if (partial.isNotEmpty() && failure.message?.contains("Maximum tool steps exceeded") == true) {
-                            partial + if (zh) {
-                                "\n\n（已在 $maxSteps 轮上限处停止，以上为截至此刻取到的证据）"
-                            } else {
-                                "\n\n(Stopped at the $maxSteps-step ceiling; the above is the evidence gathered so far)"
-                            }
-                        } else {
-                            throw failure
-                        }
-                    }
-                    SubAgentOutcome(
-                        role = role.id,
-                        report = report,
-                        toolsUsed = toolsUsed.toList(),
-                        stepsUsed = lastParts.get().filterIsInstance<RikkaPart.Tool>().size,
-                        workspaceId = workspace.get().orEmpty(),
-                        unresolvedTools = catalog.unresolved
-                    )
+                } else {
+                    throw failure
                 }
             }
+            SubAgentOutcome(
+                role = role.id,
+                report = report,
+                toolsUsed = toolsUsed.toList(),
+                stepsUsed = lastParts.get().filterIsInstance<RikkaPart.Tool>().size,
+                workspaceId = workspace.get().orEmpty(),
+                unresolvedTools = catalog.unresolved
+            )
+        } finally {
+            gate?.release()
         }
+    }
 
     private fun buildSystemPrompt(role: SubAgentRole, zh: Boolean, toolNames: List<String>): String = if (zh) {
         """你是 SOMCP 的取证子代理，角色：${role.nameZh}。
@@ -343,6 +367,15 @@ Start gathering evidence, then return the evidence block only."""
         const val QUEUE_WAIT_MS = 5L * 60L * 1000L
     }
 }
+
+/**
+ * Which runs queue for a concurrency permit. A nested run already sits inside its
+ * parent's permit and the engine walks one tool call at a time, so taking a second
+ * one could only stall: with `subAgentMaxConcurrent = 1` the child would wait out the
+ * whole queue ceiling before it was allowed to start, i.e. deadlock against its own
+ * parent. Pure logic, unit-tested.
+ */
+internal fun subAgentGateFor(depth: Int, maxConcurrent: Int): Semaphore? = if (depth > 1) null else concurrencyGate(maxConcurrent)
 
 /**
  * The `spawn_subagent` tool handed to a parent agent. Failures come back as
@@ -432,6 +465,7 @@ internal fun subAgentSpawnTool(
                             zh = zh,
                             depth = depth,
                             workspaceId = workspaceId(),
+                            budget = budget,
                             onTool = { name -> onProgress("[$role.id] $name") }
                         )
                     }.fold(
