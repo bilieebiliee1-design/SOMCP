@@ -190,6 +190,14 @@
   - 维护者豁免：仓库所有者或 `author_association` 为 `OWNER` / `MEMBER` / `COLLABORATOR` / `COLLABORATOR_ON_BEHALF_OF` 的 issue 不做无日志拒收，与重复 issue 检测同一口径；其余关闭动作复用既有的 `LLM_ISSUE_AUTO_CLOSE` 开关（置 `false` 则只评论不关闭）。
   - 仅在 `issues: opened` 时执行；`issue_comment` 与手动补跑（`workflow_dispatch`）不触发，因此在评论里补上日志不会被这条规则误杀。
   - 验证：YAML 解析通过、内嵌脚本经 `node --check` 语法校验；判定逻辑抽成纯函数在 Node 上跑 12 条用例全绿（含空正文/纯提问/提新功能判拒，含代码块/两种附件路径/`Caused by:` 纯文本/内嵌 `Exception`/中文崩溃/logcat 判受理，以及 `catalog`、`dialog` 两个防误伤反例）。**GitHub Actions 未实跑**（本机禁本地构建与 CI 查询），随 CI 补验。
+- **修正「无日志 issue 一律不受理」的两处判据与项目名拼写**（`.github/workflows/issues-auto-reply.yml`）。上一版规则上线后被真实工单 #145 证伪：该issue 正文只有「最新版somcp 18点过更新的软件直接闪退」，却既没被拒收、回复里项目名还写成了 `SomCP`。
+  - **中文信号词表把「症状词」当成了「日志证据」，规则等于永不生效。** 旧表含 `崩溃` / `闪退` / `报错` / `错误` / `异常`——这些是提交者描述问题时的自然用词，#145 仅凭标题里的「闪退」二字就被判成「有日志」而放行。现只保留指向**一段可读诊断材料本身**的载体词：`日志` / `logcat` / `堆栈` / `复现步骤` / `抓取`。
+  - **ASCII 表里的 `\bError\b` 同理移除。** `error` 是反馈里最高频的用词（Error! / error when / error occurred），留在表里等同于放行一切；`Exception` 家族、`FATAL EXCEPTION`、`Caused by:`、`backtrace`、信号名才是崩溃报告的必有成分。`\btrace\b` 同样**刻意不加**：`stacktrace` / `Traceback` 已被 `stack\s?trace` 与 `backtrace` 覆盖，而 "trace the call" 这类描述性用法会让规则失效，与症状词是同一类误伤。
+  - **「症状 ≠ 证据」是本轮的核心判据。** 症状词回答的是「出了什么问题」，日志实体词回答的才是「问题现场是什么」；只把后者当受理依据。SYSTEM_PROMPT 同步补第 10 条：提交者只描述症状时**不要基于猜测分析代码**，直接说明缺日志并给出免ROOT 抓取方式（LogFox + Shizuku）。
+  - **项目名统一为全大写 `SOMCP`，双保险。** SYSTEM_PROMPT 加硬约束（不得写成 SomCP / somcp / SoMCP / Somcp，即便提交者正文如此也必须写 `SOMCP`）；prompt 约束不可靠——模型会顺从用户输入的大小写，故在 `Generate LLM reply` 出口再做一次机械归一化：`re.sub(r"(?<![.\w])[sS][oO][mM][cC][pP](?![.\w])", "SOMCP", s)`，全大小写变体统一收敛。负向前后顾跳过标识符内部，前后紧邻 `.` 或字母数字时不动，因此 `com.soreverse.mcp`、`xxx.somcp.yyy` 等包名/标识符不被破坏；已正确的 `SOMCP` 幂等不受影响。
+  - **信号名从枚举改为形态覆盖（用真实崩溃报告 #138 校准）。** #138 是 AppErrorsTracking 导出的 16821 字 native 报告（105 帧 backtrace），作为「有日志」正样本，与 #145 的「无日志」负样本双向实测。旧表只列 `SIGSEGV` / `SIGABRT` / `SEGV` 三项，而 #138 这类恰是 native 崩溃——换成 `SIGBUS` / `SIGILL` / `SIGFPE` / `SIGTRAP` 的同类报告会整条漏判。现用 `\bSIG[A-Z]{2,}\b` 覆盖全部信号名；形态约束（SIG + 至少两个全大写字母 + 词边界）在描述性文本里几乎不出现，实测 `MCDONALDS`、`PLEASE READ THE FAQ FIRST` 这类全大写词不命中。同批补 tombstone 的 `Abort message` 与崩溃报告头的 `Build fingerprint`。
+  - **新增自动崩溃采集报告的结构化头识别**（`[Error Type]` / `[Crash Time]` / `[Stack Trace]` / `[Android Version]` / `[Version Code]`，正则容忍内部空白）。这类报告（AppErrorsTracking / Crashlytics 风格）本身即完整现场，不该依赖「正文恰好出现了 backtrace」这种偶然命中。改前 #138 只靠 `backtrace` / `Stack Trace` / `SIGABRT` 三处标记偶然命中，改后有两条独立判据同时成立。
+  - 验证：YAML 解析、该步骤 `bash -n`、内嵌脚本 `node --check` 均通过；判定逻辑抽出后跑 **31 条 Node 用例全绿**——#138（AppErrorsTracking native 报告，正样本）与 #145（症状描述，负样本）两个真实 issue 全文双向实测，19 条上一轮回归，以及 `SIGBUS`/`SIGILL`/`SIGFPE`/`SIGTRAP`、`Abort message`、`Build fingerprint`、采集器头部两类正例与 `MCDONALDS` / `PLEASE READ THE FAQ` 两个全大写词防误伤反例。**GitHub Actions 未实跑**（本机禁本地构建与 CI 查询），随 CI 补验。
 
 ## 1.0.21
 
