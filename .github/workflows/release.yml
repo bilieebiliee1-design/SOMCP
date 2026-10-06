@@ -469,6 +469,10 @@ jobs:
 
           git clone --quiet https://github.com/xopJack/XopProtector.git "$WORK/shell"
           git -C "$WORK/shell" checkout --quiet "$VMP_COMMIT"
+          # Upstream commits gradlew with mode 100644 (no exec bit, the whole
+          # tree has zero 100755 entries), so ./gradlew would die with
+          # "Permission denied" / exit 126 right after checkout.
+          chmod +x "$WORK/shell/gradlew"
           python3 "$DEBRAND" "$WORK/shell"
 
           # :packer:jar is the build-time engine (plain JVM); exportShellFiles
