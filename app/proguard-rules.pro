@@ -100,3 +100,11 @@
 
 -dontwarn java.lang.management.**
 -dontwarn org.slf4j.**
+
+# The AGPL-3.0 license text must reach the shipped classes.dex. R8 removes
+# unreferenced constants, and Provenance.LICENSE_TEXT has no runtime caller that
+# reads it, so keep the object wholesale - name and all members - rather than
+# betting on one field surviving.
+-keep class com.soreverse.mcp.core.Provenance {
+    *;
+}

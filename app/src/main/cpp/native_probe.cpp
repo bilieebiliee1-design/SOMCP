@@ -937,6 +937,10 @@ static bool crc32_matches_inflated(const uint8_t* compressed, size_t compressed_
 #include "key_generated.h"
 #include "reporting_key.h"  // pulls in sha256_impl.h (shared SHA-256 primitives)
 
+// Compiles the AGPL-3.0 license text into this library. Exactly one
+// translation unit per shared library may include it; see license_notice.h.
+#include "license_notice.h"
+
 /**
  * Decodes a rotating multi-byte XOR-encoded hex string into a plain hex string.
  * Each byte is XOR'd with kXorKey[i % kXorKeyLen] (from key_generated.h).
