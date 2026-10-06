@@ -82,7 +82,6 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 @Composable
 internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
@@ -100,12 +99,6 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
     var decryptPassword by remember { mutableStateOf("") }
     var decryptError by remember { mutableStateOf<String?>(null) }
     var pendingEncryptedBytes by remember { mutableStateOf<ByteArray?>(null) }
-
-    // ----- import password dialog state (REMOTE) -----
-    var showImportPasswordDialog by remember { mutableStateOf(false) }
-    var importPassword by remember { mutableStateOf("") }
-    var importPasswordError by remember { mutableStateOf<String?>(null) }
-    var pendingImportContent by remember { mutableStateOf<String?>(null) }
 
     // ----- recent backup history -----
     var history by remember { mutableStateOf(settings.backupHistory()) }
@@ -163,33 +156,19 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                         input.readBytes()
                     } ?: error("Cannot read input file")
                 }
-                // Try binary format first (HEAD)
+                // Two container formats ever existed: the binary blob written by
+                // BackupCrypto.isEncrypted, and raw JSON. The old JSON-envelope
+                // variant was dropped along with its exporter, so anything that
+                // is not encrypted is now imported directly as plaintext JSON.
                 if (BackupCrypto.isEncrypted(bytes)) {
                     pendingEncryptedBytes = bytes
                     decryptPassword = ""
                     decryptError = null
                     decryptDialogVisible = true
                 } else {
-                    // Try JSON format (REMOTE)
-                    val content = bytes.decodeToString()
-                    val json = withContext(Dispatchers.Default) {
-                        try {
-                            JSONObject(content)
-                        } catch (_: Exception) {
-                            null
-                        }
-                    }
-                    if (json != null && BackupCrypto.isEncryptedBackup(json)) {
-                        pendingImportContent = content
-                        importPassword = ""
-                        importPasswordError = null
-                        showImportPasswordDialog = true
-                    } else {
-                        // Plain JSON — import directly
-                        applyImport(content, t, settings, includeSecrets) { ok, msg ->
-                            resultOk = ok
-                            resultMessage = msg
-                        }
+                    applyImport(bytes.decodeToString(), t, settings) { ok, msg ->
+                        resultOk = ok
+                        resultMessage = msg
                     }
                 }
             }.onFailure { error ->
@@ -199,7 +178,7 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
         }
     }
 
-    // Decrypt dialog (HEAD — binary format)
+    // Decrypt dialog (binary container format)
     if (decryptDialogVisible) {
         AlertDialog(
             onDismissRequest = {
@@ -252,20 +231,21 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                         scope.launch {
                             val bytes = pendingEncryptedBytes ?: return@launch
                             runCatching {
-                                val json = withContext(Dispatchers.IO) {
+                                withContext(Dispatchers.Default) {
                                     BackupCrypto.decrypt(bytes, decryptPassword)
                                 }
-                                check(
-                                    settings.fromJsonString(
-                                        json,
-                                        allowSecrets = includeSecrets
-                                    ).optBoolean("ok", false)
-                                )
+                            }.onSuccess { json ->
                                 decryptDialogVisible = false
                                 pendingEncryptedBytes = null
                                 decryptPassword = ""
-                                resultOk = true
-                                resultMessage = t.backupImportSuccess
+                                // Report through the same path as a plaintext
+                                // import: a decrypted blob that turns out not to
+                                // be a valid snapshot must surface as an import
+                                // error, not as a decrypt success.
+                                applyImport(json, t, settings) { ok, msg ->
+                                    resultOk = ok
+                                    resultMessage = msg
+                                }
                             }.onFailure { error ->
                                 decryptError = error.message?.let {
                                     if (it.contains("password") ||
@@ -290,89 +270,6 @@ internal fun SettingsBackupRestorePage(t: UiText, settings: SettingsStore) {
                     decryptPassword = ""
                     decryptError = null
                 }) { Text(if (t.zh) "取消" else "Cancel") }
-            }
-        )
-    }
-
-    // --- import password dialog (REMOTE) ---
-    if (showImportPasswordDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                showImportPasswordDialog = false
-                pendingImportContent = null
-            },
-            title = { Text(t.backupDecryptPrompt) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        t.backupEncryptWarning,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    OutlinedTextField(
-                        value = importPassword,
-                        onValueChange = {
-                            importPassword = it
-                            importPasswordError = null
-                        },
-                        label = { Text(t.backupPasswordLabel) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    importPasswordError?.let {
-                        Text(
-                            it,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (importPassword.isBlank()) {
-                        importPasswordError = t.backupPasswordLabel
-                    } else {
-                        val content = pendingImportContent ?: return@TextButton
-                        showImportPasswordDialog = false
-                        pendingImportContent = null
-                        scope.launch {
-                            runCatching {
-                                val decrypted = withContext(Dispatchers.Default) {
-                                    BackupCrypto.decrypt(JSONObject(content), importPassword)
-                                }
-                                val decryptedText = decrypted.toString(Charsets.UTF_8)
-                                applyImport(decryptedText, t, settings, includeSecrets) { ok, msg ->
-                                    resultOk = ok
-                                    resultMessage = msg
-                                }
-                            }.onFailure { error ->
-                                val msg = if (error.message?.contains("tag mismatch") == true ||
-                                    error.message?.contains("AEADBadTagException") == true ||
-                                    error.message?.contains("GCM") == true
-                                ) {
-                                    t.backupWrongPassword
-                                } else {
-                                    "${t.backupImportError}: ${error.message.orEmpty()}"
-                                }
-                                resultOk = false
-                                resultMessage = msg
-                            }
-                        }
-                    }
-                }) {
-                    Text(t.confirm)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showImportPasswordDialog = false
-                    pendingImportContent = null
-                }) {
-                    Text(t.cancel)
-                }
             }
         )
     }
@@ -697,11 +594,18 @@ private fun formatBackupSize(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-private fun applyImport(content: String, t: UiText, settings: SettingsStore, includeSecrets: Boolean, onResult: (Boolean, String) -> Unit) {
+/**
+ * Applies a plaintext settings snapshot. Whether individual credentials are
+ * restored is decided inside [SettingsStore.fromJsonString] from the backup's
+ * own redaction markers, so this deliberately takes no include-secrets flag:
+ * binding import to the export toggle meant a backup exported with secrets
+ * could not restore them unless the user flipped the same switch again.
+ */
+private fun applyImport(content: String, t: UiText, settings: SettingsStore, onResult: (Boolean, String) -> Unit) {
     runCatching {
-        check(
-            settings.fromJsonString(content, allowSecrets = includeSecrets).optBoolean("ok", false)
-        )
+        // Parsing first turns "this file is not a JSON backup" into a clean
+        // error message instead of an org.json syntax dump.
+        check(settings.fromJsonString(org.json.JSONObject(content).toString()).optBoolean("ok", false))
     }.onSuccess {
         onResult(true, t.backupImportSuccess)
     }.onFailure { error ->

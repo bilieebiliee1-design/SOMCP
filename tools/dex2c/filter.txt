@@ -47,7 +47,9 @@
 # without going through mapping.txt. A class without that guarantee has to be
 # listed under its R8-renamed name, read back from
 # build/outputs/mapping/release/. Verified against the 1.0.21 arm64-v8a
-# release dex: all 8 hit and generate C.
+# release dex: all 8 hit and generate C. The JSON-envelope backup format was
+# later withdrawn, taking encrypt(JSONObject) / decrypt(JSONObject) /
+# deriveKey with it, which leaves 5.
 #
 # The workflow asserts each "=" line appears in dcc's compiled_methods.txt, so
 # a stale name fails the release instead of quietly dropping the method.
@@ -56,19 +58,19 @@
 =Lcom/soreverse/mcp/core/BackupCrypto;encrypt(Ljava/lang/String;Ljava/lang/String;)[B
 =Lcom/soreverse/mcp/core/BackupCrypto;decrypt([BLjava/lang/String;)Ljava/lang/String;
 
-# --- JSON envelope format ({v, alg, salt, nonce, ciphertext}, base64 fields) ---
-=Lcom/soreverse/mcp/core/BackupCrypto;encrypt([BLjava/lang/String;)Lorg/json/JSONObject;
-=Lcom/soreverse/mcp/core/BackupCrypto;decrypt(Lorg/json/JSONObject;Ljava/lang/String;)[B
 
-# --- Argon2id key derivation, both formats (identical params, separate funcs) ---
-=Lcom/soreverse/mcp/core/BackupCrypto;deriveKeyBinary(Ljava/lang/String;[B)[B
+# --- Argon2id key derivation (was deriveKeyBinary while the JSON envelope
+# --- format needed a second, identical copy; now that it is gone the one
+# --- function is simply deriveKey) ---
 =Lcom/soreverse/mcp/core/BackupCrypto;deriveKey(Ljava/lang/String;[B)[B
 
-# --- Shared AES-256-GCM primitives behind both formats ---
+# --- Shared AES-256-GCM primitives ---
 =Lcom/soreverse/mcp/core/BackupCrypto;aesGcmEncrypt([B[B[B)[B
 =Lcom/soreverse/mcp/core/BackupCrypto;aesGcmDecrypt([B[B[B)[B
 
-# Deliberately NOT converted: isEncrypted([B)Z and isEncryptedBackup(
-# Lorg/json/JSONObject;)Z. Both sniff the container shape (magic bytes, JSON
-# keys) without touching key material, so leaving them as bytecode exposes
-# nothing, and keeping them out avoids a JNI hop on every backup import.
+# Deliberately NOT converted: isEncrypted([B)Z. It only sniffs the container
+# shape (the magic bytes) without touching key material, so leaving it as
+# bytecode exposes nothing, and keeping it out avoids a JNI hop on every
+# backup import. Its JSON-envelope sibling isEncryptedBackup went away with
+# that format, along with encrypt(JSONObject) / decrypt(JSONObject) and the
+# duplicate key-derivation function those two used to call.

@@ -65,9 +65,6 @@
     <string name="backup_password_prompt">Enter encryption password</string>
     <string name="backup_password_confirm">Confirm password</string>
     <string name="backup_password_mismatch">Passwords do not match</string>
-    <string name="backup_password_label">Encryption password</string>
-    <string name="backup_decrypt_prompt">Enter password to decrypt backup</string>
-    <string name="backup_wrong_password">Wrong password or corrupted data</string>
     <string name="backup_decrypting">Decrypting…</string>
     <string name="backup_include_secrets_subtitle">Export unmasked secret keys when enabled</string>
     <string name="backup_encrypt_toggle_subtitle">Protect backup files with strong encryption</string>
