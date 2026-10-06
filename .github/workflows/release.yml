@@ -425,6 +425,181 @@ jobs:
           done
           echo "Dex2C hardening applied to every release APK."
 
+      - name: Harden release APKs with VMP (shell)
+        timeout-minutes: 120
+        env:
+          STORE_FILE: ${{ github.workspace }}/release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Virtual-machine protection on top of Dex2C. The selected methods'
+          # bytecode is translated into a private instruction set (PVM2, image
+          # format v4) that only the embedded interpreter can execute, so the
+          # logic is no longer recoverable from any DEX in the package.
+          #
+          # ORDER IS load-bearing: this must run AFTER the dcc step. dcc reads
+          # classes.dex through androguard, while this step moves every business
+          # dex into an encrypted assets/protector/dexes.zip and deletes
+          # classes*.dex from the APK — running VMP first would leave dcc with
+          # no dex to convert and silently harden nothing.
+          #
+          # The engine (XopProtector, Apache-2.0) is built from a pinned commit
+          # and its shell is de-branded by tools/vmp/debrand_shell.py before the
+          # build: upstream publishes the shell's entry-point class names, so a
+          # stock build would ship a manifest naming the protector and its
+          # version to anyone who unzips the APK. The patch renames the package,
+          # the entry classes and the native library consistently across the
+          # Java sources, the JNI paths hardcoded in C++, and the proguard
+          # keep rules, and asserts each linkage instead of trusting sed.
+          VMP_COMMIT="e408b87871ea18e197b189e787c73cc5ae3e2ee6"  # main @ 2026-09-19
+          WORK="$RUNNER_TEMP/vmp"
+          DEBRAND="$GITHUB_WORKSPACE/tools/vmp/debrand_shell.py"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+
+          test -f "$DEBRAND" || {
+            echo "::error::$DEBRAND is missing"
+            exit 1
+          }
+          # The shell's own build: AGP 8.2.2 pins compileSdk 34 and CMake
+          # 3.22.1, neither of which the release job installs for the app
+          # itself (android-36 / the app's own NDK).
+          sdkmanager "platforms;android-34" "cmake;3.22.1"
+
+          git clone --quiet https://github.com/xopJack/XopProtector.git "$WORK/shell"
+          git -C "$WORK/shell" checkout --quiet "$VMP_COMMIT"
+          python3 "$DEBRAND" "$WORK/shell"
+
+          # :packer:jar is the build-time engine (plain JVM); exportShellFiles
+          # cross-compiles the on-device librtcore.so for all four ABIs and
+          # stages the shell dex next to it. -PskipDemo avoids configuring the
+          # upstream sample app, which needs SDK AARs we do not ship.
+          ( cd "$WORK/shell" && ./gradlew --no-daemon -q :packer:jar exportShellFiles )
+
+          PACKER_JAR=$(ls "$WORK/shell"/packer/build/libs/protector-packer-*.jar | head -1)
+          SHELL_DIR="$WORK/shell/executable/shell-files"
+          test -f "$PACKER_JAR" || { echo "::error::packer jar was not built"; exit 1; }
+          test -f "$SHELL_DIR/dex/classes.dex" || {
+            echo "::error::$SHELL_DIR/dex/classes.dex missing; shell not exported"
+            exit 1
+          }
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -f "$SHELL_DIR/libs/$abi/librtcore.so" || {
+              echo "::error::$SHELL_DIR/libs/$abi/librtcore.so missing; shell ABI $abi not built"
+              exit 1
+            }
+          done
+
+          cat > "$WORK/abilist.py" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              abis = {n.split('/')[1] for n in z.namelist()
+                      if n.startswith('lib/') and n.count('/') >= 2}
+          print(' '.join(sorted(abis)))
+          PY
+          cat > "$WORK/apkcheck.py" <<'PY'
+          import sys, zipfile
+          apk, abi = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(apk) as z:
+              names = set(z.namelist())
+              manifest = z.read("AndroidManifest.xml")
+          # The containers plus the renamed native lib prove the shell was
+          # embedded. config.json/code.bin/dexes.zip are what the on-device
+          # bootstrap refuses to start without, so all three being present is
+          # the difference between a protected APK and a broken one.
+          required = [
+              "assets/protector/config.json",
+              "assets/protector/code.bin",
+              "assets/protector/dexes.zip",
+              "lib/%s/librtcore.so" % abi,
+          ]
+          missing = [n for n in required if n not in names]
+          for n in missing:
+              print("missing entry: %s" % n)
+          # The binary manifest keeps its string pool as UTF-16LE, so the
+          # entry-point names appear NUL-interleaved. Compare on the decoded
+          # form (strip the NULs) rather than hand-writing interleaved literals,
+          # which cannot be decoded back for the error message.
+          pool = manifest[-16384:].replace(b"\x00", b"")
+          for needle, want in ((b"BootstrapEntry", True),
+                               (b"BootstrapComponentFactory", True),
+                               (b"ProxyApplication", False),
+                               (b"ProxyComponentFactory", False)):
+              found = needle in pool
+              if found != want:
+                  print("manifest entry-point check failed: %s present=%s expected=%s"
+                        % (needle.decode("ascii"), found, want))
+                  missing.append("manifest-entry-point")
+          sys.exit(1 if missing else 0)
+          PY
+
+          for apk in "$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*.apk; do
+            base="$(basename "$apk")"
+            out="$WORK/vmp/$base"
+            mkdir -p "$WORK/vmp"
+
+            # --hollow-prefix (not --profile aggressive) is what actually hollows
+            # the app package: the balanced profile is encrypt-first and hollows
+            # nothing on its own, while an explicit prefix allowlist is honoured
+            # on every profile except max. It still skips Android components
+            # (Activity/Service/Provider/...), which is required — upstream notes
+            # hollowing a component body to a stub raises VerifyError on
+            # Android 14+.
+            #
+            # --no-protect-so: RC4-encrypting .text would fight this app's own
+            # integrity checks (native_probe.cpp verifies its shipped payload)
+            # and force dlopen interception for four ABIs' worth of Rizin/LIEF
+            # libraries, for a layer this release does not claim.
+            #
+            # --no-encrypt-assets: the app reads its own assets through the
+            # standard AssetManager; the shell's transparent AssetManager hook
+            # only covers assets fetched via its own ProtectorAssets wrapper.
+            java -jar "$PACKER_JAR" "$apk" -o "$out" \
+              --shell-dir "$SHELL_DIR" \
+              --profile balanced \
+              --hollow-prefix 'Lcom/soreverse/mcp/' \
+              --true-vmp-prefix 'Lcom/soreverse/mcp/core/BackupCrypto;' \
+              --true-vmp-prefix 'Lcom/soreverse/mcp/core/IntegrityGuard;' \
+              --true-vmp-prefix 'Lcom/soreverse/mcp/core/AppListGuard;' \
+              --no-protect-so \
+              --no-encrypt-assets \
+              --no-res-protect \
+              --keystore "$STORE_FILE" \
+              --alias "$KEY_ALIAS" \
+              --storepass "$STORE_PASSWORD" \
+              --keypass "$KEY_PASSWORD"
+
+            test -f "$out" || {
+              echo "::error::VMP produced no output APK for $base"
+              exit 1
+            }
+
+            # The engine must have actually virtualized something, otherwise
+            # the APK is only encrypted and the release note would overstate it.
+            # The packer prints an admission line; grep it rather than trusting
+            # a silent zero-method run.
+            # Derive the ABI list from the APK itself rather than assuming
+            # arm64: the release publishes four single-ABI splits plus a
+            # universal APK, and each split only carries its own lib/<abi>/.
+            # Checking a fixed ABI would fail every non-arm64 split.
+            abis="$(python3 "$WORK/abilist.py" "$out")"
+            test -n "$abis" || {
+              echo "::error::$base has no lib/<abi>/ entries after VMP; shell was not embedded"
+              exit 1
+            }
+            for abi in $abis; do
+              python3 "$WORK/apkcheck.py" "$out" "$abi" || {
+                echo "::error::$base failed the VMP shell check for ABI $abi"
+                exit 1
+              }
+            done
+
+            mv -f "$out" "$apk"
+            echo "[vmp] $base virtualized, signed with the release key"
+          done
+          echo "VMP hardening applied to every release APK."
+
       - name: Verify and ensure v2/v3 APK signing
         env:
           STORE_FILE: release/so-reverse-mcp-release.jks
