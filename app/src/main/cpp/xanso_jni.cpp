@@ -6,6 +6,10 @@
 #include <cstring>
 #include "fix/section_fix.h"
 
+// Compiles the AGPL-3.0 license text into this library. Exactly one
+// translation unit per shared library may include it; see license_notice.h.
+#include "license_notice.h"
+
 struct XElf64Ehdr {
     unsigned char ident[16];
     uint16_t type;
