@@ -7,6 +7,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+// Compiles the AGPL-3.0 license text into this library. Exactly one
+// translation unit per shared library may include it; see license_notice.h.
+#include "license_notice.h"
+
 namespace {
 using RunFn = int (*)(int, int, int, const char*, volatile int*);
 std::mutex cancel_mutex;
