@@ -100,6 +100,11 @@ elseif(REQUIRE_NATIVE_BACKENDS)
 endif()
 
 add_library(rz_native SHARED ${RZ_SOURCES})
+
+# Keeps the AGPL-3.0 license text embedded by license_notice.h from being
+# garbage-collected: -u makes the symbol a GC root, which is the documented way
+# to retain a section under the Release link's --gc-sections.
+target_link_options(rz_native PRIVATE "-Wl,-u,somcp_agpl_license_notice")
 target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
 # Generate key_generated.h from the TM GitHub Actions secret.
@@ -171,6 +176,11 @@ target_include_directories(rz_native PRIVATE
 target_sources(rz_native PRIVATE native_probe.cpp)
 
 add_library(blutter_bridge SHARED blutter_bridge.cpp)
+
+# Keeps the AGPL-3.0 license text embedded by license_notice.h from being
+# garbage-collected: -u makes the symbol a GC root, which is the documented way
+# to retain a section under the Release link's --gc-sections.
+target_link_options(blutter_bridge PRIVATE "-Wl,-u,somcp_agpl_license_notice")
 target_link_libraries(blutter_bridge PRIVATE dl log)
 
 set(XANSO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/xAnSo-src")
@@ -209,6 +219,11 @@ target_include_directories(xanso_native PRIVATE
     "${XANSO_ROOT}/util"
 )
 target_compile_options(xanso_native PRIVATE "-iquote${XANSO_ROOT}")
+
+# Keeps the AGPL-3.0 license text embedded by license_notice.h from being
+# garbage-collected: -u makes the symbol a GC root, which is the documented way
+# to retain a section under the Release link's --gc-sections.
+target_link_options(xanso_native PRIVATE "-Wl,-u,somcp_agpl_license_notice")
 target_link_libraries(xanso_native PRIVATE log)
 
 # --- LIEF include dirs and link ---
