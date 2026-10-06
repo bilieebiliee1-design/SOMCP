@@ -78,4 +78,33 @@ class IntegrityGuardThreatTest {
             threat!!.contains("pandora")
         )
     }
+
+    /**
+     * The release pipeline's VMP step embeds a shell that rewrites
+     * appComponentFactory to its own bootstrap class. It is admitted by the
+     * existing own-package-prefix rule, not by a bespoke exemption, because
+     * tools/vmp/debrand_shell.py deliberately places the shell under this
+     * app's own applicationId. This pins both halves of that contract: the
+     * shell's real name passes, and the upstream project's original names —
+     * which the same script renames away — would still be rejected. If someone
+     * repoints the shell at a foreign package, or an attacker ships the
+     * upstream name, this fails instead of the app silently dying at startup.
+     */
+    @Test
+    fun vmpShellFactoryIsAdmittedByOwnPackagePrefix() {
+        assertNull(
+            IntegrityGuard.foreignFactoryThreat(
+                "com.soreverse.mcp.rt.shell.BootstrapComponentFactory",
+                own
+            )
+        )
+        // The pre-rename upstream identity is not under our package and must
+        // not be waved through by this pipeline's existence.
+        assertNotNull(
+            IntegrityGuard.foreignFactoryThreat(
+                "com.yqsh.protector.shell.ProxyComponentFactory",
+                own
+            )
+        )
+    }
 }
