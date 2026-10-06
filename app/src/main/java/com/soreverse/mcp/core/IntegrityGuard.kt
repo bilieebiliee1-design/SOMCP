@@ -456,6 +456,15 @@ object IntegrityGuard {
      * this app, not just repacks. Matching stays exact (full class name, or
      * the app's own package prefix); no substring heuristics, since the value
      * is attacker-chosen and a loose match would be trivially satisfied.
+     *
+     * The release pipeline's VMP step also rewrites appComponentFactory, to the
+     * de-branded bootstrap class of the shell it embeds
+     * (com.soreverse.mcp.rt.shell.BootstrapComponentFactory). That is covered
+     * by the existing own-package-prefix rule rather than by a new exemption:
+     * the shell was deliberately given a package under this app's own
+     * applicationId so the allowlist admits it on the same terms as any other
+     * first-party class, and no DPatch/LSPatch-style foreign loader gains an
+     * allowance. See tools/vmp/debrand_shell.py, which pins that name.
      */
     private fun factoryHijackThreat(context: Context): String? = runCatching {
         foreignFactoryThreat(context.applicationInfo?.appComponentFactory, context.packageName)
@@ -476,6 +485,16 @@ object IntegrityGuard {
      * of the declared class, not a repack's subclass installing hooks first.
      * Only applies while [context] is the Application instance itself; an
      * Activity context carries no information about the Application class.
+     *
+     * The release pipeline's VMP step rewrites android:name to the shell's
+     * bootstrap Application, yet this check still holds: the shell does not
+     * stay resident as the Application. In attachBaseContext it reflectively
+     * invokes LoadedApk.makeApplication to build the *real* declared class and
+     * then re-pins LoadedApk.mApplication / ActivityThread.mInitialApplication
+     * / mAllApplications onto that instance, so by the time this runs
+     * context.javaClass.name is again SoReverseApplication. The shell is a
+     * loader in front of the Application, not a replacement for it, so no
+     * relaxation of the exact-class rule is needed or wanted here.
      */
     private fun applicationClassThreat(context: Context): String? {
         if (context !is android.app.Application) return null
