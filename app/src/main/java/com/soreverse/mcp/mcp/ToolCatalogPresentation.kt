@@ -24,10 +24,10 @@ object ToolCatalogPresentation {
         "lowlevel" to
             (
                 if (zh) {
-                    "底层网关：Rizin / LIEF / Unidbg / xAnSo / JNI / 壳 / 混淆 / 反调试 / 导入"
+                    "底层网关：Rizin / LIEF / Unidbg / xAnSo / JNI / 壳 / 混淆 / 字符串解密 / 反调试 / 导入"
                 } else {
                     "Low-level: Rizin / LIEF / Unidbg / xAnSo / " +
-                        "JNI / packer / obfusc / antidebug / import"
+                        "JNI / packer / obfusc / string decrypt / antidebug / import"
                 }
                 ),
         "agent" to
