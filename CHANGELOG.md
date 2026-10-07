@@ -24,6 +24,10 @@
   - **加法位移的并列是真实存在的，故按并列报告而非硬选一个。** 纯字母字面量的多个位移 textual ratio 同为 1.000（实测 6 个并列），正确答案在候选中但排序不决定性，故断言「正确明文在候选内」+「confidence 为 low」+「并列数 > 1」，而不是断言它排第一——后者会把一次抛硬币写成测试。
   - **不覆盖** AES/DES/ChaCha 与运行时派生密钥（密钥无法从密文反推），多字节 XOR/RC4 不做密钥搜索（密钥空间无界）。可靠路线是 `dynamic_api` / `unidbg_api` 直接从内存读明文，已写入 `capabilities.nextStep`。
   - 纯字节运算，不执行目标文件。
+- **CI 修正（第二轮）：`Unit tests` 的 `compileDebugUnitTestKotlin` 编译失败**（`app/src/test/java/com/soreverse/mcp/engine/StringDecryptorTest.kt` +2/−2、`app/src/test/java/com/soreverse/mcp/engine/OllvmDeflattenerTest.kt` +11/−5）。
+  - **`Byte` 没有 `.code` 属性**：两处写成 `key[it % key.size].code`，而 `key` 是 `ByteArray`，索引结果是 `Byte`。`.code` 是 `Char` 的属性，故「自带多字节密钥」的两个用例编译不过。改为 `.toInt()`（与 `StringDecryptor` 内部 `xor` 的取字节方式一致）。
+  - **`flattened` 夹具只有 5 块，低于检测器自带的 6 块下限。** `dispatchers()` 与 `findDispatchers()` 都在 `blocks.size < 6` 时直接返回空集，于是 `rebuild` 走 `not_flattened` 早返回分支，**根本不产出** `dispatcherAddrs` / `dispatchTargets` / `limitations` / `edges`——5 个用例会因取不到字段而失败（不是断言不成立，是字段不存在）。补一块真实块 `0x90`；该下限是既有代码，本次未改动。
+  - 判据：**Kotlin 编译器在首个出错文件即停，同一次编译里未被类型检查的文件不能假定正确**。上一轮修好 `dispatchTargets` 的 `Set<Long>` 误用后，这一轮的报错全部来自另一个测试文件——两者无关联，是编译顺序造成的错觉。
 - **新增 `obfusc_api`：控制流混淆的 CFG 结构化检测**（`engine/ObfuscDetector.kt` 新增、`engine/NativeSoEngine.kt` +2、`engine/EngineRuntimeBackendLief.kt` +3、`mcp/ToolCatalog.kt` +33、`app/src/test/java/com/soreverse/mcp/engine/ObfuscDetectorTest.kt` 新增）。逐函数取 Rizin CFG（`rzCfg` 的 `blocks` + `edges`），识别 dispatcher 块（fan-in ≥ 3 且块体很薄——只做比较跳转的 switch），算扁平化因子（总块数 / dispatcher 数）与 bogus edge 候选比例（非 dispatcher 的 ≤2 指令薄块占比），产出 `flattened` / `suspected` / `clean` 与 `high` / `medium` / `low` 置信度。两个信号必须互相印证才判 `flattened`——有 dispatcher 但扁平化因子低只是普通共享跳转目标，因子高但无 dispatcher 只是大函数。
   - **替代 `analyze_elf` 里高误报的 `hasOllvm`**：该标签按符号名子串（`.cold.`、`__clang_call_terminate`、`bcf.`）与全局熵 > 7.2 判定，但前两者是**标准 clang Release 产物**（正常 NDK 构建普遍存在），熵判据与 CFF 无关，因此它在绝大多数正常 SO 上都会命中。新引擎只用结构证据，不再看符号名。
   - 边界：只分析符号 size 非 0 的函数且受 `limit` 限制（默认 40，按 size 降序取）；编译器生成的共享跳转目标可能形似 dispatcher，故 `suspected` 是刻意设置的上限而非默认结论；指令替换、不透明谓词求解、去混淆重建均未实现，已列入 `capabilities.notCovered`。
