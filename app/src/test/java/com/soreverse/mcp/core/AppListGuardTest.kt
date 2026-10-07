@@ -18,6 +18,7 @@
 package com.soreverse.mcp.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,6 +29,18 @@ class AppListGuardTest {
     fun pinnedPackageMatchesExactlyAndIgnoresCase() {
         assertEquals(1, AppListGuard.matchThreats(listOf(candidate("com.qingfeng.app", "无关名称"))).size)
         assertEquals(1, AppListGuard.matchThreats(listOf(candidate("METK.HUB", "任意"))).size)
+    }
+
+    @Test
+    fun hitIsReportedAsADerivativeBuildNotAsASignatureBypassTool() {
+        // The pinned identities are repacks of *this* project (see
+        // docs/legal/), not third-party tooling that attacks it. The wording
+        // reaches the user verbatim through the gate dialog, so mislabelling
+        // them accuses an unrelated app of shipping an attack tool.
+        val hits = AppListGuard.matchThreats(listOf(candidate("com.qingfeng.app", "清风")))
+        assertEquals(1, hits.size)
+        assertTrue(hits.single().contains("derivative build"))
+        assertFalse(hits.single().contains("signature-bypass"))
     }
 
     @Test
