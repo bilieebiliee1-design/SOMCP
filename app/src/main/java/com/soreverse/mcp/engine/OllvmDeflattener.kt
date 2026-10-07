@@ -153,7 +153,13 @@ internal object OllvmDeflattener {
         // Everything the dispatcher can hand control to. These are the only
         // legal landing spots once the dispatcher hop is removed.
         val dispatchTargets = dispatcherSet
-            .flatMap { b -> listOfNotNull(b.jump.takeIf { b.hasJump }, b.fail.takeIf { b.hasFail }) }
+            .mapNotNull { blockByAddr[it] }
+            .flatMap { b ->
+                listOfNotNull(
+                    b.jump.takeIf { b.hasJump },
+                    b.fail.takeIf { b.hasFail }
+                )
+            }
             .filter { it in blockByAddr && it !in dispatcherSet && it !in trampolines }
             .distinct()
             .sorted()
