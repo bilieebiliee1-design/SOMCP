@@ -23,24 +23,36 @@ import android.content.pm.ApplicationInfo
 import java.nio.charset.StandardCharsets
 
 /**
- * Refuses to run next to the repack tooling this app is targeted by: a hit on a
+ * Refuses to run next to known derivative builds of this app: a hit on a
  * pinned package name or a pinned install label is reported as a threat to
  * [IntegrityGuard], which terminates the process.
+ *
+ * The pinned identities are *derivative builds of SOMCP itself* — 清风
+ * (`com.qingfeng.app`) and 飘零浅醉·Hub (`metk.hub`) redistribute this
+ * project's code and tooling under a different applicationId — not
+ * third-party signature-bypass tooling. The distinction is load-bearing in the
+ * user-facing text: the gate dialog names the offending package, so calling it
+ * a "signature-bypass tool" accuses a third party of shipping an attack tool
+ * when what is actually installed is a repack of this project. Naming it a
+ * derivative build also states the real consequence, which is the AGPL
+ * obligation (see docs/legal/) rather than an attack on this install.
  *
  * Two channels, deliberately not redundant:
  * - [pinnedPackageThreats] is a direct per-package lookup. It is cheap, so it
  *   runs on every [IntegrityGuard] pass (including the 3 s UI poll) and catches
- *   the tools under their published package names before any list scan exists.
- * - The list scan catches a repack that keeps the visible name but changes the
+ *   those builds under their published package names before any list scan
+ *   exists.
+ * - The list scan catches a build that keeps the visible name but changes the
  *   applicationId. Enumerating every installed app and resolving each label is
  *   O(installed apps) binder plus resource reads, so it never runs on the
  *   caller's thread: [threats] hands back the last snapshot and refreshes it in
  *   the background at most once per [REFRESH_INTERVAL_MS].
  *
  * Both channels read through PackageManager, i.e. through the same Binder layer
- * a signature-bypass framework already hooks to fake *this* app's signature, so
- * this is a coexistence gate, not tamper evidence. The filesystem-level checks
- * in NativeProbe stay authoritative for whether the running package is genuine.
+ * a repack or signature-bypass framework already hooks to fake *this* app's
+ * signature, so this is a coexistence gate, not tamper evidence. The
+ * filesystem-level checks in NativeProbe stay authoritative for whether the
+ * running package is genuine.
  */
 object AppListGuard {
     /** An installed app as the matcher sees it. Plain data so matching runs in JVM tests. */
@@ -95,7 +107,7 @@ object AppListGuard {
         val pm = context.packageManager
         return pinnedPackages
             .filter { runCatching { pm.getPackageInfo(it, 0) }.isSuccess }
-            .map { "signature-bypass tool installed: $it" }
+            .map { "derivative build of this app installed: $it" }
     }
 
     /** Full installed-app snapshot, read through two independent PM channels. */
@@ -127,14 +139,14 @@ object AppListGuard {
         val hits = linkedSetOf<String>()
         candidates.forEach { candidate ->
             if (pinnedPackages.any { it.equals(candidate.packageName, ignoreCase = true) }) {
-                hits += "signature-bypass tool installed: ${candidate.packageName}"
+                hits += "derivative build of this app installed: ${candidate.packageName}"
                 return@forEach
             }
             val normalized = normalizeFingerprint(candidate.label)
             if (normalized.isEmpty()) return@forEach
             pinnedLabels.forEach { needle ->
                 if (normalized.contains(needle)) {
-                    hits += "signature-bypass tool matched by name: ${candidate.packageName} (${candidate.label})"
+                    hits += "derivative build matched by name: ${candidate.packageName} (${candidate.label})"
                 }
             }
         }
