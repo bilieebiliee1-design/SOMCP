@@ -552,7 +552,6 @@ object IntegrityGuard {
                 "frida",
                 "gum-js-loop",
                 "gadget",
-                "xposed",
                 "lsposed",
                 "edxp",
                 "zygisk",
