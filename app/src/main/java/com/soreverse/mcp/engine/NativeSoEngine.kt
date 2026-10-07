@@ -163,6 +163,14 @@ class NativeSoEngine(context: Context) {
     fun packerCapabilities(): JSONObject = PackerFingerprint.capabilities()
     fun obfuscScan(workspaceId: String, editSessionId: String = "", limit: Int = 40): JSONObject = runtime.obfuscScan(workspaceId, editSessionId, limit)
     fun obfuscCapabilities(): JSONObject = runtime.obfuscCapabilities()
+    fun obfuscDeflatten(workspaceId: String, editSessionId: String = "", locator: String = "", symbol: String = "", limit: Int = 40): JSONObject =
+        runtime.obfuscDeflatten(workspaceId, editSessionId, locator, symbol, limit)
+    fun obfuscDeflattenCapabilities(): JSONObject = runtime.obfuscDeflattenCapabilities()
+    fun strDecryptScan(workspaceId: String, editSessionId: String = "", limit: Int = 40): JSONObject = runtime.strDecryptScan(workspaceId, editSessionId, limit)
+    fun strDecrypt(workspaceId: String, editSessionId: String = "", locator: String = "", length: Int = 32, keyHex: String = ""): JSONObject =
+        runtime.strDecrypt(workspaceId, editSessionId, locator, length, keyHex)
+    fun strDecryptCapabilities(): JSONObject = runtime.strDecryptCapabilities()
+    fun strDecryptHints(): JSONObject = runtime.strDecryptHints()
     fun antiDebugScan(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.antiDebugScan(workspaceId, editSessionId)
     fun antiDebugCapabilities(): JSONObject = runtime.antiDebugCapabilities()
     fun importTrace(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.importTrace(workspaceId, editSessionId)

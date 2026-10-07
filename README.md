@@ -69,7 +69,8 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - 完全离线 Flutter AOT 分析：内置 Flutter 3.44.2–3.44.7 / Dart 3.12.2 arm64 Blutter Runner；其他版本返回明确的不支持信息。
 - JNI 动态注册静态还原（`jni_api`）：扫描 `JNINativeMethod` 表，把 Java 方法名/签名映射到真实原生地址，并解析回符号。
 - 加固/壳静态指纹识别（`packer_api`）：厂商标记、逐段熵、入口点异常、段名异常、反分析字符串，输出带证据的排序判定。
-- 控制流混淆检测（`obfusc_api`）：基于真实 basic block 图的 dispatcher 识别、扁平化因子、bogus edge 度量，替代高误报的符号名启发式。
+- 控制流混淆检测（`obfusc_api`）：基于真实 basic block 图的 dispatcher 识别、扁平化因子、bogus edge 度量，替代高误报的符号名启发式；`action=deflatten` 进一步重建候选真实边。
+- 加密字符串辅助解密（`strdecrypt_api`）：定位密文块、全量扫描 256 个单字节 XOR/add/sub/rol/ror 密钥并按可打印率排序，支持传入多字节 XOR / RC4 密钥试解。
 - 反调试/反 hook 扫描（`antidebug_api`）：按 import / string / code_pattern 三级证据分类，输出风险等级。
 - 导入符号溯源（`import_api`）：经 `.gnu.version_r` 把导入符号精确归属到源库，标注 Bionic 库用途。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
@@ -139,7 +140,8 @@ dynamic_api(action=capabilities|dispatch|status|analyze)
 dynamic_analyze_ai(evidence=...|function=...|request=...)
 jni_api(action=capabilities|scan|resolve|method_table, query=...)
 packer_api(action=capabilities|scan|fingerprint)
-obfusc_api(action=capabilities|scan|detect, limit=40)
+obfusc_api(action=capabilities|scan|detect|deflatten|deflatten_capabilities, limit=40, locator=...)
+strdecrypt_api(action=capabilities|scan|decrypt|hints, locator=..., length=32, keyHex=...)
 antidebug_api(action=capabilities|scan|detect)
 import_api(action=capabilities|trace|scan)
 agent_api(action=roles|run|capabilities, role=..., task=..., workspaceId=...)
@@ -147,7 +149,13 @@ agent_api(action=roles|run|capabilities, role=..., task=..., workspaceId=...)
 
 `jni_api` 静态还原 JNI 动态注册：扫描只读数据段里的 `JNINativeMethod` 三指针表（name / signature / fnPtr），把「Java 方法名 → 真实原生地址」直接映射出来，并解析 fnPtr 回 `.symtab` / `.dynsym` 符号。Android 上多数 native 方法不导出 `Java_*` 符号，而是在 `JNI_OnLoad` 里用 `RegisterNatives` 动态注册，因此普通符号表看不到这层映射。`packer_api` 做加固/壳静态指纹：厂商标记串（360 / 梆梆 / 爱加密 / 阿里 / 腾讯乐固 / UPX）、逐段 Shannon 熵、`e_entry` 落在 `.text` 之外的壳 stub 特征、非标准/空段名、反分析字符串。两者都是纯字节检查，不执行目标文件，对不可信输入安全；结论带证据与置信度，不会把「混淆构建」直接断言成「商业加固」。
 
-`obfusc_api` 从**真实 basic block 图**判定控制流混淆，而不是靠符号名猜：识别 dispatcher 块（高 fan-in + 薄块体，即只做比较跳转的 switch）、算扁平化因子、量 bogus edge 候选比例，逐函数给 `flattened` / `suspected` / `clean` 与置信度。它是 `analyze_elf` 里 `hasOllvm` 标签的结构化替代——后者匹配的是 `.cold.`、`__clang_call_terminate` 这类**标准 clang 产物**，在正常 NDK Release 上也会命中。`antidebug_api` 按证据强度分级扫描反调试/反 hook：`import`（加载器必须解析的符号，近乎确证）、`string`（`/proc/self/*` 等字面量，弱）、`code_pattern`（x86-64 inline detour 跳板序列）。`import_api` 解析 `.gnu.version_r`（DT_VERNEED）把每个导入符号**精确归属**到源库，并标注 Android Bionic 各库用途；缺版本表时降级为 `DT_NEEDED` 启发式，并在 `evidence` 字段明说「库名不是来源证明」。这三项同样不执行目标文件。
+`obfusc_api` 从**真实 basic block 图**判定控制流混淆，而不是靠符号名猜：识别 dispatcher 块（高 fan-in + 薄块体，即只做比较跳转的 switch）、算扁平化因子、量 bogus edge 候选比例，逐函数给 `flattened` / `suspected` / `clean` 与置信度。它是 `analyze_elf` 里 `hasOllvm` 标签的结构化替代——后者匹配的是 `.cold.`、`__clang_call_terminate` 这类**标准 clang 产物**，在正常 NDK Release 上也会命中。
+
+`action=deflatten` 在此基础上重建去扁平化后的候选控制流：dispatcher 集合与检测器**共用同一判据和阈值**（避免两个 pass 对同一函数给出不同 dispatcher），另外重建被检测器丢弃的前驱表，并区分 trampoline（薄块且所有后继都是 dispatcher）。它输出的是**候选真实边**而非「已还原的 CFG`：Rizin 每个基本块只给 `addr/size/ninstr/jump/fail`，编码真实后继的**状态变量和 case 表并不在输入里**，所以任何单一「还原边」都是猜测。该 action 因此固定返回 `verdict=candidates_only` 与 `confidence=low`，并在 `limitations` 里写明下一步（用 `read_disasm` 读每个源块的状态赋值，或用 `emulate_call` 观测真实路径）——与检测器「宁可承认不知道，也不误判」的标准一致。
+
+`strdecrypt_api` 处理编译期字符串加密（OLLVM `struc`/`encloud-cc`、商业加固壳、手写变体把密文留在 `.rodata`、运行时经桩函数解密）。它只声称做两件事里的一半：**从字节反推变换**。`action=scan` 在已分配非可执行段里定位既非明文文本也非零填充的字节段作为密文候选；`action=decrypt` 把 256 个单字节 XOR / add / sub / rol / ror **全量**扫一遍并按可打印 ASCII 占比排序，多字节 XOR 与 RC4 则只试调用方给的密钥（密钥空间无界，无法枚举）。判定门槛是可打印率 ≥ 0.75 且该比例**始终回传**，因为随机数据撞出可打印输出的概率不低，把未经验证的猜测当作「已还原字符串」比不报更糟。**不覆盖** AES/DES/ChaCha 与运行时派生密钥，`action=hints` 给出手工路线（找调用方 → 读解密循环 → 定位 RC4 的 256 字节 KSA / AES 的多轮循环），以及更可靠的动态路线（`dynamic_api` / `unidbg_api` 直接从内存读明文）。
+
+`antidebug_api` 按证据强度分级扫描反调试/反 hook：`import`（加载器必须解析的符号，近乎确证）、`string`（`/proc/self/*` 等字面量，弱）、`code_pattern`（x86-64 inline detour 跳板序列）。`import_api` 解析 `.gnu.version_r`（DT_VERNEED）把每个导入符号**精确归属**到源库，并标注 Android Bionic 各库用途；缺版本表时降级为 `DT_NEEDED` 启发式，并在 `evidence` 字段明说「库名不是来源证明」。这三项同样不执行目标文件。
 
 ## 动态分析（手动加载到内存 → AI 分析）
 
