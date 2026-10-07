@@ -144,12 +144,21 @@ internal object StringDecryptor {
         return String(slice, Charsets.UTF_8).replace("�", ".")
     }
 
-    /** Render as a printable-escaped form, so control bytes stay visible. */
+    /**
+     * Render as a printable-escaped form, so control bytes stay visible.
+     *
+     * NUL is deliberately **not** given the short `\0` form even though that is
+     * the usual C spelling. This output exists to be read back byte for byte,
+     * and `\0` followed by a digit is ambiguous: NUL + `5` renders as `\05`,
+     * which reads back as the octal escape for 5. NUL is one of the most common
+     * bytes in an encrypted blob, so that is a real case, not a contrived one.
+     * `\x00` is fixed width and cannot be misread; `\t`, `\n` and `\r` are safe
+     * as short forms because `t`, `n` and `r` are not octal digits.
+     */
     fun escaped(data: ByteArray): String = buildString {
         data.forEach { b ->
             val v = b.toInt() and 0xFF
             when {
-                v == 0 -> append("\\0")
                 v == 0x09 -> append("\\t")
                 v == 0x0A -> append("\\n")
                 v == 0x0D -> append("\\r")
