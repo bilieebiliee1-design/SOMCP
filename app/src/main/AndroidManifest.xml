@@ -12,8 +12,8 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- AppListGuard: reads the installed-app set to refuse coexistence with the
-         repack tooling this app is targeted by. Install-time permission, so it
+    <!-- AppListGuard: reads the installed-app set to refuse coexistence with
+         known derivative builds of this app. Install-time permission, so it
          is not user-revocable and needs no runtime request. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
