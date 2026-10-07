@@ -168,20 +168,24 @@ private fun IntegrityGate(content: @Composable () -> Unit) {
                             }
                         )
                         Text("原因: ${result.reason}", style = MaterialTheme.typography.bodySmall)
-                        if (result.expected.isNotBlank()) {
-                            Text(
-                                "期望: ${result.expected.take(16)}...${result.expected.takeLast(16)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                        result.actual.forEach {
-                            Text(
-                                "实际: ${it.take(16)}...${it.takeLast(16)}" +
-                                    if (it == result.expected) "（一致）" else "（不一致）",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace
-                            )
+                        // Fingerprints only diagnose a mismatch; when the
+                        // signature already matches they are noise that reads
+                        // like a second accusation.
+                        if (!identityMatched) {
+                            if (result.expected.isNotBlank()) {
+                                Text(
+                                    "期望: ${result.expected.take(16)}...${result.expected.takeLast(16)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            result.actual.forEach {
+                                Text(
+                                    "实际: ${it.take(16)}...${it.takeLast(16)}（不一致）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
                     }
                 },
