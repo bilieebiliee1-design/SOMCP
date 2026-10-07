@@ -2009,8 +2009,8 @@ object ToolCatalog {
     private val obfuscApi = EngineToolHandler(
         ToolMeta(
             "obfusc_api",
-            "控制流混淆检测网关（CFG 结构化 CFF / bogus edge 度量）",
-            "Control-flow obfuscation detection from the real basic-block graph: dispatcher blocks, flattening factor, and bogus-edge candidates. No symbol-name guessing.",
+            "控制流混淆检测与去扁平化网关（CFG 结构化 CFF / bogus edge 度量 / 候选真实边重建）",
+            "Control-flow obfuscation detection and de-flattening from the real basic-block graph: dispatcher blocks, flattening factor, bogus-edge candidates, and rebuilt candidate edges. No symbol-name guessing.",
             "lowlevel",
             ToolClass.EXTRA,
             heavy = true
@@ -2021,11 +2021,15 @@ object ToolCatalog {
                         "Obfuscation operation",
                         "capabilities",
                         "scan",
-                        "detect"
+                        "detect",
+                        "deflatten",
+                        "deflatten_capabilities"
                     )
                     "workspaceId" str "Workspace ID"
                     "editSessionId" str "Edit session ID"
                     "limit" int "Max functions to analyse, default 40 (largest first)"
+                    "locator" str "Function locator for action=deflatten; analyses only this function instead of scanning"
+                    "symbol" str "Symbol name for action=deflatten, used when locator is absent"
                 }
             )
         }
@@ -2033,7 +2037,62 @@ object ToolCatalog {
         when (a.str("action", "scan")) {
             "capabilities" -> ok(e.obfuscCapabilities())
             "scan", "detect" -> e.obfuscScan(a.str("workspaceId"), a.str("editSessionId"), a.intValue("limit", 40))
+            "deflatten" -> e.obfuscDeflatten(
+                a.str("workspaceId"),
+                a.str("editSessionId"),
+                a.str("locator"),
+                a.str("symbol"),
+                a.intValue("limit", 40)
+            )
+
+            "deflatten_capabilities" -> ok(e.obfuscDeflattenCapabilities())
             else -> err("UNKNOWN_ACTION", "Unknown obfuscation action", "action", a.str("action"))
+        }
+    }
+
+    private val strDecryptApi = EngineToolHandler(
+        ToolMeta(
+            "strdecrypt_api",
+            "加密字符串辅助解密网关（密文定位 / 单字节变换全量扫描 / 密钥试解 / 置信度分级）",
+            "Assisted decryption of encrypted string literals: locate ciphertext blobs, sweep all 256 single-byte XOR/add/sub/rotate keys ranked by textual ratio, and try caller-supplied multi-byte XOR or RC4 keys. Confidence is graded by measured evidence.",
+            "lowlevel",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf(
+                        "String decryption operation",
+                        "capabilities",
+                        "scan",
+                        "decrypt",
+                        "hints"
+                    )
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID"
+                    "locator" str
+                        "For action=decrypt: hex virtual address, a section locator from analyze_elf, or a section name"
+                    "length" int "Ciphertext bytes to sample, default 32 (min 6, max 4096)"
+                    "keyHex" str "Optional multi-byte XOR or RC4 key as hex; enables the transforms that cannot be swept"
+                    "limit" int "Max ciphertext blobs to report, default 40"
+                }
+            )
+        }
+    ) { e, a, _ ->
+        when (a.str("action", "scan")) {
+            "capabilities" -> ok(e.strDecryptCapabilities())
+            "scan", "find" -> e.strDecryptScan(a.str("workspaceId"), a.str("editSessionId"), a.intValue("limit", 40))
+            "decrypt" -> e.strDecrypt(
+                a.str("workspaceId"),
+                a.str("editSessionId"),
+                a.str("locator"),
+                a.intValue("length", 32),
+                a.str("keyHex")
+            )
+
+            "hints" -> ok(e.strDecryptHints())
+
+            else -> err("UNKNOWN_ACTION", "Unknown string decryption action", "action", a.str("action"))
         }
     }
 
@@ -2552,7 +2611,7 @@ object ToolCatalog {
         unidbgSession, unidbgMemory, unidbgDebug, unidbgBatch,
         diffSo,
         rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi, agentApi,
-        jniApi, packerApi, obfuscApi, antiDebugApi, importApi,
+        jniApi, packerApi, obfuscApi, strDecryptApi, antiDebugApi, importApi,
         sessionOpen, sessionHistory, sessionAudit,
         buildSo,
         systemControl,
