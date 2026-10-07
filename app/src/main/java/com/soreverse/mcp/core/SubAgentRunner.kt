@@ -79,7 +79,8 @@ internal object SubAgentRoles {
             "search_bytes",
             "read_hexdump",
             "read_disasm",
-            "rizin_api"
+            "rizin_api",
+            "strdecrypt_api"
         ),
         suggestedIterations = 14
     )
