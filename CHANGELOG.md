@@ -80,6 +80,11 @@
 - manifest：加 `QUERY_ALL_PACKAGES`（install-time 权限，装上即生效、不可被运行时撤销，故无需申请弹窗）并带 `tools:ignore="QueryAllPackagesPermission"`；`<queries>` 里**只**加通用 `MAIN`/`LAUNCHER` intent，不把两个包名写进 `<queries>` 做兜底——那会把检测标准以明文塞进 manifest，与下面的常量混淆互相抵消，而通用 intent 已经保证列表通道在 appops 只放 intent 解析的 ROM 上仍可用。
 - 判据明文不进产物：4 枚常量（两个包名 + 两个名称）以 UTF-8 hex 存储、运行期 `decode()`；沿用 `IntegrityGuard.marked()` 惯例，但 `marked()` 是 byte→char 映射，装不下多字节中文，故本文件另写按 `String(bytes, UTF_8)` 解码的 `decode()`。
 - 定位说明（不夸大防护强度）：两条通道都经 PackageManager，也就是过签框架伪造本应用签名时**已经 hook 的那一层**——能伪造签名的就能裁剪应用列表，所以这是共存门禁（拒绝与工具同机运行），不是篡改证据；安装包真伪仍以 `NativeProbe` 的文件系统级/签名块级检查为权威。
+- **更正同一条门禁的性质：清风 / 飘零浅醉·Hub 是本项目的二改分发版，不是过签工具**（`core/AppListGuard.kt`、`app/src/main/AndroidManifest.xml`、`app/src/test/java/com/soreverse/mcp/core/AppListGuardTest.kt`）。上一条把 `com.qingfeng.app` / `metk.hub` 记作「本应用被针对的重打包工具」，威胁文案也写成 `signature-bypass tool installed: <pkg>`。但 `docs/legal/` 的投诉与 DMCA 模板（同一性证据列的就是本仓库包名、发布签名指纹与运行时溯源输出）说明这两个身份是**基于 SOMCP 二次开发后换了 applicationId 的衍生分发版**，即二改，与过签工具是两类东西。
+  - 分类错误的代价是直接的：门禁弹窗「原因」行逐字回显威胁描述，于是应用会当着用户的面指认一个无关第三方 app 在搞签名攻击，而实际装的是本项目的重打包版本；真实后果是 AGPL 第 4/5 条义务（见 `docs/legal/gpl-infringement-notice.md`），措辞与事实指向两处都错。
+  - 现将三条命中描述改为 `derivative build of this app installed: <pkg>` / `derivative build matched by name: <pkg> (<label>)`，类注释与 manifest 注释同步说明「pinned 身份是本项目的衍生构建」而非第三方攻击工具。**匹配口径、通道结构、终止链路一律不动**——包名全等、名称归一化后包含、pinned 直查 + 列表扫描两条通道、60 s 节流后台刷新，全部原样，本次只改性质描述与文案。
+  - 顺带说明为何仍保留门禁：二改版与正版同机运行会共享同一套 MCP 服务与工具命名，对用户是混淆与 AGPL 违约风险，故继续按共存门禁处置；这与「检测篡改证据」是两件事，边界同上一条。
+  - 验证：新增 `hitIsReportedAsADerivativeBuildNotAsASignatureBypassTool` 钉住措辞（含「不得出现 signature-bypass」的反向断言，防止再被改回去）；两个 Kotlin 改动文件 ktlint CI 口径 1.5.0 零违规。**`compileDebugKotlin` / `testDebugUnitTest` 未执行**（本机禁本地构建），随 CI 补验。
 - 验证：`ktlint` CI 口径 1.5.0 对全仓 `app/src/**/*.kt` 零违规（1.8.0 另报 89 条，分布在 `SettingsUpdatesPage.kt` 等 16 个既有文件，本次三个改动文件均不在其中）；匹配矩阵另用单文件 Java harness 按同语义（`Character.isLetterOrDigit` + `toUpperCase(Locale.ROOT)` + `equalsIgnoreCase` + `contains`）跑 14 组用例全绿——含 4 枚常量解码并归一化后恰为 `com.qingfeng.app` / `metk.hub` / `清风` / `飘零浅醉HUB`、包名不做子串匹配、四种改名变体命中、空白 label 不命中、以及「needle 若解码为空会命中全世界」的守卫用例。**`compileDebugKotlin` / `testDebugUnitTest` / 真机安装实测未执行**（本机 dl.google.com PKIX），随 CI 补验。
 
 - **修复执行槽死结：flutter_blutter 控制面 action 绕过 heavy gate**（`mcp/McpHttpServer.kt`，+14/−1）。flutter_blutter 整个工具标记为 heavy，其 `status/result/cancel/prune/packages` 控制面 action 与执行面（analyze/inspect）共用同一把 `Semaphore(1)`（heavyGate）。当执行槽被长任务占住时，`flutter_blutter{action:cancel}` 自己也抢不到 permit，永远返回 SERVER_BUSY——故障时唯一的自救入口被同一把锁挡死，cancel/prune 捅不动是必然而非网络抖动。现对这五个只读/管理类 action 豁免 heavy gate（`isHeavyGateExempt`，inspect 仍按执行面计），执行槽锁死时 cancel/status/prune 始终可达。改动文件 ktlint 1.8.0 零违规。
@@ -269,6 +274,12 @@
   - 根因在外部依赖而非本仓代码：钉死的 XopProtector commit `e408b878` 里 `gradlew` 的文件模式是 `100644`，**整棵树没有任何一个 `100755` 条目**——上游是在 Windows 上提交的，git 没有记录可执行位。Linux runner 检出后 `./gradlew` 无权执行。
   - 修复：clone + checkout 之后补 `chmod +x "$WORK/shell/gradlew"`，并把这一事实写进步骤注释，避免后续误判为「上游改坏了」。这是唯一一处直接执行克隆树内相对路径的位置，其余克隆（rizin / dcc / cloudflared）都走 `bash <file>.sh` 显式解释器，不受模式位影响。
   - 该缺陷只影响发布相位：`release.yml` 是唯一含此步骤的工作流，PR 相位的 `test-v7.yml` 不涉及，因此合并前无法被 PR 检查发现。
+- **修复 Release 流水线 VMP 步骤必炸：上游 `settings.gradle.kts` 硬编码了一条 Windows 盘符路径**（`.github/workflows/release.yml` +17）。上一条修掉 `gradlew` 执行位之后，本步骤终于能进入 Gradle，随即在配置阶段抛 `URISyntaxException: Illegal character in opaque part at index 2`，其后 v2/v3 签名校验、擦除签名产物、release notes、改名与上传 6 步全 `skipped`。
+  - 根因同样在外部依赖：钉死的 XopProtector commit `e408b878` 的 `settings.gradle.kts` 第 25 行把上游作者自己机器上的 SDK 目录 `file("E:/Android/SDK-Android@5.14-20260706/SDK/libs")` 列为 UniMP 候选路径。在 Linux runner 上这不是路径而是一个畸形 URI——`E:` 被当成 scheme，`file()` 当场抛异常，build 在 32 秒后 `BUILD FAILED`。
+  - 关键点：该候选外面本就包着「目录不存在就跳过 `:unimp-host`」的守卫，即作者本意就是「本机没有就算了」。**失败纯粹来自 `file()` 求值本身，而不是守卫逻辑**，所以删掉这一条候选是恢复作者本意，不是绕过任何检查。
+  - 修复：clone + checkout 之后用一个内嵌 Python 精确删除该行；needle 对上游原文逐字匹配，且**needle 不命中就 `exit 1`**——上游哪天改掉它，这里会立刻停住要求复核，而不是悄悄退化成空操作。
+  - 验证：needle 对 `e408b878` 的 `settings.gradle.kts` 原文精确匹配；用真实上游文件跑该补丁，正向命中并确认 `E:/Android` 已消失、相对路径候选 `../SDK-...` 保留；负向把已打过补丁的文件再跑一次，确认按设计 `exit 1`。
+  - 与上一条同源：都是「钉死的上游 commit 按 Windows 假设组织文件」。两次都只影响发布相位，PR 相位的 `test-v7.yml` 不跑 `release.yml`，合并前无法被 PR 检查发现。
 
 ## 1.0.21
 
