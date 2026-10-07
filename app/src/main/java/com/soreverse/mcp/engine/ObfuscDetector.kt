@@ -97,6 +97,14 @@ internal object ObfuscDetector {
         return payload.optString("function", "fcn") to blocks
     }
 
+    /**
+     * The raw block list, for passes that need the graph itself rather than a
+     * verdict. De-flattening needs block addresses and successors, and
+     * [analyzeFunction] collapses both into metrics. Exposed here instead of
+     * by widening [parseCfg] so CFG parsing stays owned by this object.
+     */
+    fun blocksOf(payload: JSONObject): List<CfgBlock> = parseCfg(payload).second
+
     private fun successors(b: CfgBlock): List<Long> = buildList {
         if (b.hasJump) add(b.jump)
         if (b.hasFail) add(b.fail)
@@ -271,10 +279,14 @@ internal fun EngineRuntime.obfuscCapabilities(): JSONObject = JSONObject()
         JSONArray(
             listOf(
                 "instruction substitution and opaque-predicate solving are not implemented",
-                "deobfuscation / automatic CFG reconstruction is not implemented",
+                "state-variable recovery, so de-flattening yields candidate edges rather than a recovered CFG (see action=deflatten / obfuscDeflattenCapabilities)",
                 "SMT-based opaque predicate evaluation is not implemented"
             )
         )
+    )
+    .put(
+        "deobfuscation",
+        "action=deflatten reconstructs candidate real edges for flattened functions. It reports candidates only: the state variable and case table are absent from Rizin's CFG output."
     )
     .put(
         "replaces",

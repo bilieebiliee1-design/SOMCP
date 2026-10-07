@@ -208,6 +208,10 @@ internal fun EngineRuntime.capabilityRegistry(): JSONObject = JSONObject()
                 obfuscCapabilities()
             )
             .put(
+                "strdecrypt",
+                strDecryptCapabilities()
+            )
+            .put(
                 "antidebug",
                 antiDebugCapabilities()
             )
