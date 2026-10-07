@@ -38,15 +38,21 @@ class OllvmDeflattenerTest {
     private fun block(addr: Long, ninstr: Int, jump: Long, fail: Long): CfgBlock = CfgBlock(addr = addr, size = 4, ninstr = ninstr, jump = jump, fail = fail)
 
     /**
-     * A flattened function: real blocks 0x20/0x40/0x70 all hand control back to
-     * the dispatcher at 0x50, and the dispatcher dispatches onward to them.
+     * A flattened function: real blocks 0x20/0x40/0x70/0x90 all hand control back
+     * to the dispatcher at 0x50, and the dispatcher dispatches onward to them.
+     *
+     * Six blocks, not five: both the detector and the de-flattener bail out
+     * below a six-block floor, so a five-block fixture takes the
+     * `not_flattened` early return and never produces the `dispatcherAddrs` /
+     * `dispatchTargets` / `limitations` fields the tests below are asserting on.
      */
     private val flattened = listOf(
         block(0x10, 2, 0x50, noTarget),
         block(0x20, 4, 0x50, noTarget),
         block(0x40, 4, 0x50, noTarget),
         block(0x70, 4, 0x50, noTarget),
-        block(0x50, 3, 0x20, 0x40)
+        block(0x50, 3, 0x20, 0x40),
+        block(0x90, 4, 0x50, noTarget)
     )
 
     /** An ordinary diamond: no block funnels everything back into one place. */

@@ -137,7 +137,7 @@ class StringDecryptorTest {
         // The caller already knows the key, so this is not a guess.
         val key = text("KEY")
         val plain = "multi byte xor string that is long enough to rank well"
-        val cipher = ByteArray(plain.length) { (plain[it].code xor key[it % key.size].code).toByte() }
+        val cipher = ByteArray(plain.length) { (plain[it].code xor key[it % key.size].toInt()).toByte() }
         val r = StringDecryptor.recover(cipher, key)
         assertEquals("high", r.getString("confidence"))
         val first = topCandidate(r)
@@ -205,7 +205,7 @@ class StringDecryptorTest {
         val guessed = StringDecryptor.recover(xor(text(longPlain), 0x5A))
         val key = text("KEY")
         val supplied = StringDecryptor.recover(
-            ByteArray(longPlain.length) { (longPlain[it].code xor key[it % key.size].code).toByte() },
+            ByteArray(longPlain.length) { (longPlain[it].code xor key[it % key.size].toInt()).toByte() },
             key
         )
         assertEquals("high", supplied.getString("confidence"))
