@@ -473,24 +473,36 @@ jobs:
           # tree has zero 100755 entries), so ./gradlew would die with
           # "Permission denied" / exit 126 right after checkout.
           chmod +x "$WORK/shell/gradlew"
-          # Upstream lists one of its author's own SDK directories as a
-          # UniMP candidate. On a Linux runner that literal is not a path but a
-          # malformed URI: "E:/Android/..." parses as the scheme "E", and the
-          # file() call throws URISyntaxException while settings.gradle.kts is
-          # being evaluated -- before Gradle reaches any task of ours. The
-          # guard around it already treats a missing directory as "skip
-          # :unimp-host", so dropping the candidate is the intended behaviour.
-          python3 - "$WORK/shell/settings.gradle.kts" <<'PATCH'
-          import sys
-          p = sys.argv[1]
-          src = open(p, encoding="utf-8").read()
+          # Upstream lists the author's own SDK directory as a UniMP
+          # candidate twice. On a Linux runner that literal is not a path but
+          # a malformed URI: "E:/Android/..." parses as the scheme "E", and
+          # the file() call throws URISyntaxException while
+          # settings.gradle.kts is being evaluated -- before Gradle reaches
+          # any task of ours. The candidates: a hardcoded entry in
+          # settings.gradle.kts, and a "unimp.sdk.libs" property in
+          # gradle.properties that feeds the property-driven entry next to
+          # it (escaped backslashes, same malformed-URI failure). The guard
+          # around both entries already treats missing libs as "skip
+          # :unimp-host", so dropping the candidates is the intended
+          # behaviour.
+          python3 - "$WORK/shell" <<'PATCH'
+          import os, sys
+          root = sys.argv[1]
+          sp = os.path.join(root, "settings.gradle.kts")
+          src = open(sp, encoding="utf-8").read()
           needle = '    file("E:/Android/SDK-Android@5.14-20260706/SDK/libs"),\n'
           if needle not in src:
               print("upstream no longer carries that Windows-only candidate;"
                     " re-check whether this patch is still needed")
               sys.exit(1)
-          open(p, "w", encoding="utf-8", newline="\n").write(src.replace(needle, ""))
-          print("patched settings.gradle.kts: dropped the Windows-only UniMP candidate")
+          open(sp, "w", encoding="utf-8", newline="\n").write(src.replace(needle, ""))
+          gp = os.path.join(root, "gradle.properties")
+          gsrc = open(gp, encoding="utf-8").read()
+          glines = [l for l in gsrc.splitlines(keepends=True)
+                    if not l.strip().startswith("unimp.sdk.libs=")]
+          open(gp, "w", encoding="utf-8", newline="\n").write("".join(glines))
+          print("patched shell: dropped the Windows-only UniMP candidates"
+                " (settings.gradle.kts + gradle.properties)")
           PATCH
           python3 "$DEBRAND" "$WORK/shell"
 
