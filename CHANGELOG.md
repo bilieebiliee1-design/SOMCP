@@ -285,6 +285,10 @@
   - 修复：clone + checkout 之后用一个内嵌 Python 精确删除该行；needle 对上游原文逐字匹配，且**needle 不命中就 `exit 1`**——上游哪天改掉它，这里会立刻停住要求复核，而不是悄悄退化成空操作。
   - 验证：needle 对 `e408b878` 的 `settings.gradle.kts` 原文精确匹配；用真实上游文件跑该补丁，正向命中并确认 `E:/Android` 已消失、相对路径候选 `../SDK-...` 保留；负向把已打过补丁的文件再跑一次，确认按设计 `exit 1`。
   - 与上一条同源：都是「钉死的上游 commit 按 Windows 假设组织文件」。两次都只影响发布相位，PR 相位的 `test-v7.yml` 不跑 `release.yml`，合并前无法被 PR 检查发现。
+- **修复 Release 流水线 VMP 步骤仍会炸：上游 `gradle.properties` 的 `unimp.sdk.libs` 属性经 settings 第 24 行喂进第二个 Windows 路径候选**（`.github/workflows/release.yml` +25/−13）。上一条删掉 `settings.gradle.kts` 硬编码候选后，本步骤在 CI 上仍然 `BUILD FAILED`：`URISyntaxException: Illegal character in opaque part at index 2: E://Android//...`，且报错位置从第 25 行变成了第 24 行。
+  - 根因是同一 Windows 假设有**两个**入口：`settings.gradle.kts` 第 24 行是 `providers.gradleProperty("unimp.sdk.libs")` 驱动的候选，而钉死 commit `e408b878` 的 `gradle.properties` 尾部带着 `unimp.sdk.libs=E\:\\Android\\SDK-Android@5.14-20260706\\SDK\\libs`（转义反斜杠字面量）。`file()` 在 Linux 上同样把 `E:` 当 scheme 抛 `URISyntaxException`——上一条补丁只删了正斜杠硬编码那条，漏了属性驱动那条。
+  - 修复：同一个内嵌 Python 补丁改为同时处理两个文件——`settings.gradle.kts` 仍按逐字 needle 删硬编码候选（不命中即 `exit 1`，约束不变），`gradle.properties` 删 `unimp.sdk.libs=` 行。settings 里的守卫本就把「SDK 目录缺失」视为「跳过 `:unimp-host`」，清掉属性即恢复作者本意，不是绕过任何检查。
+  - 验证：直接核对 `e408b878` 上游原文——`settings.gradle.kts` 第 22/24 行是属性驱动入口、第 25 行是硬编码候选，`gradle.properties` 尾部带 `unimp.sdk.libs` 转义反斜杠值；CI 日志报错行号（settings 第 24 行）与属性入口位置一致，坐实漏删的就是属性这一条。
 
 ## 1.0.21
 
