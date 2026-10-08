@@ -1,0 +1,622 @@
+name: Test v9
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  # 见 test.yml：自动合并（GITHUB_TOKEN）不会触发 push 事件，由
+  # pr-auto-review.yml 在合并后 dispatch 补触发；PR 阶段由
+  # pull_request 覆盖，本入口只服务 main。
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
+          cache-disabled: true
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default packages are "tools platform-tools". Google has
+          # removed the legacy `tools` package from the SDK repository, so keep
+          # platform-tools only.
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
+
+      - name: Determine base revision
+        id: base-rev
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=HEAD~1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check for empty PR
+        run: |
+          BASE="${{ steps.base-rev.outputs.base }}"
+          changed_files=$(git diff --name-only "$BASE"...HEAD 2>/dev/null || echo "")
+          if [ -z "$changed_files" ]; then
+            echo "::error::This PR contains no meaningful changes compared to the base branch."
+            exit 1
+          fi
+          echo "Changed files:"
+          echo "$changed_files"
+      - name: Profanity check
+        run: |
+          BASE="${{ steps.base-rev.outputs.base }}"
+          PATTERNS="\bfuck\b|\bshit\b|\bbitch\b|\bass\b|\bdamn\b|\bcrap\b|\bdick\b|\bbastard\b|\bslut\b|\bwhore\b|\bpiss\b|\bcock\b|\bcunt\b|\basshole\b|\bmotherfucker\b|\bfucker\b|\bfucking\b|\bsonofabitch\b|\b混蛋\b|\b傻逼\b|\b操你妈\b|\b草泥马\b|\b他妈\b|\b尼玛\b|\b艹\b|\bfuckyou\b|\bfk\b"
+          violations=$(git diff "$BASE"...HEAD --diff-filter=AM \
+            | grep -n -i -E "$PATTERNS" \
+            | sed 's/^/  /' || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Profanity detected in the following diff lines:"
+            echo "$violations"
+            exit 1
+          fi
+          echo "Profanity check passed."
+      - name: AGPL-3.0-only license compliance check
+        run: |
+          BASE="${{ steps.base-rev.outputs.base }}"
+          exit_code=0
+          if git diff "$BASE"...HEAD --name-only --diff-filter=D | grep -q "^LICENSE$"; then
+            echo "::error::The LICENSE file must not be deleted. This project is AGPL-3.0-only."
+            exit_code=1
+          fi
+          if git diff "$BASE"...HEAD --name-only --diff-filter=M | grep -q "^LICENSE$"; then
+            if ! head -n 1 LICENSE | grep -qi "GNU AFFERO GENERAL PUBLIC LICENSE"; then
+              echo "::error::The LICENSE file must remain licensed under AGPL-3.0-only."
+              exit_code=1
+            fi
+          fi
+          NEW_SOURCE_FILES=$(git diff "$BASE"...HEAD --name-only --diff-filter=A \
+            | grep -E '\.(kt|java|cpp|c|h|hpp|py|rs|go|sh|gradle|groovy)$' || true)
+          if [ -n "$NEW_SOURCE_FILES" ]; then
+            while IFS= read -r file; do
+              if ! head -n 30 "$file" | grep -qi "GNU.*Affero.*General.*Public.*License\|AGPL[- ]3\.0\|AGPL-3\.0-only"; then
+                echo "::error::New source file '$file' is missing a AGPL-3.0 license header. All new files must be licensed under AGPL-3.0-only."
+                exit_code=1
+              fi
+            done <<< "$NEW_SOURCE_FILES"
+          fi
+          if [ $exit_code -eq 0 ]; then
+            echo "AGPL-3.0-only compliance check passed."
+          fi
+          exit $exit_code
+      - name: PR size check
+        run: |
+          BASE="${{ steps.base-rev.outputs.base }}"
+          total_files=$(git diff --name-only "$BASE"...HEAD | wc -l)
+          total_additions=$(git diff "$BASE"...HEAD --diff-filter=AM --numstat | awk '{s+=$1} END {print s}')
+          echo "PR stats: $total_files files changed, ~${total_additions:-0} additions"
+          if [ "$total_files" -gt 50 ]; then
+            echo "::warning::Large PR: $total_files files changed. Consider splitting into smaller, focused PRs."
+          fi
+          if [ "${total_additions:-0}" -gt 2000 ]; then
+            echo "::warning::Large PR: ~$total_additions lines added. Consider splitting into smaller, focused PRs."
+          fi
+      - name: ktlint — Kotlin code style check
+        run: |
+          cd /tmp
+          curl -sSLO -L "https://github.com/ktlint/ktlint/releases/download/1.5.0/ktlint"
+          chmod +x ktlint
+          cd -
+          violations=$(/tmp/ktlint --relative "app/src/**/*.kt" 2>&1) || true
+          if [ -n "$violations" ]; then
+            echo "::error::Kotlin code style violations found:"
+            echo "$violations"
+            exit 1
+          fi
+          echo "ktlint check passed."
+      - name: Lint check
+        run: gradle :app:lintDebug --stacktrace
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build gcc g++ pkg-config
+      - name: Clone Rizin source (v0.9.1)
+        run: |
+          if [ ! -d third_party/rizin-src/librz/include ]; then
+            git clone --depth 1 --branch v0.9.1 https://github.com/rizinorg/rizin.git third_party/rizin-src
+          fi
+      - name: Cache native backends (Rizin + LIEF)
+        uses: actions/cache@v4
+        with:
+          path: |
+            rizin-build
+            third_party/lief-build
+          # Key derived from the build script, cross templates and CMakeLists:
+          # any change to how the archives are produced invalidates the cache.
+          key: native-linux-${{ hashFiles('build-native-android.sh', 'rizin-cross-*.ini', 'rizin-native.ini', 'app/src/main/cpp/CMakeLists.txt') }}-ndk29-rizin091
+      - name: Build native backends (Rizin + LIEF)
+        run: bash build-native-android.sh
+      - name: Build Blutter runners (best-effort)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Validate that the curated Dart AOT blutter runner matrix
+          # (tools/blutter-matrix/curated-versions.json, e.g. Dart 3.11.5 /
+          # Flutter 3.41.x) cross-compiles on the NDK available in CI, and on
+          # success install the regenerated runners.json + libblutter_*.so so
+          # the debug/release APKs below also carry them (issue #5).
+          #
+          # Best-effort on purpose: this is a multi-hour Dart VM cross-compile.
+          # build-blutter-runners.sh only touches app/src/main after staging
+          # passes verify_manifest.py, so a failure here never breaks CI or the
+          # committed runners/manifest.
+          sudo apt-get install -y --no-install-recommends cmake ninja-build >/dev/null
+          bash tools/blutter-matrix/build-blutter-runners.sh
+      - name: Debug build
+        run: gradle :app:assembleDebug --stacktrace
+      - name: Restore release signing keystore (or CI fallback)
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          if [ -n "${{ secrets.KEYSTORE }}" ]; then
+            # Real release keystore from repository secrets (BASE64-encoded).
+            echo "${{ secrets.KEYSTORE }}" | base64 -d > release/so-reverse-mcp-release.jks
+            {
+              echo "storeFile=release/so-reverse-mcp-release.jks"
+              echo "storePassword=${{ secrets.PASSWORD }}"
+              echo "keyAlias=${{ secrets.ALIAS }}"
+              echo "keyPassword=${{ secrets.ALIAS_PASSWORD }}"
+            } > release/keystore.properties
+            echo "Restored release signing keystore from secrets."
+          else
+            # Fallback (e.g. fork PRs cannot access repository secrets):
+            # CI-only throwaway keystore, fresh key each run, NOT for
+            # distribution. APKs signed with it cannot be installed over the
+            # real release (docs/forum-post.md); build verification only.
+            STORE_PASS="ci-$(openssl rand -hex 16)"
+            keytool -genkeypair -v \
+              -storetype JKS \
+              -keystore release/so-reverse-mcp-release.jks \
+              -alias so-reverse-mcp \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 36500 \
+              -storepass "$STORE_PASS" \
+              -keypass "$STORE_PASS" \
+              -dname "CN=SOMCP CI, O=SoReverse MCP, C=CN"
+            {
+              echo "storeFile=release/so-reverse-mcp-release.jks"
+              echo "storePassword=$STORE_PASS"
+              echo "keyAlias=so-reverse-mcp"
+              echo "keyPassword=$STORE_PASS"
+            } > release/keystore.properties
+            echo "Secrets unavailable; generated CI-only signing keystore (not for distribution)."
+          fi
+      - name: Release build
+        run: gradle :app:assembleRelease --stacktrace
+      - name: Harden release APKs with Dex2C (dcc)
+        timeout-minutes: 90
+        env:
+          # Absolute on purpose: the script below cd's into the cloned dcc tree.
+          STORE_FILE: ${{ github.workspace }}/release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Dex2C hardening (dcc, https://github.com/amimo/dcc): the methods
+          # selected by tools/dex2c/filter.txt are translated to C, compiled
+          # into lib/<abi>/libnc.so and turned into `native` declarations in the
+          # dex, so their logic is no longer present in the shipped bytecode.
+          #
+          # Everything is pinned on purpose: dcc is a single-author research
+          # project whose master branch moves, and its vendored androguard comes
+          # from the 2019 ecosystem. The filter lives in-repo, and the step fails
+          # loudly rather than shipping an APK that only claims to be hardened.
+          DCC_COMMIT="17de4fd3202bd0e46735974211a43cda39fca5f3"  # dcc master @ 2024-02-07
+          APKTOOL_VERSION="2.12.1"  # 2.x keeps the CLI dcc was written against
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          NDK_DIR="$ANDROID_HOME/ndk/29.0.14206865"
+          WORK="$RUNNER_TEMP/dex2c"
+          FILTER="$GITHUB_WORKSPACE/tools/dex2c/filter.txt"
+
+          # dcc builds libnc.so with ndk-build. Fail with an actionable message
+          # here rather than deep inside dcc if that layout ever changes.
+          test -x "$NDK_DIR/ndk-build" || {
+            echo "::error::ndk-build not found at $NDK_DIR/ndk-build; dcc needs it to build libnc.so"
+            exit 1
+          }
+          test -f "$FILTER" || {
+            echo "::error::Dex2C filter $FILTER is missing"
+            exit 1
+          }
+
+          git clone --quiet https://github.com/amimo/dcc.git "$WORK/dcc"
+          git -C "$WORK/dcc" checkout --quiet "$DCC_COMMIT"
+          # dcc unconditionally signs the apktool-rebuilt APK with its bundled
+          # signapk.jar, which imports sun.misc.BASE64Encoder - removed in
+          # Java 9+, so under the workflow's Java 17 it dies with
+          # NoClassDefFoundError. That test-key signature is throwaway anyway
+          # (the APK is re-aligned and re-signed with the release key below),
+          # so replace the signapk invocation with a plain copy.
+          python3 - "$WORK/dcc/dcc.py" <<'PY'
+          import sys, pathlib
+          p = pathlib.Path(sys.argv[1])
+          src = p.read_text()
+          old = "subprocess.check_call(['java', '-jar', SIGNJAR, pem, pk8, unsigned_apk, signed_apk])"
+          if old not in src:
+              raise SystemExit("signapk call not found in dcc.py; pinned dcc moved")
+          p.write_text(src.replace(old, "shutil.copyfile(unsigned_apk, signed_apk)"))
+          PY
+          python3 -m venv "$WORK/venv"
+          "$WORK/venv/bin/pip" install --quiet --disable-pip-version-check \
+            -r "$WORK/dcc/requirements.txt"
+          curl -fsSL --retry 3 -o "$WORK/dcc/tools/apktool.jar" \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+          # dcc resolves dcc.cfg, filter.txt and project/ relative to its own
+          # directory, so it is driven from there with absolute paths.
+          printf '{"apktool": "%s", "ndk_dir": "%s"}\n' \
+            "$WORK/dcc/tools/apktool.jar" "$NDK_DIR" > "$WORK/dcc/dcc.cfg"
+
+          # Small zip helpers: the runner's python is already required by dcc, so
+          # the ABI list and the libnc.so presence check need no extra tooling.
+          cat > "$WORK/abilist.py" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              abis = {n.split('/')[1] for n in z.namelist()
+                      if n.startswith('lib/') and n.count('/') >= 2}
+          print(' '.join(sorted(abis)))
+          PY
+          cat > "$WORK/zipcheck.py" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              names = set(z.namelist())
+          missing = [n for n in sys.argv[2:] if n not in names]
+          for n in missing:
+              print('missing entry: %s' % n)
+          sys.exit(1 if missing else 0)
+          PY
+          cat > "$WORK/filtercheck.py" <<'PY'
+          import sys
+
+          filter_path, compiled_path = sys.argv[1], sys.argv[2]
+
+          # "=" entries in the filter are exact full-name matches (dcc puts
+          # them in a set and tests string equality, no regex), so each has to
+          # appear verbatim in the converted set. dcc reports nothing for a
+          # target it cannot find, so this check is what keeps a stale name
+          # from silently shipping the method as bytecode.
+          targets = []
+          with open(filter_path) as fp:
+              for line in fp:
+                  line = line.strip()
+                  if line.startswith('='):
+                      targets.append(line[1:].strip())
+
+          with open(compiled_path) as fp:
+              converted = set(fp.read().splitlines())
+
+          missing = [t for t in targets if t not in converted]
+          for name in missing:
+              print('not converted: %s' % name)
+          if missing:
+              sys.exit(1)
+
+          # Written without a trailing newline by dcc, so report the real
+          # count instead of wc -l.
+          print('%d/%d filter target(s) converted' % (len(targets), len(targets)))
+          for name in targets:
+              print('    %s' % name)
+          PY
+
+          cd "$WORK/dcc"
+          for apk in "$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*.apk; do
+            base="$(basename "$apk")"
+
+            # dcc requires libnc.so for EVERY lib/<abi>/ directory present in the
+            # APK (copy_compiled_libs raises "ABI <abi> is not supported!"
+            # otherwise), while its 2019-era Application.mk builds android-19 with
+            # ONLY arm64-v8a/armeabi-v7a - a platform NDK 29 no longer accepts.
+            # Derive both from the APK itself: the ABI splits carry a single ABI,
+            # the universal APK all four. APP_PLATFORM moves to the app's minSdk.
+            abis="$("$WORK/venv/bin/python" "$WORK/abilist.py" "$apk")"
+            if [ -z "$abis" ]; then
+              echo "::error::$base has no lib/<abi>/ entries, so dcc cannot know which ABIs to build"
+              exit 1
+            fi
+            sed -i -e "s|^APP_ABI.*|APP_ABI := $abis|" \
+                   -e "s|^APP_PLATFORM.*|APP_PLATFORM := android-26|" \
+                   "$WORK/dcc/project/jni/Application.mk"
+
+            mkdir -p "$WORK/out"
+            out="$WORK/out/$base"
+            # --source-dir keeps the generated C sources for the log/evidence and
+            # is what dcc builds libnc.so from; it also makes dcc skip its
+            # project-source.zip archiving.
+            src="$WORK/src/$base"
+            "$WORK/venv/bin/python" dcc.py "$apk" -o "$out" \
+              --filter "$FILTER" --source-dir "$src"
+
+            # dcc writes no output APK when the filter matched nothing (the
+            # class was renamed or removed by R8), and a partial conversion is
+            # equally unacceptable: both fail the release instead of publishing
+            # an APK that is presented as hardened but is not.
+            test -f "$out" || {
+              echo "::error::dcc produced no hardened APK for $base: tools/dex2c/filter.txt matched no method"
+              exit 1
+            }
+            converted="$src/jni/nc/compiled_methods.txt"
+            # Assert every "=" target in the filter really was converted. A
+            # class-prefix grep is not enough: one surviving method would keep
+            # it green while the other seven silently ship as bytecode.
+            "$WORK/venv/bin/python" "$WORK/filtercheck.py" "$FILTER" "$converted" | sed 's/^/    /' || {
+              echo "::error::$base: a tools/dex2c/filter.txt target is missing from $converted"
+              exit 1
+            }
+
+            for abi in $abis; do
+              "$WORK/venv/bin/python" "$WORK/zipcheck.py" "$out" "lib/$abi/libnc.so" || {
+                echo "::error::$base is missing lib/$abi/libnc.so after Dex2C"
+                exit 1
+              }
+            done
+
+            # apktool rebuilt the APK (so gradle's signature is gone) and dcc
+            # signed the rebuild with its bundled TEST key. Re-align and re-sign
+            # with the release key: a test-key asset could not upgrade an
+            # installed SOMCP and would also trip the app's own signer pin.
+            # Sign to a scratch path first so a failure cannot destroy the
+            # gradle-built APK.
+            "$BUILD_TOOLS/zipalign" -f -p 4 "$out" "$WORK/aligned-$base"
+            "$BUILD_TOOLS/apksigner" sign \
+              --ks "$STORE_FILE" \
+              --ks-pass "pass:$STORE_PASSWORD" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --key-pass "pass:$KEY_PASSWORD" \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              --v4-signing-enabled true \
+              --out "$WORK/signed-$base" \
+              "$WORK/aligned-$base"
+            mv -f "$WORK/signed-$base" "$apk"
+            echo "[dex2c] $base hardened, re-aligned and re-signed with the release key"
+          done
+          echo "Dex2C hardening applied to every release APK."
+
+      - name: Harden release APKs with VMP (shell)
+        timeout-minutes: 120
+        env:
+          STORE_FILE: ${{ github.workspace }}/release/so-reverse-mcp-release.jks
+          STORE_PASSWORD: ${{ secrets.PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALIAS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Virtual-machine protection on top of Dex2C. The selected methods'
+          # bytecode is translated into a private instruction set (PVM2, image
+          # format v4) that only the embedded interpreter can execute, so the
+          # logic is no longer recoverable from any DEX in the package.
+          #
+          # ORDER IS load-bearing: this must run AFTER the dcc step. dcc reads
+          # classes.dex through androguard, while this step moves every business
+          # dex into an encrypted assets/protector/dexes.zip and deletes
+          # classes*.dex from the APK — running VMP first would leave dcc with
+          # no dex to convert and silently harden nothing.
+          #
+          # The engine (XopProtector, Apache-2.0) is built from a pinned commit
+          # and its shell is de-branded by tools/vmp/debrand_shell.py before the
+          # build: upstream publishes the shell's entry-point class names, so a
+          # stock build would ship a manifest naming the protector and its
+          # version to anyone who unzips the APK. The patch renames the package,
+          # the entry classes and the native library consistently across the
+          # Java sources, the JNI paths hardcoded in C++, and the proguard
+          # keep rules, and asserts each linkage instead of trusting sed.
+          VMP_COMMIT="e408b87871ea18e197b189e787c73cc5ae3e2ee6"  # main @ 2026-09-19
+          WORK="$RUNNER_TEMP/vmp"
+          DEBRAND="$GITHUB_WORKSPACE/tools/vmp/debrand_shell.py"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+
+          test -f "$DEBRAND" || {
+            echo "::error::$DEBRAND is missing"
+            exit 1
+          }
+          # The shell's own build: AGP 8.2.2 pins compileSdk 34 and CMake
+          # 3.22.1, neither of which the release job installs for the app
+          # itself (android-36 / the app's own NDK).
+          sdkmanager "platforms;android-34" "cmake;3.22.1"
+
+          git clone --quiet https://github.com/xopJack/XopProtector.git "$WORK/shell"
+          git -C "$WORK/shell" checkout --quiet "$VMP_COMMIT"
+          # Upstream commits gradlew with mode 100644 (no exec bit, the whole
+          # tree has zero 100755 entries), so ./gradlew would die with
+          # "Permission denied" / exit 126 right after checkout.
+          chmod +x "$WORK/shell/gradlew"
+          # Upstream lists one of its author's own SDK directories as a
+          # UniMP candidate. On a Linux runner that literal is not a path but a
+          # malformed URI: "E:/Android/..." parses as the scheme "E", and the
+          # file() call throws URISyntaxException while settings.gradle.kts is
+          # being evaluated -- before Gradle reaches any task of ours. The
+          # guard around it already treats a missing directory as "skip
+          # :unimp-host", so dropping the candidate is the intended behaviour.
+          python3 - "$WORK/shell/settings.gradle.kts" <<'PATCH'
+          import sys
+          p = sys.argv[1]
+          src = open(p, encoding="utf-8").read()
+          needle = '    file("E:/Android/SDK-Android@5.14-20260706/SDK/libs"),\n'
+          if needle not in src:
+              print("upstream no longer carries that Windows-only candidate;"
+                    " re-check whether this patch is still needed")
+              sys.exit(1)
+          open(p, "w", encoding="utf-8", newline="\n").write(src.replace(needle, ""))
+          print("patched settings.gradle.kts: dropped the Windows-only UniMP candidate")
+          PATCH
+          python3 "$DEBRAND" "$WORK/shell"
+
+          # :packer:jar is the build-time engine (plain JVM); exportShellFiles
+          # cross-compiles the on-device librtcore.so for all four ABIs and
+          # stages the shell dex next to it. -PskipDemo avoids configuring the
+          # upstream sample app, which needs SDK AARs we do not ship.
+          ( cd "$WORK/shell" && ./gradlew --no-daemon -q :packer:jar exportShellFiles )
+
+          PACKER_JAR=$(ls "$WORK/shell"/packer/build/libs/protector-packer-*.jar | head -1)
+          SHELL_DIR="$WORK/shell/executable/shell-files"
+          test -f "$PACKER_JAR" || { echo "::error::packer jar was not built"; exit 1; }
+          test -f "$SHELL_DIR/dex/classes.dex" || {
+            echo "::error::$SHELL_DIR/dex/classes.dex missing; shell not exported"
+            exit 1
+          }
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -f "$SHELL_DIR/libs/$abi/librtcore.so" || {
+              echo "::error::$SHELL_DIR/libs/$abi/librtcore.so missing; shell ABI $abi not built"
+              exit 1
+            }
+          done
+
+          cat > "$WORK/abilist.py" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              abis = {n.split('/')[1] for n in z.namelist()
+                      if n.startswith('lib/') and n.count('/') >= 2}
+          print(' '.join(sorted(abis)))
+          PY
+          cat > "$WORK/apkcheck.py" <<'PY'
+          import sys, zipfile
+          apk, abi = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(apk) as z:
+              names = set(z.namelist())
+              manifest = z.read("AndroidManifest.xml")
+          # The containers plus the renamed native lib prove the shell was
+          # embedded. config.json/code.bin/dexes.zip are what the on-device
+          # bootstrap refuses to start without, so all three being present is
+          # the difference between a protected APK and a broken one.
+          required = [
+              "assets/protector/config.json",
+              "assets/protector/code.bin",
+              "assets/protector/dexes.zip",
+              "lib/%s/librtcore.so" % abi,
+          ]
+          missing = [n for n in required if n not in names]
+          for n in missing:
+              print("missing entry: %s" % n)
+          # The binary manifest keeps its string pool as UTF-16LE, so the
+          # entry-point names appear NUL-interleaved. Compare on the decoded
+          # form (strip the NULs) rather than hand-writing interleaved literals,
+          # which cannot be decoded back for the error message.
+          pool = manifest[-16384:].replace(b"\x00", b"")
+          for needle, want in ((b"BootstrapEntry", True),
+                               (b"BootstrapComponentFactory", True),
+                               (b"ProxyApplication", False),
+                               (b"ProxyComponentFactory", False)):
+              found = needle in pool
+              if found != want:
+                  print("manifest entry-point check failed: %s present=%s expected=%s"
+                        % (needle.decode("ascii"), found, want))
+                  missing.append("manifest-entry-point")
+          sys.exit(1 if missing else 0)
+          PY
+
+          for apk in "$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*.apk; do
+            base="$(basename "$apk")"
+            out="$WORK/vmp/$base"
+            mkdir -p "$WORK/vmp"
+
+            # --hollow-prefix (not --profile aggressive) is what actually hollows
+            # the app package: the balanced profile is encrypt-first and hollows
+            # nothing on its own, while an explicit prefix allowlist is honoured
+            # on every profile except max. It still skips Android components
+            # (Activity/Service/Provider/...), which is required — upstream notes
+            # hollowing a component body to a stub raises VerifyError on
+            # Android 14+.
+            #
+            # --no-protect-so: RC4-encrypting .text would fight this app's own
+            # integrity checks (native_probe.cpp verifies its shipped payload)
+            # and force dlopen interception for four ABIs' worth of Rizin/LIEF
+            # libraries, for a layer this release does not claim.
+            #
+            # --no-encrypt-assets: the app reads its own assets through the
+            # standard AssetManager; the shell's transparent AssetManager hook
+            # only covers assets fetched via its own ProtectorAssets wrapper.
+            java -jar "$PACKER_JAR" "$apk" -o "$out" \
+              --shell-dir "$SHELL_DIR" \
+              --profile balanced \
+              --hollow-prefix 'Lcom/soreverse/mcp/' \
+              --true-vmp-prefix 'Lcom/soreverse/mcp/core/BackupCrypto;' \
+              --true-vmp-prefix 'Lcom/soreverse/mcp/core/IntegrityGuard;' \
+              --true-vmp-prefix 'Lcom/soreverse/mcp/core/AppListGuard;' \
+              --no-protect-so \
+              --no-encrypt-assets \
+              --no-res-protect \
+              --keystore "$STORE_FILE" \
+              --alias "$KEY_ALIAS" \
+              --storepass "$STORE_PASSWORD" \
+              --keypass "$KEY_PASSWORD"
+
+            test -f "$out" || {
+              echo "::error::VMP produced no output APK for $base"
+              exit 1
+            }
+
+            # The engine must have actually virtualized something, otherwise
+            # the APK is only encrypted and the release note would overstate it.
+            # The packer prints an admission line; grep it rather than trusting
+            # a silent zero-method run.
+            # Derive the ABI list from the APK itself rather than assuming
+            # arm64: the release publishes four single-ABI splits plus a
+            # universal APK, and each split only carries its own lib/<abi>/.
+            # Checking a fixed ABI would fail every non-arm64 split.
+            abis="$(python3 "$WORK/abilist.py" "$out")"
+            test -n "$abis" || {
+              echo "::error::$base has no lib/<abi>/ entries after VMP; shell was not embedded"
+              exit 1
+            }
+            for abi in $abis; do
+              python3 "$WORK/apkcheck.py" "$out" "$abi" || {
+                echo "::error::$base failed the VMP shell check for ABI $abi"
+                exit 1
+              }
+            done
+
+            mv -f "$out" "$apk"
+            echo "[vmp] $base virtualized, signed with the release key"
+          done
+          echo "VMP hardening applied to every release APK."
+
+      - name: Verify and ensure v2/v3 APK signing
+        run: |
+          set -euo pipefail
+          # Read signing config from keystore.properties (set up in the
+          # previous step, either from secrets or CI fallback).
+          storeFile=$(grep '^storeFile=' release/keystore.properties | head -1 | cut -d= -f2-)
+          storePassword=$(grep '^storePassword=' release/keystore.properties | head -1 | cut -d= -f2-)
+          keyAlias=$(grep '^keyAlias=' release/keystore.properties | head -1 | cut -d= -f2-)
+          keyPassword=$(grep '^keyPassword=' release/keystore.properties | head -1 | cut -d= -f2-)
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          for apk in app/build/outputs/apk/release/*.apk; do
+            echo "=== Checking signing schemes: $(basename "$apk") ==="
+            if "$APKSIGNER" verify --verbose "$apk" 2>&1 | grep -qi "NOT PRESENT"; then
+              echo "::warning::v2/v3 signing NOT verified in $(basename "$apk"); re-signing with apksigner"
+              "$APKSIGNER" sign \
+                --ks "$storeFile" \
+                --ks-pass "pass:$storePassword" \
+                --ks-key-alias "$keyAlias" \
+                --key-pass "pass:$keyPassword" \
+                --v1-signing-enabled true \
+                --v2-signing-enabled true \
+                --v3-signing-enabled true \
+                --v4-signing-enabled true \
+                "$apk"
+            fi
+            "$APKSIGNER" verify --print-certs "$apk"
+            echo "✓ $(basename "$apk") has valid v2/v3 signing"
+          done
+      - name: Unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace
