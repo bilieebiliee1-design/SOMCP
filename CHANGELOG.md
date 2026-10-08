@@ -142,6 +142,11 @@
 - 已知未覆盖（属独立决策，本次不做）：把某个**纯依赖库**从 APK 解出并改名后，既无条目名也无包标识，无法与第三方 SO 区分；要覆盖它必须为每个自带库登记摘要并逐次比对，而 `openWorkspace` 已各做一次全量 SHA-256 与 LIEF 解析，收益不抵开销，故不引入。
 - 验证方式（不涉及本项目构建）：新增单测 `scanFlagsOwnLibInsideWorkDirectoryReference` 钉住「带 `apk:` 前缀的相对引用按条目名被认领」，并同时断言**相对 APK 路径单独不足以识别**（正是旧候选清单的缺口）；字节判据本身由既有 `SelfAnalysisDetectionTest`（ASCII / UTF-16LE / 反例 / 空输入）覆盖，未新增；ktlint 1.8.0 对改动文件零违规。
 
+- **CI 测试矩阵分层：新增 `test-v8.yml` / `test-v9.yml`，`test-v7.yml` 移除 PR 触发**（`.github/workflows/test-v7.yml` 修改，`test-v8.yml` / `test-v9.yml` 新增）。
+  - `test-v8.yml` 以 test-v7 为基线新增 Dex2C（dcc）加固步骤；`test-v9.yml` 在 test-v8 基础上再叠 VMP（XopProtector）步骤。两步均取自 release.yml，保持「Dex2C 必须在 VMP 之前」的顺序硬约束（VMP 会删掉 classes*.dex，先跑会让 dcc 无 dex 可转而静默不加固）。
+  - 触发器分工：test-v7 / test-v8 只服务 main（push + workflow_dispatch）；PR 阶段检查收敛到 test-v9（push + pull_request + workflow_dispatch）。
+  - 目的：把此前只有打 tag 才会跑的 release.yml 加固相位纳入常规测试矩阵，PR 阶段即能暴露 Dex2C / VMP 的缺陷。
+
 - **修复 PR 自动审查的评论顺序错乱**（`.github/workflows/pr-auto-review.yml` +7）：被判定为严重缺陷（`verdict = reject`）而自动关闭 PR 时，「PR 已被自动关闭」的通告评论会显示在「LLM 自动审查结果」的 review 之上，读起来像"先关闭、后审查"。
 - 根因（实测数据，不是猜测）：GitHub 的 PR 时间线按**秒级**时间戳排序，同一秒内的 review 与 issue comment 由内部 id 决定先后。`pr-auto-review.yml` 本身是先 `createReview`、再 `createComment`，指令顺序没有问题，问题在于两次 API 调用落进了同一秒——PR #112 的 review（`submitted_at`）与关闭评论（`created_at`）同为 `2026-09-19T14:46:12Z`，评论的 id 恰好排在前面；对照 PR #89 两条相隔 1 秒（`14:48:32Z` / `14:48:33Z`），顺序即正确。
 - 修复：`createReview` 成功后等待 3 秒再继续，使关闭评论的时间戳严格晚于该 review。等待点放在 review 提交之后、其余步骤之前，因此 `reject` 直接关闭与「连续 7 天累计 5 次警告」关闭这两条评论路径同时生效。
