@@ -289,6 +289,10 @@
   - 根因是同一 Windows 假设有**两个**入口：`settings.gradle.kts` 第 24 行是 `providers.gradleProperty("unimp.sdk.libs")` 驱动的候选，而钉死 commit `e408b878` 的 `gradle.properties` 尾部带着 `unimp.sdk.libs=E\:\\Android\\SDK-Android@5.14-20260706\\SDK\\libs`（转义反斜杠字面量）。`file()` 在 Linux 上同样把 `E:` 当 scheme 抛 `URISyntaxException`——上一条补丁只删了正斜杠硬编码那条，漏了属性驱动那条。
   - 修复：同一个内嵌 Python 补丁改为同时处理两个文件——`settings.gradle.kts` 仍按逐字 needle 删硬编码候选（不命中即 `exit 1`，约束不变），`gradle.properties` 删 `unimp.sdk.libs=` 行。settings 里的守卫本就把「SDK 目录缺失」视为「跳过 `:unimp-host`」，清掉属性即恢复作者本意，不是绕过任何检查。
   - 验证：直接核对 `e408b878` 上游原文——`settings.gradle.kts` 第 22/24 行是属性驱动入口、第 25 行是硬编码候选，`gradle.properties` 尾部带 `unimp.sdk.libs` 转义反斜杠值；CI 日志报错行号（settings 第 24 行）与属性入口位置一致，坐实漏删的就是属性这一条。
+- **修复 Release 流水线 VMP 步骤仍会炸：去品牌脚本只改了类名、没重命名对应的 `.java` 文件**（`tools/vmp/debrand_shell.py`）。`:native:compileReleaseJavaWithJavac` 连报 4 个「class X is public, should be declared in a file named X.java」——`JniBridge`→`NativeBridge` 等 4 个入口类的**内容**被 `rewrite_text` 改了，**文件名**却还是旧的，javac 要求 public 类名与文件名一致，壳模块直接编译失败。
+  - 根因在本仓脚本自身：`rewrite_text` 只做文本替换、`move_package_dirs` 只搬包目录，两个动作都动不到文件名；前两条 VMP 修复针对的是上游的 Windows 假设，这一条是脚本自己的遗漏。
+  - 修复：新增 `rename_class_files` 步骤——按 `RENAMES` 把 `<旧类名>.java/.kt` 重命名为 `<新类名>.java/.kt`，找不到源文件或目标已存在都 `exit 1`；`verify()` 残留 needle 同步补 `JniBridge`/`VmBridge`。
+  - 验证：在构造的最小壳树上端到端跑通（4 个文件重命名到位、旧文件消失、包目录搬迁无残留、一致性断言全部通过）；该缺陷只影响发布相位（release.yml），PR 相位 test-v7 不含此步骤，合并前无法被 PR 检查发现。
 
 ## 1.0.21
 
