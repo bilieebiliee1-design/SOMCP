@@ -293,6 +293,10 @@
   - 根因在本仓脚本自身：`rewrite_text` 只做文本替换、`move_package_dirs` 只搬包目录，两个动作都动不到文件名；前两条 VMP 修复针对的是上游的 Windows 假设，这一条是脚本自己的遗漏。
   - 修复：新增 `rename_class_files` 步骤——按 `RENAMES` 把 `<旧类名>.java/.kt` 重命名为 `<新类名>.java/.kt`，找不到源文件或目标已存在都 `exit 1`；`verify()` 残留 needle 同步补 `JniBridge`/`VmBridge`。
   - 验证：在构造的最小壳树上端到端跑通（4 个文件重命名到位、旧文件消失、包目录搬迁无残留、一致性断言全部通过）；该缺陷只影响发布相位（release.yml），PR 相位 test-v7 不含此步骤，合并前无法被 PR 检查发现。
+- **修复 VMP 加固步骤两处复发：`test-v9` 补丁缺 `gradle.properties` 入口、上游 `local.properties` 挡掉 build-tools 解析**（`.github/workflows/test-v9.yml`、`.github/workflows/release.yml`）。tag `v1.0.22` 的 `Release` run 与 main 的 `Test v9` run 在同一提交上双双失败于「Harden release APKs with VMP (shell)」，但报错不同，属两个独立缺陷。
+  - **`Test v9`（settings 第 24 行 `URISyntaxException: E:\Android\...）**：`test-v9.yml` 的内嵌补丁是旧版，只删了 `settings.gradle.kts` 的硬编码候选，没删 `gradle.properties` 的 `unimp.sdk.libs=` 行——属性值（转义反斜杠形态）经 settings 第 24 行喂进属性驱动的第二个 Windows 路径候选，正是此前 release.yml 已修过的问题在 test-v9 上的镜像。修复：把 release.yml 的全量补丁同步过来。
+  - **`Release`（`Execution failed for task ':exportShellFiles' > build-tools not found`）**：上游把作者的 `local.properties`（`sdk.dir=D:\\Install\\Sdk\\Sdk`）提交进了树内（文件头注释自己写着「must NOT be checked into Version Control Systems」）。`exportShellFiles` 解析 SDK 时 local.properties 优先于 `ANDROID_HOME`，其自写的 d8 查找在 Linux 上对着不存在的 Windows 目录（`D:\Install\Sdk\Sdk`）抛错；AGP 本身回退到 `ANDROID_HOME`（NDK 自动安装日志可证），所以模块编译能走到那么远。修复：两个工作流的内嵌补丁在 clone 后删除 `local.properties`，让 AGP 与 exportShellFiles 解析到同一个 SDK。
+  - 验证：对钉死 commit `e408b878` 的 tree 直接核对 `local.properties` 在树内；两个工作流的补丁文本逐字一致（settings 候选 + gradle.properties 属性行 + local.properties 三处）；
 
 ## 1.0.21
 
