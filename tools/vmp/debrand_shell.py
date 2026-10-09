@@ -154,6 +154,34 @@ def rewrite_text(root, counter):
             counter.bump(path, 1)
 
 
+def _walk_all(root):
+    """Every file in the tree, pruning UNTOUCHED_DIRS by directory name."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in UNTOUCHED_DIRS]
+        for fn in filenames:
+            yield pathlib.Path(dirpath) / fn
+
+
+def rename_class_files(root, counter):
+    """Rename <Old>.java/.kt to the new class name.
+
+    javac requires a public class to live in a file named after it, so the
+    textual class rename alone breaks the build with "class X is public,
+    should be declared in a file named X.java" — the file names have to move
+    with the class names.
+    """
+    for old, new in RENAMES.items():
+        matches = [p for p in _walk_all(root) if p.name in (old + ".java", old + ".kt")]
+        if not matches:
+            fail("no source file found for class %s" % old)
+        for p in matches:
+            target = p.with_name(new + p.suffix)
+            if target.exists():
+                fail("rename target already exists: %s" % target)
+            p.rename(target)
+            counter.bump(target, 1)
+
+
 def move_package_dirs(root):
     """Relocate the com/yqsh/protector package directories on disk.
 
@@ -206,7 +234,8 @@ def verify(root):
     attachBaseContext, so we assert the *absence* of the old tokens across the
     sources that end up in the build.
     """
-    needles = ["yqsh", "libprotector", "ProxyApplication", "ProxyComponentFactory"]
+    needles = ["yqsh", "libprotector", "ProxyApplication", "ProxyComponentFactory",
+               "JniBridge", "VmBridge"]
     scanned = []
     for sub in ("packer/src/main", "native/src/main", "native/build.gradle.kts",
                 "native/proguard-rules.pro", "native/consumer-rules.pro",
@@ -311,6 +340,7 @@ def main():
     counter = Counter()
     rewrite_text(root, counter)
     move_package_dirs(root)
+    rename_class_files(root, counter)
     verify(root)
     verify_consistency(root)
 
