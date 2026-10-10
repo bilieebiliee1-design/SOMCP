@@ -408,7 +408,7 @@ jobs:
           #
           # ORDER IS load-bearing: this must run AFTER the dcc step. dcc reads
           # classes.dex through androguard, while this step moves every business
-          # dex into an encrypted assets/protector/dexes.zip and deletes
+          # dex into an encrypted assets/rtcore/dexes.zip and deletes
           # classes*.dex from the APK — running VMP first would leave dcc with
           # no dex to convert and silently harden nothing.
           #
@@ -488,7 +488,7 @@ jobs:
           # upstream sample app, which needs SDK AARs we do not ship.
           ( cd "$WORK/shell" && ./gradlew --no-daemon -q :packer:jar exportShellFiles )
 
-          PACKER_JAR=$(ls "$WORK/shell"/packer/build/libs/protector-packer-*.jar | head -1)
+          PACKER_JAR=$(ls "$WORK/shell"/packer/build/libs/rtcore-packer-*.jar | head -1)
           SHELL_DIR="$WORK/shell/executable/shell-files"
           test -f "$PACKER_JAR" || { echo "::error::packer jar was not built"; exit 1; }
           test -f "$SHELL_DIR/dex/classes.dex" || {
@@ -520,9 +520,9 @@ jobs:
           # bootstrap refuses to start without, so all three being present is
           # the difference between a protected APK and a broken one.
           required = [
-              "assets/protector/config.json",
-              "assets/protector/code.bin",
-              "assets/protector/dexes.zip",
+              "assets/rtcore/config.json",
+              "assets/rtcore/code.bin",
+              "assets/rtcore/dexes.zip",
               "lib/%s/librtcore.so" % abi,
           ]
           missing = [n for n in required if n not in names]
