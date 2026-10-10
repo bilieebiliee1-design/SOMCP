@@ -119,7 +119,8 @@ def text_files(root):
     UNTOUCHED_DIRS is pruned by directory *name* anywhere in the path, so it
     also covers nested cases like packer/src/test and demo/src/main.
     """
-    exts = {".java", ".kt", ".cpp", ".h", ".c", ".pro", ".txt", ".xml", ".kts"}
+    exts = {".java", ".kt", ".cpp", ".h", ".c", ".pro", ".txt", ".xml", ".kts",
+            ".cmake"}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in UNTOUCHED_DIRS]
         for fn in filenames:
@@ -135,6 +136,14 @@ def rewrite_text(root, counter):
         (OLD_PKG_SLASHED, NEW_PKG_SLASHED),
         (OLD_SO, NEW_SO),
         ("libprotector", "librtcore"),
+        # Bare CMake/Gradle token, applied LAST: it is what names the CMake
+        # target (add_library(protector ...) -> libprotector.so), the
+        # System.loadLibrary("protector") call sites, the packer jar base name
+        # and the assets/protector/ container. Only the prefixed form was
+        # renamed before, so the built .so kept the old file name while the
+        # packer keyed on the new one — the export gate then failed with
+        # "librtcore.so missing; shell ABI not built".
+        ("protector", "rtcore"),
     ]
     for path in text_files(root):
         try:
@@ -234,7 +243,7 @@ def verify(root):
     attachBaseContext, so we assert the *absence* of the old tokens across the
     sources that end up in the build.
     """
-    needles = ["yqsh", "libprotector", "ProxyApplication", "ProxyComponentFactory",
+    needles = ["yqsh", "protector", "ProxyApplication", "ProxyComponentFactory",
                "JniBridge", "VmBridge"]
     scanned = []
     for sub in ("packer/src/main", "native/src/main", "native/build.gradle.kts",
