@@ -191,6 +191,27 @@ def rename_class_files(root, counter):
             counter.bump(target, 1)
 
 
+def rename_token_files(root, counter):
+    """Rename files whose NAME still carries the old bare token.
+
+    The textual rewrite fixes every `#include` line, but a header whose
+    FILE name carries the token keeps the old name on disk (upstream:
+    native/src/main/cpp/common/protector_macro.h). The include then points
+    at common/rtcore_macro.h and the native build dies with
+    "'common/rtcore_macro.h' file not found". Case-sensitive on purpose and
+    symmetric with the bare ("protector", "rtcore") text rule: uppercase
+    file names (ProtectorObfuscation.cmake) are referenced verbatim by
+    CMakeLists and must NOT move.
+    """
+    for p in _walk_all(root):
+        if "protector" in p.name:
+            target = p.with_name(p.name.replace("protector", "rtcore"))
+            if target.exists():
+                fail("rename target already exists: %s" % target)
+            p.rename(target)
+            counter.bump(target, 1)
+
+
 def move_package_dirs(root):
     """Relocate the com/yqsh/protector package directories on disk.
 
@@ -348,6 +369,7 @@ def main():
 
     counter = Counter()
     rewrite_text(root, counter)
+    rename_token_files(root, counter)
     move_package_dirs(root)
     rename_class_files(root, counter)
     verify(root)

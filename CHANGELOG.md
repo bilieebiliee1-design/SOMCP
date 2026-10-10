@@ -154,6 +154,10 @@
   - 两个工作流同步 jar 通配 `protector-packer-*`→`rtcore-packer-*` 与 `assets/protector/`→`assets/rtcore/` 三处期望（jar 名来自上游 `archiveBaseName.set("protector-packer")`，assets 目录名来自 `AssetsEncryptor`，两边都在去品牌覆盖范围内，改名后必须跟着走）。
 
 
+- **修复 VMP shell 去品牌「只改内容不改文件名」：`common/rtcore_macro.h` not found**（`tools/vmp/debrand_shell.py`）。Test v9（`checks`）与 Release（tag `v1.0.22` 触发的 `build`）双双死在 `:native:buildCMakeRelWithDebInfo[arm64-v8a]`：上一轮补的裸标识对 `("protector", "rtcore")` 把源码里的 `#include "common/protector_macro.h"` 改写成了 `rtcore_macro.h`，但磁盘上的头文件 `native/src/main/cpp/common/protector_macro.h` 没有任何步骤跟着改名，include 因此找不到文件。
+  - 修复：新增 `rename_token_files` 步骤——与文本重写同一条规则（区分大小写、只认小写 `protector`），把文件名里的小写 token 同步改成 `rtcore`；大写的 `ProtectorObfuscation.cmake` 被 `CMakeLists.txt` 按原名 `include(...)` 引用，**刻意不动**，与文本替换的大小写敏感口径完全对称。
+  - 验证（不涉及本地构建，未查询 CI，CI 日志由用户提供）：对钉死 commit `e408b878` 的上游树全量枚举 951 条路径，确认编译范围内文件名带小写 token 的仅此一个；`rename_token_files` 在最小构造树上隔离测试通过（小写改名、大写不动、目标已存在即报错）。
+
 - **把 AGPL-3.0 许可全文嵌进 DEX 与三个自建 SO**（`core/Provenance.kt` +`LICENSE_TEXT`、`proguard-rules.pro` +8、`cpp/license_notice.h` 新增、`cpp/native_probe.cpp` / `cpp/blutter_bridge.cpp` / `cpp/xanso_jni.cpp` 各 +4、`cpp/CMakeLists.txt` +15）。此前许可只有三种**能被整块删掉**的形态：源码头注释（`SPDX-License-Identifier`，不进二进制）、`LICENSE` / `NOTICE` 文件、以及 App 界面文案与 MCP 元数据。重打包者删掉 `LICENSE` 与 `res/` / `assets/` 就能让产物自身不含任何许可痕迹，而这正是 AGPL 要求「保留声明」时最该顶住的一步。现在 DEX 与每个自建 `.so` 各自携带一份正文。
   - **DEX 侧刻意用 `const val` 而不是普通常量。** `Provenance.LICENSE_TEXT` 是 34 523 字节（LF 行尾，与 `LICENSE` 的 LF 形态逐字节一致）的编译期常量，被折叠进类定义的 static field 初始值（DEX `class_def` 的 `static_values`），**不在任何方法体里**——因此 Dex2C（把白名单方法体搬进 native）与发布时的 VMP 挖空（把方法体搬进加密载荷 `dexes.zip`）都带不走它。R8 会删掉未被引用的常量，故 `proguard-rules.pro` 以 `-keep class com.soreverse.mcp.core.Provenance { *; }` 整体保留该类，而不是赌某一个字段活下来。
   - **SO 侧**：新增 `cpp/license_notice.h`，以 `extern "C"` 的 `somcp_agpl_license_notice[]`（raw string 字面量）定义同一份文本；C++ 第 1 相位把源文件的 CRLF 归一为 LF，故它与 DEX 侧、与 `LICENSE` 三者逐字节相同。三个自建库各由一个 TU 引入（`native_probe.cpp` → `librz_native.so`、`blutter_bridge.cpp`、`xanso_jni.cpp`）——该定义是外部链接，两个 TU 同时引入即重定义链接失败，头文件里已写明这条约束。
