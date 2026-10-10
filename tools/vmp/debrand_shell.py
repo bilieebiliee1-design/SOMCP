@@ -256,6 +256,50 @@ def _scannable(root, sub):
     return out
 
 
+# Members that javac's dep-ann lint flags: upstream documents them with a
+# `@deprecated` javadoc tag but never adds the `@Deprecated` annotation, so
+# every :packer:jar build prints two [dep-ann] warnings. The declarations are
+# matched by stripped full-line equality so a comment or a different member
+# cannot trigger the insert, and the fix lives here rather than in a fork
+# because the engine is built from a pinned upstream commit.
+DEPRECATION_FIXUPS = [
+    ("ProtectOptions.java", "public boolean enableNetGuard;"),
+    ("BusinessSoProtector.java", "static boolean isSafeModeIndustrySkip(String name) {"),
+]
+
+
+def annotate_deprecated(root):
+    """Insert @Deprecated where upstream's javadoc already says @deprecated.
+
+    javac's dep-ann lint warns for members carrying a `@deprecated` javadoc
+    tag but missing the `@Deprecated` annotation. Both members sit in the
+    pinned upstream tree, so the annotation is inserted right above the
+    declaration instead of waiting for an upstream commit. Each declaration
+    must match exactly once; anything else fails loudly so an upstream
+    reshuffle cannot silently turn this into a no-op.
+    """
+    for filename, decl in DEPRECATION_FIXUPS:
+        matches = sorted((root / "packer/src/main/java").rglob(filename))
+        if len(matches) != 1:
+            fail("expected exactly one %s under packer/src/main/java, found %d"
+                 % (filename, len(matches)))
+        path = matches[0]
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        hits = [i for i, line in enumerate(lines) if line.strip() == decl]
+        if not hits:
+            fail("%s no longer declares %r verbatim; re-check the dep-ann fixup"
+                 % (filename, decl))
+        if len(hits) > 1:
+            fail("%s declares %r %d times; expected exactly once"
+                 % (filename, decl, len(hits)))
+        i = hits[0]
+        if lines[i - 1].strip() == "@Deprecated":
+            continue  # upstream fixed it; nothing to do
+        indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+        lines.insert(i, indent + "@Deprecated\n")
+        path.write_text("".join(lines), encoding="utf-8", newline="\n")
+
+
 def verify(root):
     """Fail unless the tree is clean of the upstream identity.
 
@@ -372,6 +416,7 @@ def main():
     rename_token_files(root, counter)
     move_package_dirs(root)
     rename_class_files(root, counter)
+    annotate_deprecated(root)
     verify(root)
     verify_consistency(root)
 
