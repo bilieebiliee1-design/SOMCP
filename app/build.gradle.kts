@@ -63,7 +63,12 @@ android {
                     // Additional compile-time checks
                     "-Wall", "-Wextra"
                 )
-                arguments += listOf("-DANDROID_STL=c++_shared")
+                // c++_static keeps every self-built .so (rz_native /
+                // xanso_native / blutter_bridge) self-contained: the hardened
+                // (VMP/Dex2C) repack may drop libc++_shared.so from lib/, and a
+                // c++_shared-linked librz_native.so then fails dlopen with
+                // "cannot locate symbol _ZTVNSt6__ndk1..." and kills startup.
+                arguments += listOf("-DANDROID_STL=c++_static")
                 // Rizin source tree location. Optional: defaults to the repo's
                 // third_party/rizin-src (see CMakeLists.txt); set RIZIN_SRC to
                 // point at an existing checkout when it lives elsewhere.
