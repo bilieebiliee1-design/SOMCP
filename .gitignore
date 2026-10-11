@@ -65,3 +65,13 @@ funcs_*.json
 # Operating systems
 .DS_Store
 Thumbs.db
+
+# AOCI cognition layer (local, machine-owned index and state)
+.aoci/
+aoci.txt
+aoci.meta.txt
+aoci.code.txt
+aoci.database.txt
+
+# Local repository cognition file (machine-generated; not version-controlled)
+AGENTS.md
