@@ -175,6 +175,8 @@
 - 已知未覆盖（属独立决策，本次不做）：把某个**纯依赖库**从 APK 解出并改名后，既无条目名也无包标识，无法与第三方 SO 区分；要覆盖它必须为每个自带库登记摘要并逐次比对，而 `openWorkspace` 已各做一次全量 SHA-256 与 LIEF 解析，收益不抵开销，故不引入。
 - 验证方式（不涉及本项目构建）：新增单测 `scanFlagsOwnLibInsideWorkDirectoryReference` 钉住「带 `apk:` 前缀的相对引用按条目名被认领」，并同时断言**相对 APK 路径单独不足以识别**（正是旧候选清单的缺口）；字节判据本身由既有 `SelfAnalysisDetectionTest`（ASCII / UTF-16LE / 反例 / 空输入）覆盖，未新增；ktlint 1.8.0 对改动文件零违规。
 
+- **修复 issue 自动回复死在出口归一化的 `python3 -c` 缩进错误**（`.github/workflows/issues-auto-reply.yml`）。`run: |` 块内的 `python3 -c '...'` 代码体此前跟随周围 shell 行缩进（12 / 20 空格），而 YAML 块标量只剥离 run 块的基础缩进（10 空格），Python 收到的第一行语句带前导空格，直接 `IndentationError: unexpected indent`——run #38141193210 里 LLM 回复已成功生成，却死在「项目名归一化」这一步（`import re`），回复未发出（#156）。两处同修：① 归一化段；② 附件 UTF-8 边界截断段（同款潜伏 bug，仅因 #156 无附件而未触发）。修复方式是把代码体左移至 run 块基础缩进，YAML 剥离后 Python 代码顶格；全仓 workflows grep 确认无第三处多行 `python3 -c '`。已通过 YAML 解析 + 两段代码体 `compile()` 语法校验。
+
 - **CI 测试矩阵分层：新增 `test-v8.yml` / `test-v9.yml`，`test-v7.yml` 移除 PR 触发**（`.github/workflows/test-v7.yml` 修改，`test-v8.yml` / `test-v9.yml` 新增）。
   - `test-v8.yml` 以 test-v7 为基线新增 Dex2C（dcc）加固步骤；`test-v9.yml` 在 test-v8 基础上再叠 VMP（XopProtector）步骤。两步均取自 release.yml，保持「Dex2C 必须在 VMP 之前」的顺序硬约束（VMP 会删掉 classes*.dex，先跑会让 dcc 无 dex 可转而静默不加固）。
   - 触发器分工：test-v7 / test-v8 只服务 main（push + workflow_dispatch）；PR 阶段检查收敛到 test-v9（push + pull_request + workflow_dispatch）。
