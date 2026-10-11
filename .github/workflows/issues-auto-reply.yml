@@ -715,19 +715,20 @@ jobs:
                     printf '\n==== 提交者上传的附件: %s (%s bytes) ====\n' "$fname" "$bytes"
                     # L3: head -c 按字节截断可能撕裂多字节 UTF-8 字符（中文等），
                     # 用 python 在 UTF-8 边界处截断，避免结尾乱码。
+                    # 代码体顶格（相对 run 块基础缩进），理由同下方归一化步骤。
                     head -c "$shown" "$dest" | python3 -c '
-                    import sys
-                    b = sys.stdin.buffer.read()
-                    i = len(b)
-                    while i > 0 and (b[i-1] & 0xC0) == 0x80:
-                        i -= 1
-                    if i > 0:
-                        lead = b[i-1]
-                        need = 4 if 0xF0 <= lead <= 0xF7 else 3 if 0xE0 <= lead <= 0xEF else 2 if 0xC0 <= lead <= 0xDF else 0
-                        if need and (len(b) - (i-1)) < need:
-                            i -= 1
-                    sys.stdout.buffer.write(b[:i])
-                    '
+          import sys
+          b = sys.stdin.buffer.read()
+          i = len(b)
+          while i > 0 and (b[i-1] & 0xC0) == 0x80:
+              i -= 1
+          if i > 0:
+              lead = b[i-1]
+              need = 4 if 0xF0 <= lead <= 0xF7 else 3 if 0xE0 <= lead <= 0xEF else 2 if 0xC0 <= lead <= 0xDF else 0
+              if need and (len(b) - (i-1)) < need:
+                  i -= 1
+          sys.stdout.buffer.write(b[:i])
+          '
                     echo
                   } >> "$OUT"
                 else
@@ -897,14 +898,18 @@ jobs:
             # prompt 层约束不可靠，出口再做一次机械归一化，保证对外文案只有
             # 一种写法。匹配全部大小写变体，但跳过包名语境（前后紧邻点的
             # 形式，如 xxx.somcp.yyy），否则会把包名一起改掉。
+            # 代码体必须顶格写（这里相对 run 块基础缩进 10 空格，YAML 剥离后
+            # Python 收到的就是 0 缩进）。此前与 run 块内其他行一样缩进 12 格，
+            # YAML 只剥基础缩进，python -c 的第二行 "import re" 带前导空格，
+            # 直接 IndentationError: unexpected indent，回复生成后死在归一化。
             python3 -c '
-            import re
-            p = "/tmp/llm-reply.txt"
-            s = open(p, encoding="utf-8").read()
-            # 负向前后顾：前一个字符或后一个字符是 "." 时视为标识符内部，跳过。
-            out = re.sub(r"(?<![.\w])[sS][oO][mM][cC][pP](?![.\w])", "SOMCP", s)
-            open(p, "w", encoding="utf-8").write(out)
-            '
+          import re
+          p = "/tmp/llm-reply.txt"
+          s = open(p, encoding="utf-8").read()
+          # 负向前后顾：前一个字符或后一个字符是 "." 时视为标识符内部，跳过。
+          out = re.sub(r"(?<![.\w])[sS][oO][mM][cC][pP](?![.\w])", "SOMCP", s)
+          open(p, "w", encoding="utf-8").write(out)
+          '
             # 记录回答时间（固定使用北京时间，UTC+8）并追加到回复末尾
             printf '\n\n---\n**回答时间：%s（北京时间）**\n' "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')" >> /tmp/llm-reply.txt
             echo "skip=false" >> "$GITHUB_OUTPUT"
