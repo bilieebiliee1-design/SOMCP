@@ -219,7 +219,11 @@ object NativeProbe {
      *         the check fails or no pinned digest is configured
      */
     fun matches(context: Context): Boolean {
-        val expected = nativeGetPinnedFingerprint().let { normalizeFingerprint(it) }
+        // pinnedFingerprint() (not the raw JNI call): it guards on `loaded`
+        // and catches UnsatisfiedLinkError, so a failed librz_native load
+        // degrades to "no pin configured" instead of crashing the caller
+        // (Application.onCreate) — matches matchesV234() below.
+        val expected = pinnedFingerprint().let { normalizeFingerprint(it) }
         if (expected.isBlank()) {
             AppLog.i("NativeProbe: no pinned identity configured, skipping native probe")
             return true // no pin configured, skip
