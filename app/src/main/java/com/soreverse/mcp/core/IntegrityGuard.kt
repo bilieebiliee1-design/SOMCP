@@ -402,6 +402,7 @@ object IntegrityGuard {
         applicationClassThreat(context)?.let { threats += it }
         lspatchClassLoaderThreat(context)?.let { threats += it }
         lspatchMetaDataThreat(context)?.let { threats += it }
+        hookStackThreat()?.let { threats += it }
         AppListGuard.threats(context).forEach { threats += it }
         val maps = procMapsIndicators()
         if (maps.isNotEmpty()) threats += maps
@@ -537,6 +538,40 @@ object IntegrityGuard {
         }
     }.getOrNull()
 
+    /**
+     * In-process Xposed-family injection detection. A DEX dump tool reaches
+     * this app by loading its module code into our own process (classic
+     * Xposed / libxposed module loaders), after which it can walk the
+     * runtime's DexFile cookies and write our DEX out of memory. Module code
+     * only ever executes on our threads when we are actually hooked, so
+     * sampling every live thread's stack for foreign hook packages is direct
+     * evidence of an injection - independent of how the module's dex was
+     * mapped into memory (an anonymous InMemoryDexClassLoader leaves no file
+     * path for the maps probe to see).
+     *
+     * Prefixes, not substrings: each entry is the package prefix of a known
+     * in-process hook API surface, so ordinary application frames can never
+     * match. The reported threat names only the matched prefix family, never
+     * an attacker-chosen class name.
+     */
+    internal fun hookFrameThreat(frameClassNames: List<String>): String? {
+        val prefixes = listOf(
+            "de.robv.android.xposed.",
+            "io.github.libxposed.",
+            "com.flass.layoutinspect."
+        )
+        val hit = prefixes.firstOrNull { prefix ->
+            frameClassNames.any { it.startsWith(prefix) }
+        } ?: return null
+        return "in-process hook frames from $hit"
+    }
+
+    private fun hookStackThreat(): String? = runCatching {
+        val frames = Thread.getAllStackTraces().values
+            .flatMap { stack -> stack.map { it.className } }
+        hookFrameThreat(frames)
+    }.getOrNull()
+
     private fun tracerPid(): Int = runCatching {
         File("/proc/self/status").useLines { lines ->
             lines.firstOrNull { it.startsWith("TracerPid:") }
@@ -573,7 +608,13 @@ object IntegrityGuard {
                 "lspd",
                 marked("64652e726f6276"),
                 "loader.dex",
-                "origin.apk"
+                "origin.apk",
+                // Layout Inspect (com.flass.layoutinspect): an LSPosed/Xposed
+                // module whose native dump engine (libflass*.so) walks DexFile
+                // cookies inside the hooked process to write our DEX out of
+                // memory. Both its native libs and its module APK path carry
+                // the "flass" token when it is injected into this process.
+                "flass"
             )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
