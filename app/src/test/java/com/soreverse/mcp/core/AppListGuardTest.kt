@@ -89,4 +89,36 @@ class AppListGuardTest {
         val hits = AppListGuard.matchThreats(listOf(candidate("com.qingfeng.app", "清风")))
         assertEquals(1, hits.size)
     }
+
+    @Test
+    fun suppressedInstalledListIsReportedAsAThreat() {
+        // An app-hiding tool that rejects the app list request leaves the scan
+        // with an empty (or thrown) primary channel; the gate must fail closed
+        // so the coexistence dialog still appears instead of silently passing.
+        val threat = AppListGuard.suppressedListThreat(installedListSuppressed = true, candidateCount = 0)
+        assertTrue(threat!!.contains("suppressed"))
+    }
+
+    @Test
+    fun suppressedPrimaryChannelIsAThreatEvenWhenLauncherFallbackFillsCandidates() {
+        // A launcher-resolvable fallback does not launder a suppressed primary
+        // channel: getInstalledApplications returning empty while launcher
+        // queries succeed is itself the hiding signature.
+        val threat = AppListGuard.suppressedListThreat(installedListSuppressed = true, candidateCount = 512)
+        assertTrue(threat!!.contains("suppressed"))
+    }
+
+    @Test
+    fun unsuppressedListDoesNotThreat() {
+        assertTrue(AppListGuard.suppressedListThreat(installedListSuppressed = false, candidateCount = 300) == null)
+    }
+
+    @Test
+    fun suppressedThreatNamesOnlyCountsNotPackageData() {
+        // The threat line reaches the dialog verbatim; it must not echo scan
+        // internals beyond the visible-entry count.
+        val threat = AppListGuard.suppressedListThreat(installedListSuppressed = true, candidateCount = 3)
+        assertFalse(threat!!.contains("com.qingfeng"))
+        assertFalse(threat.contains("metk.hub"))
+    }
 }
