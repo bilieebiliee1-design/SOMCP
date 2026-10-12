@@ -551,8 +551,6 @@ object IntegrityGuard {
             listOf(
                 "frida",
                 "gum-js-loop",
-                "gadget",
-                "lsposed",
                 "edxp",
                 "zygisk",
                 "substrate",
