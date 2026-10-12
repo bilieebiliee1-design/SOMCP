@@ -137,7 +137,7 @@ object AppListGuard {
                         } else {
                             "package visibility probe failed for $pkg (${error.javaClass.simpleName})"
                         }
-                    },
+                    }
                 )
         }
     }
@@ -180,12 +180,11 @@ object AppListGuard {
     }
 
     /** Pure decision, split out so the fail-closed wording is unit-testable off-device. */
-    internal fun suppressedListThreat(installedListSuppressed: Boolean, candidateCount: Int): String? =
-        if (installedListSuppressed) {
-            "installed-app list is suppressed or rejected (visible entries: $candidateCount)"
-        } else {
-            null
-        }
+    internal fun suppressedListThreat(installedListSuppressed: Boolean, candidateCount: Int): String? = if (installedListSuppressed) {
+        "installed-app list is suppressed or rejected (visible entries: $candidateCount)"
+    } else {
+        null
+    }
 
     internal fun matchThreats(candidates: List<Candidate>): List<String> {
         val hits = linkedSetOf<String>()
