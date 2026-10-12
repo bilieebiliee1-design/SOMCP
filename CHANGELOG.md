@@ -29,6 +29,7 @@
   - **加法位移的并列是真实存在的，故按并列报告而非硬选一个。** 纯字母字面量的多个位移 textual ratio 同为 1.000（实测 6 个并列），正确答案在候选中但排序不决定性，故断言「正确明文在候选内」+「confidence 为 low」+「并列数 > 1」，而不是断言它排第一——后者会把一次抛硬币写成测试。
   - **不覆盖** AES/DES/ChaCha 与运行时派生密钥（密钥无法从密文反推），多字节 XOR/RC4 不做密钥搜索（密钥空间无界）。可靠路线是 `dynamic_api` / `unidbg_api` 直接从内存读明文，已写入 `capabilities.nextStep`。
   - 纯字节运算，不执行目标文件。
+- **修复 AI 深度分析每次必打的日志误报 `Deep analysis: tool not in catalog: list_sos`（issue #156）**（`core/DeepAnalysisService.kt` +0/−1）。`DEEP_TOOL_NAMES` 里写了 `list_sos`，但工具目录里从未注册过这个名字——列出可用 SO 的能力一直由 `so_open(action=list)` 承担，其描述也写明了这一点。`buildRikkaTools()` 按 `ToolCatalog.byName` 逐个解析工具名时，`list_sos` 必然落入 `unresolved` 并打印 warning，用户据此误判「扫描 SO 异常」；实际 SO 扫描全程正常（issue 日志里 `Scanned 2 SO entries` 正常完成），只是 AI 侧工具清单里挂着一个从未存在的名字。修复即从列表删除该名字，不新增 `list_sos` 别名工具——`so_open` 已覆盖该能力，多一个别名只会给提示词增加歧义。该日志在构建工具集时产生，与 AI 模型行为无关（此前 issue 自动回复把它归因于「模型用了错误工具名」不准确）。
 - **CI 修正（第二轮）：`Unit tests` 的 `compileDebugUnitTestKotlin` 编译失败**（`app/src/test/java/com/soreverse/mcp/engine/StringDecryptorTest.kt` +2/−2、`app/src/test/java/com/soreverse/mcp/engine/OllvmDeflattenerTest.kt` +11/−5）。
   - **`Byte` 没有 `.code` 属性**：两处写成 `key[it % key.size].code`，而 `key` 是 `ByteArray`，索引结果是 `Byte`。`.code` 是 `Char` 的属性，故「自带多字节密钥」的两个用例编译不过。改为 `.toInt()`（与 `StringDecryptor` 内部 `xor` 的取字节方式一致）。
   - **`flattened` 夹具只有 5 块，低于检测器自带的 6 块下限。** `dispatchers()` 与 `findDispatchers()` 都在 `blocks.size < 6` 时直接返回空集，于是 `rebuild` 走 `not_flattened` 早返回分支，**根本不产出** `dispatcherAddrs` / `dispatchTargets` / `limitations` / `edges`——5 个用例会因取不到字段而失败（不是断言不成立，是字段不存在）。补一块真实块 `0x90`；该下限是既有代码，本次未改动。
