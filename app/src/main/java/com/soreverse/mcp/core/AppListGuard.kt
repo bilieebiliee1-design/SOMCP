@@ -20,6 +20,7 @@ package com.soreverse.mcp.core
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import java.nio.charset.StandardCharsets
 
 /**
@@ -53,6 +54,20 @@ import java.nio.charset.StandardCharsets
  * signature, so this is a coexistence gate, not tamper evidence. The
  * filesystem-level checks in NativeProbe stay authoritative for whether the
  * running package is genuine.
+ *
+ * App-hiding tools (Zygisk app-list hiders and their "reject the app list
+ * request" mode) suppress exactly these channels: they trim entries from
+ * getInstalledApplications, answer getPackageInfo with a spoofed
+ * NameNotFoundException, or reject the whole list call. Reading those answers
+ * at face value would let a device that hides the pinned identities pass this
+ * gate silently - the coexistence dialog would then never appear even though
+ * a derivative build is installed. The gate therefore fails closed on signals
+ * that cannot occur on a genuine, unobstructed device: a list call that throws
+ * or returns an empty table (impossible outside suppression), and a
+ * getPackageInfo failure that is anything other than the honest
+ * NameNotFoundException. Those outcomes are reported as threats through the
+ * same [threats] entry, so the integrity dialog surfaces the suppression
+ * instead of silently passing it.
  */
 object AppListGuard {
     /** An installed app as the matcher sees it. Plain data so matching runs in JVM tests. */
@@ -105,18 +120,41 @@ object AppListGuard {
      */
     internal fun pinnedPackageThreats(context: Context): List<String> {
         val pm = context.packageManager
-        return pinnedPackages
-            .filter { runCatching { pm.getPackageInfo(it, 0) }.isSuccess }
-            .map { "derivative build of this app installed: $it" }
+        return pinnedPackages.mapNotNull { pkg ->
+            runCatching { pm.getPackageInfo(pkg, 0) }
+                .fold(
+                    onSuccess = { "derivative build of this app installed: $pkg" },
+                    onFailure = { error ->
+                        // NameNotFoundException is the system's honest "not
+                        // installed". Anything else means the lookup itself was
+                        // intercepted or the binder call died - exactly what an
+                        // app-hiding tool does to keep a hidden package from
+                        // being resolved. Fail closed: report the blocked probe
+                        // as a threat instead of reading it as absence, so the
+                        // gate dialog still surfaces.
+                        if (error is PackageManager.NameNotFoundException) {
+                            null
+                        } else {
+                            "package visibility probe failed for $pkg (${error.javaClass.simpleName})"
+                        }
+                    }
+                )
+        }
     }
 
+    /** An app-list read together with whether the primary list channel looked suppressed. */
+    data class ScanOutcome(val candidates: List<Candidate>, val installedListSuppressed: Boolean)
+
     /** Full installed-app snapshot, read through two independent PM channels. */
-    internal fun scan(context: Context): List<Candidate> {
+    internal fun scanOutcome(context: Context): ScanOutcome {
         val pm = context.packageManager
         val apps = linkedMapOf<String, ApplicationInfo>()
-        runCatching { pm.getInstalledApplications(0) }
-            .getOrDefault(emptyList())
-            .forEach { apps.retainFirst(it.packageName, it) }
+        // getInstalledApplications is the primary channel. A thrown or empty
+        // answer is not evidence of absence: app-hiding tools suppress exactly
+        // this call. Record the anomaly so the caller can fail closed instead
+        // of reading the suppressed list as a clean device.
+        val installed = runCatching { pm.getInstalledApplications(0) }
+        installed.getOrDefault(emptyList()).forEach { apps.retainFirst(it.packageName, it) }
         // Intent resolution filters the visible set along a different path than
         // getInstalledApplications, so a hook that trims one list still leaves
         // the other populated.
@@ -127,12 +165,25 @@ object AppListGuard {
             .forEach { info ->
                 info.activityInfo?.applicationInfo?.let { apps.retainFirst(it.packageName, it) }
             }
-        return apps.values.map { info ->
+        val candidates = apps.values.map { info ->
             Candidate(
                 packageName = info.packageName,
                 label = runCatching { pm.getApplicationLabel(info).toString() }.getOrDefault("")
             )
         }
+        // A thrown call, or an empty primary table, cannot happen legitimately:
+        // every real device ships system apps, with or without QUERY_ALL_PACKAGES.
+        // The launcher fallback still contributes candidates, but it does not
+        // launder a suppressed primary channel.
+        val suppressed = installed.isFailure || installed.getOrDefault(emptyList()).isEmpty()
+        return ScanOutcome(candidates, suppressed)
+    }
+
+    /** Pure decision, split out so the fail-closed wording is unit-testable off-device. */
+    internal fun suppressedListThreat(installedListSuppressed: Boolean, candidateCount: Int): String? = if (installedListSuppressed) {
+        "installed-app list is suppressed or rejected (visible entries: $candidateCount)"
+    } else {
+        null
     }
 
     internal fun matchThreats(candidates: List<Candidate>): List<String> {
@@ -166,9 +217,16 @@ object AppListGuard {
             scanning = true
         }
         Thread {
-            val threats = runCatching { matchThreats(scan(context)) }
+            val outcome = runCatching { scanOutcome(context) }
                 .onFailure { AppLog.w("AppListGuard scan failed: ${it.javaClass.simpleName}: ${it.message}") }
-                .getOrDefault(snapshot)
+                .getOrNull()
+            val threats = if (outcome == null) {
+                snapshot
+            } else {
+                matchThreats(outcome.candidates) + listOfNotNull(
+                    suppressedListThreat(outcome.installedListSuppressed, outcome.candidates.size)
+                )
+            }
             snapshot = threats
             synchronized(refreshLock) { scanning = false }
         }.apply {
