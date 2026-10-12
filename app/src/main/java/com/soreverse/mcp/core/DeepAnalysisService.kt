@@ -369,7 +369,6 @@ Only after gathering the necessary evidence, return the final Markdown report. D
             "search_bytes",
             "read_disasm",
             "read_hexdump",
-            "list_sos",
             "meta_info"
         )
         val REQUIRED_EVIDENCE_TOOLS = listOf(
