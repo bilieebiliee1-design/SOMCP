@@ -549,10 +549,7 @@ object IntegrityGuard {
     private fun procMapsIndicators(): List<String> = runCatching {
         val needles =
             listOf(
-                "frida",
                 "gum-js-loop",
-                "gadget",
-                "lsposed",
                 "edxp",
                 "zygisk",
                 "substrate",
