@@ -107,4 +107,66 @@ class IntegrityGuardThreatTest {
             )
         )
     }
+
+    /**
+     * The DEX-dump vector (Layout Inspect and any classic Xposed / libxposed
+     * module) runs module code on OUR threads. Frames from those packages are
+     * therefore direct in-process injection evidence; each known hook API
+     * surface must be caught by its package prefix.
+     */
+    @Test
+    fun moduleHookFramesAreAThreat() {
+        // Classic Xposed callback bridge firing inside our process, sandwiched
+        // between ordinary application frames.
+        assertNotNull(
+            IntegrityGuard.hookFrameThreat(
+                listOf(
+                    "android.app.ActivityThread",
+                    "de.robv.android.xposed.XposedBridge",
+                    "com.soreverse.mcp.MainActivity"
+                )
+            )
+        )
+        // libxposed API module code running in-process.
+        assertNotNull(
+            IntegrityGuard.hookFrameThreat(listOf("io.github.libxposed.api.XposedModule"))
+        )
+        // Layout Inspect's own hook entry class.
+        assertNotNull(
+            IntegrityGuard.hookFrameThreat(listOf("com.flass.layoutinspect.hook.Hook"))
+        )
+    }
+
+    @Test
+    fun ordinaryApplicationFramesAreNotHookThreats() {
+        assertNull(
+            IntegrityGuard.hookFrameThreat(
+                listOf(
+                    "com.soreverse.mcp.core.IntegrityGuard",
+                    "androidx.core.app.CoreComponentFactory",
+                    "android.app.Application",
+                    "kotlin.concurrent.ThreadKt"
+                )
+            )
+        )
+        assertNull(IntegrityGuard.hookFrameThreat(emptyList()))
+    }
+
+    /**
+     * A lookalike package that merely contains a needle as a substring (no
+     * package-prefix boundary) must not trip the hook-frame check, mirroring
+     * the exact-match discipline of the factory allowlist above.
+     */
+    @Test
+    fun hookFrameMatchRequiresPackagePrefixBoundary() {
+        assertNull(
+            IntegrityGuard.hookFrameThreat(
+                listOf("com.soreverse.mcp.de.robv.android.xposed.Fake")
+            )
+        )
+        // But the genuine package followed by any class still matches.
+        assertNotNull(
+            IntegrityGuard.hookFrameThreat(listOf("de.robv.android.xposed.XC_MethodHook"))
+        )
+    }
 }
