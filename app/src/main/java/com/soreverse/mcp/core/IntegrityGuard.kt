@@ -404,8 +404,6 @@ object IntegrityGuard {
         AppListGuard.threats(context).forEach { threats += it }
         val maps = procMapsIndicators()
         if (maps.isNotEmpty()) threats += maps
-        val ports = openLocalInstrumentationPorts()
-        if (ports.isNotEmpty()) threats += ports.map { "instrumentation port open: $it" }
         return threats.toList()
     }
 
