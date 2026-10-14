@@ -25,8 +25,6 @@ import android.os.Debug
 import android.os.Process
 import com.soreverse.mcp.nativecore.NativeProbe
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.security.MessageDigest
 import kotlin.random.Random
 import kotlin.system.exitProcess
@@ -634,18 +632,6 @@ object IntegrityGuard {
      * literal pool avoids leaving their plain text in the compiled artifacts.
      */
     private fun marked(hex: String): String = hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
-
-    private fun openLocalInstrumentationPorts(): List<Int> {
-        val ports = listOf(27042, 27043)
-        return ports.filter { port ->
-            runCatching {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress("127.0.0.1", port), 80)
-                    true
-                }
-            }.getOrDefault(false)
-        }
-    }
 
     private fun packageInfo(context: Context): PackageInfo {
         val pm = context.packageManager
