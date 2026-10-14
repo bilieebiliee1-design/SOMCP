@@ -502,6 +502,63 @@ jobs:
             }
           done
 
+          # R8 renames every non-kept class, so literal source-name prefixes
+          # cannot address the shipped dex. Independently verified against the
+          # restored 1.0.22 dex: of ~6900 business classes only 25 still live
+          # under Lcom/soreverse/mcp/ (keep rules + manifest components); the
+          # rest moved to short obfuscated roots (a00, dk1, n90, ...). Both
+          # --true-vmp-prefix entries for IntegrityGuard/AppListGuard matched
+          # zero methods in that build, and code.bin carried only ~95 method
+          # bodies. Derive the real descriptors from the R8 mapping produced by
+          # this same build instead: every com.soreverse.mcp.* class becomes a
+          # --hollow-prefix, and the integrity guards additionally become
+          # --true-vmp-prefix targets.
+          MAPPING="$GITHUB_WORKSPACE/app/build/outputs/mapping/release/mapping.txt"
+          test -f "$MAPPING" || {
+            echo "::error::R8 mapping.txt not found at $MAPPING; release minify must stay enabled"
+            exit 1
+          }
+          cat > "$WORK/mapprefix.py" <<'PY'
+          import os, re, sys
+          mapping_path, out_dir = sys.argv[1], sys.argv[2]
+          renamed = {}
+          with open(mapping_path, encoding="utf-8") as fp:
+              for line in fp:
+                  m = re.match(r"^(\S+) -> (\S+):$", line)
+                  if not m:
+                      continue
+                  orig, new = m.groups()
+                  if orig.startswith("com.soreverse.mcp."):
+                      renamed[orig] = "L" + new.replace(".", "/") + ";"
+          if len(renamed) < 500:
+              sys.exit("::error::only %d com.soreverse.mcp.* entries parsed from mapping.txt;"
+                       " obfuscation or mapping format drifted" % len(renamed))
+          guards = [
+              "com.soreverse.mcp.core.IntegrityGuard",
+              "com.soreverse.mcp.core.AppListGuard",
+              "com.soreverse.mcp.core.SelfArtifactGuard",
+          ]
+          missing = [g for g in guards if g not in renamed]
+          if missing:
+              sys.exit("::error::integrity guard classes absent from mapping.txt (R8 stripped?): "
+                       + ", ".join(missing))
+          with open(os.path.join(out_dir, "hollow_prefixes.txt"), "w",
+                    encoding="utf-8", newline="\n") as fp:
+              for desc in sorted(renamed.values()):
+                  fp.write(desc + "\n")
+          with open(os.path.join(out_dir, "vmp_prefixes.txt"), "w",
+                    encoding="utf-8", newline="\n") as fp:
+              for g in guards:
+                  fp.write(renamed[g] + "\n")
+          print("mapping-derived prefixes: %d hollow classes, true-vmp %s"
+                % (len(renamed), " ".join(renamed[g] for g in guards)))
+          PY
+          python3 "$WORK/mapprefix.py" "$MAPPING" "$WORK"
+          HOLLOW_ARGS=()
+          while IFS= read -r p; do HOLLOW_ARGS+=(--hollow-prefix "$p"); done < "$WORK/hollow_prefixes.txt"
+          VMP_ARGS=()
+          while IFS= read -r p; do VMP_ARGS+=(--true-vmp-prefix "$p"); done < "$WORK/vmp_prefixes.txt"
+
           cat > "$WORK/abilist.py" <<'PY'
           import sys, zipfile
           with zipfile.ZipFile(sys.argv[1]) as z:
@@ -558,6 +615,15 @@ jobs:
             # hollowing a component body to a stub raises VerifyError on
             # Android 14+.
             #
+            # The literal prefix only reaches classes that survive R8 with their
+            # names (kept classes + manifest components). "${HOLLOW_ARGS[@]}"
+            # carries the mapping-derived descriptors for every renamed
+            # com.soreverse.mcp.* class, and "${VMP_ARGS[@]}" the renamed
+            # integrity-guard classes for TRUE_VMP. BackupCrypto is keep-ruled
+            # and stays addressable by its literal name. Rough volume: ~6800
+            # classes / ~32k methods, well under the 65535 per-dex record cap
+            # of the code.bin container format.
+            #
             # --no-protect-so: RC4-encrypting .text would fight this app's own
             # integrity checks (native_probe.cpp verifies its shipped payload)
             # and force dlopen interception for four ABIs' worth of Rizin/LIEF
@@ -571,15 +637,15 @@ jobs:
               --profile balanced \
               --hollow-prefix 'Lcom/soreverse/mcp/' \
               --true-vmp-prefix 'Lcom/soreverse/mcp/core/BackupCrypto;' \
-              --true-vmp-prefix 'Lcom/soreverse/mcp/core/IntegrityGuard;' \
-              --true-vmp-prefix 'Lcom/soreverse/mcp/core/AppListGuard;' \
+              "${HOLLOW_ARGS[@]}" \
+              "${VMP_ARGS[@]}" \
               --no-protect-so \
               --no-encrypt-assets \
               --no-res-protect \
               --keystore "$STORE_FILE" \
               --alias "$KEY_ALIAS" \
               --storepass "$STORE_PASSWORD" \
-              --keypass "$KEY_PASSWORD"
+              --keypass "$KEY_PASSWORD" | tee "$WORK/vmp-$base.log"
 
             test -f "$out" || {
               echo "::error::VMP produced no output APK for $base"
@@ -588,8 +654,17 @@ jobs:
 
             # The engine must have actually virtualized something, otherwise
             # the APK is only encrypted and the release note would overstate it.
-            # The packer prints an admission line; grep it rather than trusting
-            # a silent zero-method run.
+            # Successful PVM2 compilations print "TRUE_VMP <descriptor>->..."
+            # while failures print "TRUE_VMP skip ...", so the count is anchored
+            # on the descriptor's leading "L". Zero admissions means every
+            # guard method failed compilation and shipped as plain bytecode.
+            vmp_count="$(grep -c '^TRUE_VMP L' "$WORK/vmp-$base.log" || true)"
+            if [ "$vmp_count" -eq 0 ]; then
+              echo "::error::$base: no TRUE_VMP method admitted; virtualization silently degraded"
+              exit 1
+            fi
+            echo "[vmp] $base: $vmp_count TRUE_VMP method(s) admitted"
+
             # Derive the ABI list from the APK itself rather than assuming
             # arm64: the release publishes four single-ABI splits plus a
             # universal APK, and each split only carries its own lib/<abi>/.
