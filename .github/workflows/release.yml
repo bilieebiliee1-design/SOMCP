@@ -637,7 +637,22 @@ jobs:
           sys.exit(1 if missing else 0)
           PY
 
-          for apk in "$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*.apk; do
+          # ABI SCOPE (issues #161/#162): VMP hardening is applied to the
+          # arm64-v8a split ONLY. The shell's librtcore.so NULL-derefs inside
+          # its custom class loader on every x86_64 start
+          # (BootstrapComponentFactory.instantiateClassLoader -> SIGSEGV at
+          # 0x0 before any UI), so an x86/x86_64 or universal APK with the
+          # shell embedded cannot boot on the very emulators those artifacts
+          # exist for. On-device verification coverage is arm64 only; every
+          # other APK ships Dex2C-hardened without the VMP shell.
+          shopt -s nullglob
+          VMP_APKS=("$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*arm64-v8a-release.apk)
+          shopt -u nullglob
+          if [ "${#VMP_APKS[@]}" -eq 0 ]; then
+            echo "::error::no arm64-v8a release split found for VMP hardening"
+            exit 1
+          fi
+          for apk in "${VMP_APKS[@]}"; do
             base="$(basename "$apk")"
             out="$WORK/vmp/$base"
             mkdir -p "$WORK/vmp"
@@ -719,7 +734,7 @@ jobs:
             mv -f "$out" "$apk"
             echo "[vmp] $base virtualized, signed with the release key"
           done
-          echo "VMP hardening applied to every release APK."
+          echo "VMP hardening applied to the arm64-v8a release APK; other ABIs intentionally ship Dex2C-only (issues #161/#162)."
 
       - name: Verify and ensure v2/v3 APK signing
         env:
