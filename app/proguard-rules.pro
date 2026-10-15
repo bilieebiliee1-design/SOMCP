@@ -108,3 +108,22 @@
 -keep class com.soreverse.mcp.core.Provenance {
     *;
 }
+
+# The integrity guards must survive minification as addressable classes. With
+# no keep rule R8 is free to horizontally merge an object whose members are
+# all static into its call sites, which removes the class from both the dex
+# and mapping.txt - observed on real CI: IntegrityGuard absent from the R8
+# mapping while AppListGuard / SelfArtifactGuard (same package, same config)
+# were present, failing the guard-class assertion in the VMP workflow's
+# mapprefix.py. The VMP step derives --true-vmp-prefix for these classes from
+# mapping.txt, so a merged-away guard silently drops out of virtualization.
+# Same precedent as Provenance above: keep the objects wholesale.
+-keep class com.soreverse.mcp.core.IntegrityGuard {
+    *;
+}
+-keep class com.soreverse.mcp.core.AppListGuard {
+    *;
+}
+-keep class com.soreverse.mcp.core.SelfArtifactGuard {
+    *;
+}
