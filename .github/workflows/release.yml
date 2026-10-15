@@ -539,9 +539,12 @@ jobs:
 
           # R8 renames every non-kept class, so literal source-name prefixes
           # cannot address the shipped dex. Independently verified against the
-          # restored 1.0.22 dex: of ~6900 business classes only 25 still live
-          # under Lcom/soreverse/mcp/ (keep rules + manifest components); the
-          # rest moved to short obfuscated roots (a00, dk1, n90, ...). Both
+          # restored 1.0.22 dex: only 25 classes still live under
+          # Lcom/soreverse/mcp/ (keep rules + manifest components); the rest
+          # moved to short obfuscated roots (a00, dk1, n90, ...). Most renamed
+          # dex classes are R8-renamed library classes, not app classes — the
+          # app package itself is ~479 classes (real-CI mapping baseline, see
+          # the mapprefix.py guard). Both
           # --true-vmp-prefix entries for IntegrityGuard/AppListGuard matched
           # zero methods in that build, and code.bin carried only ~95 method
           # bodies. Derive the real descriptors from the R8 mapping produced by
@@ -565,7 +568,14 @@ jobs:
                   orig, new = m.groups()
                   if orig.startswith("com.soreverse.mcp."):
                       renamed[orig] = "L" + new.replace(".", "/") + ";"
-          if len(renamed) < 500:
+          # Floor calibrated on real CI runs (2026-10-14: 479 entries on
+          # ed32f92 / cebfd86 / PR #163 alike — the earlier ~6800 estimate
+          # misattributed R8-renamed library classes to the app package). The
+          # floor exists to catch parse breakage (would parse 0) or a mass
+          # loss of mapped app classes, not to pin an exact count; 300 keeps
+          # >35% headroom below the observed baseline. Guard-class presence
+          # is asserted separately below.
+          if len(renamed) < 300:
               sys.exit("::error::only %d com.soreverse.mcp.* entries parsed from mapping.txt;"
                        " obfuscation or mapping format drifted" % len(renamed))
           guards = [
@@ -637,22 +647,13 @@ jobs:
           sys.exit(1 if missing else 0)
           PY
 
-          # ABI SCOPE (issues #161/#162): VMP hardening is applied to the
-          # arm64-v8a split ONLY. The shell's librtcore.so NULL-derefs inside
-          # its custom class loader on every x86_64 start
-          # (BootstrapComponentFactory.instantiateClassLoader -> SIGSEGV at
-          # 0x0 before any UI), so an x86/x86_64 or universal APK with the
-          # shell embedded cannot boot on the very emulators those artifacts
-          # exist for. On-device verification coverage is arm64 only; every
-          # other APK ships Dex2C-hardened without the VMP shell.
-          shopt -s nullglob
-          VMP_APKS=("$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*arm64-v8a-release.apk)
-          shopt -u nullglob
-          if [ "${#VMP_APKS[@]}" -eq 0 ]; then
-            echo "::error::no arm64-v8a release split found for VMP hardening"
-            exit 1
-          fi
-          for apk in "${VMP_APKS[@]}"; do
+          # VMP hardening applies to ALL release APKs (splits + universal).
+          # issues #161/#162 reported librtcore.so SIGSEGV inside
+          # instantiateClassLoader on one MuMu 5.24.3 x86_64 environment, but
+          # first-hand testing shows shelled packages boot normally on
+          # emulators; treat the crash as environment-specific and keep
+          # full-ABI shell coverage.
+          for apk in "$GITHUB_WORKSPACE"/app/build/outputs/apk/release/*.apk; do
             base="$(basename "$apk")"
             out="$WORK/vmp/$base"
             mkdir -p "$WORK/vmp"
@@ -670,9 +671,9 @@ jobs:
             # carries the mapping-derived descriptors for every renamed
             # com.soreverse.mcp.* class, and "${VMP_ARGS[@]}" the renamed
             # integrity-guard classes for TRUE_VMP. BackupCrypto is keep-ruled
-            # and stays addressable by its literal name. Rough volume: ~6800
-            # classes / ~32k methods, well under the 65535 per-dex record cap
-            # of the code.bin container format.
+            # and stays addressable by its literal name. Real volume: 479
+            # hollow classes (2026-10-14 CI baseline), far under the 65535
+            # per-dex record cap of the code.bin container format.
             #
             # --no-protect-so: RC4-encrypting .text would fight this app's own
             # integrity checks (native_probe.cpp verifies its shipped payload)
@@ -734,7 +735,7 @@ jobs:
             mv -f "$out" "$apk"
             echo "[vmp] $base virtualized, signed with the release key"
           done
-          echo "VMP hardening applied to the arm64-v8a release APK; other ABIs intentionally ship Dex2C-only (issues #161/#162)."
+          echo "VMP hardening applied to every release APK."
 
       - name: Verify and ensure v2/v3 APK signing
         env:
