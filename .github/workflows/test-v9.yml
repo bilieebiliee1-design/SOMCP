@@ -504,9 +504,12 @@ jobs:
 
           # R8 renames every non-kept class, so literal source-name prefixes
           # cannot address the shipped dex. Independently verified against the
-          # restored 1.0.22 dex: of ~6900 business classes only 25 still live
-          # under Lcom/soreverse/mcp/ (keep rules + manifest components); the
-          # rest moved to short obfuscated roots (a00, dk1, n90, ...). Both
+          # restored 1.0.22 dex: only 25 classes still live under
+          # Lcom/soreverse/mcp/ (keep rules + manifest components); the rest
+          # moved to short obfuscated roots (a00, dk1, n90, ...). Most renamed
+          # dex classes are R8-renamed library classes, not app classes — the
+          # app package itself is ~479 classes (real-CI mapping baseline, see
+          # the mapprefix.py guard). Both
           # --true-vmp-prefix entries for IntegrityGuard/AppListGuard matched
           # zero methods in that build, and code.bin carried only ~95 method
           # bodies. Derive the real descriptors from the R8 mapping produced by
@@ -530,7 +533,14 @@ jobs:
                   orig, new = m.groups()
                   if orig.startswith("com.soreverse.mcp."):
                       renamed[orig] = "L" + new.replace(".", "/") + ";"
-          if len(renamed) < 500:
+          # Floor calibrated on real CI runs (2026-10-14: 479 entries on
+          # ed32f92 / cebfd86 / PR #163 alike — the earlier ~6800 estimate
+          # misattributed R8-renamed library classes to the app package). The
+          # floor exists to catch parse breakage (would parse 0) or a mass
+          # loss of mapped app classes, not to pin an exact count; 300 keeps
+          # >35% headroom below the observed baseline. Guard-class presence
+          # is asserted separately below.
+          if len(renamed) < 300:
               sys.exit("::error::only %d com.soreverse.mcp.* entries parsed from mapping.txt;"
                        " obfuscation or mapping format drifted" % len(renamed))
           guards = [
@@ -620,9 +630,9 @@ jobs:
             # carries the mapping-derived descriptors for every renamed
             # com.soreverse.mcp.* class, and "${VMP_ARGS[@]}" the renamed
             # integrity-guard classes for TRUE_VMP. BackupCrypto is keep-ruled
-            # and stays addressable by its literal name. Rough volume: ~6800
-            # classes / ~32k methods, well under the 65535 per-dex record cap
-            # of the code.bin container format.
+            # and stays addressable by its literal name. Real volume: 479
+            # hollow classes (2026-10-14 CI baseline), far under the 65535
+            # per-dex record cap of the code.bin container format.
             #
             # --no-protect-so: RC4-encrypting .text would fight this app's own
             # integrity checks (native_probe.cpp verifies its shipped payload)
