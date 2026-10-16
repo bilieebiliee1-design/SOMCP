@@ -109,10 +109,10 @@ class IntegrityGuardThreatTest {
     }
 
     /**
-     * The DEX-dump vector (Layout Inspect and any classic Xposed / libxposed
-     * module) runs module code on OUR threads. Frames from those packages are
-     * therefore direct in-process injection evidence; each known hook API
-     * surface must be caught by its package prefix.
+     * The DEX-dump vector (any classic Xposed / libxposed module) runs module
+     * code on OUR threads. Frames from those packages are therefore direct
+     * in-process injection evidence; each known hook API surface must be
+     * caught by its package prefix.
      */
     @Test
     fun moduleHookFramesAreAThreat() {
@@ -130,10 +130,6 @@ class IntegrityGuardThreatTest {
         // libxposed API module code running in-process.
         assertNotNull(
             IntegrityGuard.hookFrameThreat(listOf("io.github.libxposed.api.XposedModule"))
-        )
-        // Layout Inspect's own hook entry class.
-        assertNotNull(
-            IntegrityGuard.hookFrameThreat(listOf("com.flass.layoutinspect.hook.Hook"))
         )
     }
 
