@@ -169,4 +169,109 @@ class IntegrityGuardThreatTest {
             IntegrityGuard.hookFrameThreat(listOf("de.robv.android.xposed.XC_MethodHook"))
         )
     }
+
+    /**
+     * The ROM-level dumper (ArkOS-angler-8.1) patches the platform, not us:
+     * `dalvik.system.DexFile` gains the switch, `android.app.ActivityThread`
+     * gains the pipeline. Either half alone is decisive, because a stock
+     * platform declares neither.
+     */
+    @Test
+    fun fartDumpSwitchOnDexFileIsAThreat() {
+        assertNotNull(
+            IntegrityGuard.fartDumpThreat(
+                listOf("openDexFileNative", "setFartDumpEnabled", "isDexOptNeeded"),
+                emptyList()
+            )
+        )
+    }
+
+    @Test
+    fun fartDumpPipelineOnActivityThreadIsAThreat() {
+        assertNotNull(
+            IntegrityGuard.fartDumpThreat(
+                emptyList(),
+                listOf("currentActivityThread", "runFartDump", "performLaunchActivity")
+            )
+        )
+    }
+
+    /**
+     * The stock ActivityThread does have a dump surface - it backs `am dump`.
+     * None of those names may be mistaken for the injected pipeline, and an
+     * empty method list (reflection could not resolve the class) is not
+     * evidence of anything, so it must stay silent rather than fail closed on
+     * a lookup failure.
+     */
+    @Test
+    fun stockDumpSurfaceAndEmptyEvidenceAreNotThreats() {
+        assertNull(
+            IntegrityGuard.fartDumpThreat(
+                listOf(
+                    "openDexFileNative",
+                    "loadDex",
+                    "openInMemoryDexFile",
+                    "getDexFileOutputPaths",
+                    "isDexOptNeeded",
+                    "dumpDexFile"
+                ),
+                listOf(
+                    "currentActivityThread",
+                    "handleDumpActivity",
+                    "handleDumpProvider",
+                    "handleDumpService",
+                    "handleDumpHeap",
+                    "handleStopBinderTrackingAndDump",
+                    "dumpMemInfoTable",
+                    "nDumpGraphicsInfo",
+                    "performLaunchActivity"
+                )
+            )
+        )
+        assertNull(IntegrityGuard.fartDumpThreat(emptyList(), emptyList()))
+    }
+
+    /**
+     * Matching is by exact member name, not prefix: the injected names are
+     * fixed identifiers, so a near-miss (a hypothetical future
+     * `runFartDumpNow`, or a `setFartDumpEnabledX`) must not be reported as
+     * the thing that was verified.
+     */
+    @Test
+    fun fartDumpMatchIsExactNotPrefix() {
+        assertNull(
+            IntegrityGuard.fartDumpThreat(
+                listOf("setFartDumpEnabledX", "xsetFartDumpEnabled"),
+                listOf("runFartDumpNow", "notRunFartDump")
+            )
+        )
+    }
+
+    /**
+     * `Build.MODEL` on the analysed ROM is
+     * `Ark脱壳机(菜鸟八哥QQ2380494437)`; a version suffix or a changed QQ
+     * number must not turn the identity check off.
+     */
+    @Test
+    fun arkUnpackRomIdentityIsAThreat() {
+        assertNotNull(IntegrityGuard.arkUnpackRomThreat("Ark脱壳机(菜鸟八哥QQ2380494437)"))
+        assertNotNull(
+            IntegrityGuard.arkUnpackRomThreat(
+                "aosp_angler",
+                "aosp_angler-userdebug 8.1.0 OPM8.190105.002 Ark脱壳机 v2 test-keys"
+            )
+        )
+    }
+
+    @Test
+    fun ordinaryDeviceIdentityIsNotAThreat() {
+        assertNull(
+            IntegrityGuard.arkUnpackRomThreat(
+                "Pixel 7",
+                "aosp_angler-userdebug 8.1.0 OPM8.190105.002 eng.ubuntu.20260705.125925 test-keys",
+                "Android/aosp_angler/angler:8.1.0/OPM8.190105.002/ubuntu07051259:userdebug/test-keys"
+            )
+        )
+        assertNull(IntegrityGuard.arkUnpackRomThreat(null, null, null))
+    }
 }
