@@ -276,6 +276,16 @@ internal fun SettingsCreditsPage(t: UiText) {
                     "SigKill",
                     if (t.zh) "APK 签名校验绕过相关参考工具" else "APK signature-bypass related reference tool",
                     "https://github.com/xxxyanchenxxx/SigKill"
+                ),
+                CreditProject(
+                    "LSPatch",
+                    if (t.zh) "非 Root 环境的 Xposed 框架实现参考" else "Non-root Xposed framework reference",
+                    "https://github.com/LSPosed/LSPatch"
+                ),
+                CreditProject(
+                    "Layout Inspect",
+                    if (t.zh) "Xposed 布局检查模块参考" else "Xposed layout inspection module reference",
+                    "https://github.com/Xposed-Modules-Repo/com.flass.layoutinspect"
                 )
             )
         )
