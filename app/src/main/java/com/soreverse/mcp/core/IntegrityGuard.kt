@@ -45,6 +45,39 @@ object IntegrityGuard {
      */
     private const val ANDROIDX_COMPONENT_FACTORY = "androidx.core.app.CoreComponentFactory"
 
+    /**
+     * ROM-level DEX-dump switch injected into `dalvik.system.DexFile` by the
+     * FART-family platform patch (see [fartDumpThreat]). No stock platform
+     * declares it.
+     */
+    private const val FART_DEXFILE_SWITCH = "setFartDumpEnabled"
+
+    /**
+     * Method names the same patch injects into `android.app.ActivityThread`.
+     * Every entry carries the family's own "Fart" branding, so the stock
+     * ActivityThread dump surface - `handleDumpActivity`, `handleDumpProvider`,
+     * `handleDumpService`, `handleDumpHeap`, `handleStopBinderTrackingAndDump`,
+     * `dumpMemInfoTable`, `nDumpGraphicsInfo`, all real AOSP methods - can
+     * never match.
+     */
+    private val FART_ACTIVITYTHREAD_MARKERS = listOf(
+        "runFartDump",
+        "startFartDumpThreadIfNeeded",
+        "readFartDumpSwitches",
+        "getFartProcessDirectory"
+    )
+
+    /**
+     * The unpacking ROM's own brand. Its build.prop sets both
+     * `ro.product.model` and `ro.vendor.product.model` to
+     * `Ark脱壳机(菜鸟八哥QQ2380494437)`, so `Build.MODEL` carries this token
+     * verbatim. This is the ROM author's fixed branding rather than an
+     * attacker-chosen value, so - unlike [foreignFactoryThreat] - substring
+     * matching is the correct rule: a version suffix or a changed QQ number
+     * must not turn the check off.
+     */
+    private const val ARK_ROM_MODEL_TOKEN = "Ark脱壳机"
+
     @Volatile private var recheckStarted = false
 
     /** Failure recorded by [enforceEarly]; consumed (fail-closed) by [enforce]. */
@@ -398,9 +431,9 @@ object IntegrityGuard {
         creatorIntegrityThreat()?.let { threats += it }
         factoryHijackThreat(context)?.let { threats += it }
         applicationClassThreat(context)?.let { threats += it }
-        lspatchClassLoaderThreat(context)?.let { threats += it }
-        lspatchMetaDataThreat(context)?.let { threats += it }
         hookStackThreat()?.let { threats += it }
+        fartDumpRuntimeThreat(context)?.let { threats += it }
+        arkUnpackRomThreat(Build.MODEL, Build.DISPLAY, Build.FINGERPRINT)?.let { threats += it }
         AppListGuard.threats(context).forEach { threats += it }
         val maps = procMapsIndicators()
         if (maps.isNotEmpty()) threats += maps
@@ -504,37 +537,6 @@ object IntegrityGuard {
     }
 
     /**
-     * LSPatch (and metaloader derivatives) inject their payload by rewriting the
-     * manifest appComponentFactory and loading their Java side from
-     * assets/lspatch/loader.dex through an InMemoryDexClassLoader placed on the
-     * app's classloader parent chain. The genuine build can never resolve that
-     * class, so a successful load means the loader is present in this process.
-     */
-    private fun lspatchClassLoaderThreat(context: Context): String? = runCatching {
-        val loader = context.classLoader
-        // Class.forName(String, boolean, ClassLoader) - do NOT initialize the
-        // class: only its resolvability is the evidence.
-        Class.forName("org.lsposed.lspatch.loader.LSPApplication", false, loader)
-        "lspatch loader class resolvable from the app classloader chain"
-    }.getOrNull()
-
-    /**
-     * LSPatch's patcher writes its bypass config (sigBypassLevel, the original
-     * signature, the hijacked factory name) into the manifest as
-     * <meta-data android:name="lspatch">. The genuine build declares no such
-     * key, and the manifest's own integrity is already covered by the native
-     * content-digest check, so a visible key here is unambiguous evidence.
-     */
-    private fun lspatchMetaDataThreat(context: Context): String? = runCatching {
-        val meta = context.applicationInfo?.metaData
-        if (meta != null && meta.containsKey("lspatch")) {
-            "lspatch meta-data present in the active manifest"
-        } else {
-            null
-        }
-    }.getOrNull()
-
-    /**
      * In-process Xposed-family injection detection. A DEX dump tool reaches
      * this app by loading its module code into our own process (classic
      * Xposed / libxposed module loaders), after which it can walk the
@@ -553,8 +555,7 @@ object IntegrityGuard {
     internal fun hookFrameThreat(frameClassNames: List<String>): String? {
         val prefixes = listOf(
             "de.robv.android.xposed.",
-            "io.github.libxposed.",
-            "com.flass.layoutinspect."
+            "io.github.libxposed."
         )
         val hit = prefixes.firstOrNull { prefix ->
             frameClassNames.any { it.startsWith(prefix) }
@@ -567,6 +568,76 @@ object IntegrityGuard {
             .flatMap { stack -> stack.map { it.className } }
         hookFrameThreat(frames)
     }.getOrNull()
+
+    /**
+     * ROM-level ART/DEX dumping detection (FART family).
+     *
+     * The injection vector here is not a hook into our process: the platform
+     * itself is patched. The instance analysed for this check is
+     * ArkOS-angler-8.1, an AOSP 8.1 ROM for the Nexus 6P whose
+     * `ro.product.model` is literally `Ark脱壳机(菜鸟八哥QQ2380494437)`. It
+     * ships three patched platform pieces, all confirmed by static analysis of
+     * the ROM's `system.img`:
+     *
+     *  - `lib64/libart.so` gains an `ArkDumpControl` component and exports
+     *    `art::IsFartDumpEnabled` / `art::SetFartDumpEnabled` /
+     *    `art::DumpFartDexFileDirect`, writing `<root>/<进程名>/classes.dex`
+     *    and `classes%zu.dex` under `/sdcard/Ark脱壳机/`.
+     *  - `android.app.ActivityThread` gains the whole Java pipeline:
+     *    `readFartDumpSwitches`, `startFartDumpThreadIfNeeded`, `runFartDump`,
+     *    `dumpDexClasses`, `dumpDexFromClassLoader`, `dumpSingleDexFile`,
+     *    `isDumpDexFilesEnabled`, `writeFartApkAndManifest`, ...
+     *  - `dalvik.system.DexFile` gains `public static native void
+     *    setFartDumpEnabled(boolean)` as the switch the Java side flips.
+     *
+     * All three live on the boot classpath, so the patch is observable from
+     * inside our own process with no permission, no hook and no file access:
+     * a stock platform declares none of these members. Because the dumper
+     * lives in the runtime that owns our DEX, no in-app countermeasure can
+     * stop the dump itself - refusing to run is the only honest response, and
+     * that is what reporting a threat here achieves (the gate fails closed).
+     *
+     * Split into a pure function over the two method-name lists so the rule is
+     * pinnable off-device; the caller supplies only what reflection saw.
+     */
+    internal fun fartDumpThreat(dexFileMethods: List<String>, activityThreadMethods: List<String>): String? {
+        if (FART_DEXFILE_SWITCH in dexFileMethods) {
+            return "ART runtime carries the FART/Ark DEX-dump switch"
+        }
+        if (activityThreadMethods.any { it in FART_ACTIVITYTHREAD_MARKERS }) {
+            return "framework carries the FART/Ark DEX-dump pipeline"
+        }
+        return null
+    }
+
+    /**
+     * Identity check for the same ROM, independent of the framework patch. On
+     * its own this is weaker than [fartDumpThreat] - a build.prop is editable
+     * by anyone who can reflash - but it costs three string compares and still
+     * fires if the dump classes are renamed. `Build.MODEL` is the load-bearing
+     * field; DISPLAY and FINGERPRINT are passed too so a rebranded variant
+     * that only moves the string does not silently turn the check off.
+     */
+    internal fun arkUnpackRomThreat(vararg identityFields: String?): String? =
+        if (identityFields.any { field -> field != null && field.contains(ARK_ROM_MODEL_TOKEN) }) {
+            "Ark unpacking ROM identity ($ARK_ROM_MODEL_TOKEN)"
+        } else {
+            null
+        }
+
+    private fun fartDumpRuntimeThreat(context: Context): String? = fartDumpThreat(
+        declaredMethodNames("dalvik.system.DexFile", context.classLoader),
+        declaredMethodNames("android.app.ActivityThread", context.classLoader)
+    )
+
+    /**
+     * Every method name [className] declares, or an empty list when the class
+     * does not resolve. `initialize = false` on purpose: only the declared
+     * surface is evidence, never the class's static initialisation.
+     */
+    private fun declaredMethodNames(className: String, loader: ClassLoader?): List<String> = runCatching {
+        Class.forName(className, false, loader).declaredMethods.map { it.name }
+    }.getOrDefault(emptyList())
 
     private fun tracerPid(): Int = runCatching {
         File("/proc/self/status").useLines { lines ->
@@ -597,20 +668,9 @@ object IntegrityGuard {
                 "dobby",
                 "lsplant",
                 marked("736f6c61625f7369676e6174757265"),
-                // LSPatch: liblspatch.so / the cache/lspatch origin.apk redirect
-                // target / its in-memory loader dex and the Xposed API surface
-                // it ships:
-                "lspatch",
-                "lspd",
-                marked("64652e726f6276"),
-                "loader.dex",
-                "origin.apk",
-                // Layout Inspect (com.flass.layoutinspect): an LSPosed/Xposed
-                // module whose native dump engine (libflass*.so) walks DexFile
-                // cookies inside the hooked process to write our DEX out of
-                // memory. Both its native libs and its module APK path carry
-                // the "flass" token when it is injected into this process.
-                "flass"
+                // Classic Xposed API package (de.robv.android.xposed): hex-
+                // encoded so the plain text stays out of the literal pool.
+                marked("64652e726f6276")
             )
         val hits = linkedSetOf<String>()
         File("/proc/self/maps").useLines { lines ->
