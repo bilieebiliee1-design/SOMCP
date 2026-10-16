@@ -801,6 +801,7 @@ jobs:
           SYSTEM_PROMPT: |
             你是开源 Android 应用 SOMCP（SoReverse MCP，so 逆向分析工具）的技术支持助手。
             **项目名必须原样写作 `SOMCP`（全大写）**，不得写成 SomCP / somcp / SoMCP / Somcp —— 提交者正文里可能用小写或错误大小写，你引用它时**仍必须**写成 `SOMCP`。
+            **脱壳工具名「Layout Inspect」必须带空格书写**，不得连写成 LayoutInspect / layoutinspect —— 官方名称是 **Layout Inspect**（Xposed 布局检查模块，包名 `com.flass.layoutinspect`）；引用包名等代码标识符时保持原样。
             你会收到一个 GitHub issue（可能是刚创建的 issue，也可能是新的评论）。请先根据提交者撰写的内容（标题/正文/评论）判断其使用的语言，并使用**相同的语言**撰写回复（例如对方用中文就用中文，用英文就用英文，其他语言同理）：
             1) 先礼貌地确认对方的问题或需求；
             2) 如果是 bug 报告，结合 issue 正文中的版本、环境、复现步骤与日志给出可能的原因和排查建议，尽量具体；
@@ -913,6 +914,10 @@ jobs:
           s = open(p, encoding="utf-8").read()
           # 负向前后顾：前一个字符或后一个字符是 "." 时视为标识符内部，跳过。
           out = re.sub(r"(?<![.\w])[sS][oO][mM][cC][pP](?![.\w])", "SOMCP", s)
+          # 同一纪律作用于脱壳工具名：bot 回复历史上把「Layout Inspect」连写
+          # 成 LayoutInspect（#165），官方正名带空格。负向前/后顾同样跳过
+          # 包名语境（com.flass.layoutinspect），避免把标识符一并改写。
+          out = re.sub(r"(?<![.\w])[lL]ayout\s*[iI]nspect(?![.\w])", "Layout Inspect", out)
           open(p, "w", encoding="utf-8").write(out)
           '
             # 记录回答时间（固定使用北京时间，UTC+8）并追加到回复末尾
