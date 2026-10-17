@@ -282,7 +282,7 @@ class GitHubUpdateManager(private val context: Context) {
             .ifBlank { root.optString("created_at") }
         if (!isUpdateOfferable(tag, publishedAt)) return UpdateCheckResult.Current
         val assets = root.optJSONArray("assets")
-        val apk = assets?.let { selectApk((0 until it.length()).map { index -> it.getJSONObject(index) }) }
+        val apk = assets?.let { selectApk((0 until it.length()).map { index -> it.getJSONObject(index) }, Build.SUPPORTED_ABIS) }
             ?: return if (required) error("Release has no APK for ${Build.SUPPORTED_ABIS.joinToString()}") else UpdateCheckResult.Current
         val checksum = (0 until assets.length())
             .map { assets.getJSONObject(it) }
@@ -551,18 +551,6 @@ class GitHubUpdateManager(private val context: Context) {
         return true
     }
 
-    private fun selectApk(assets: List<JSONObject>): JSONObject? {
-        val apks = assets.filter { it.optString("name").endsWith(".apk", true) }
-        val abiNames = Build.SUPPORTED_ABIS.flatMap { abi ->
-            listOf(abi.lowercase(), abi.lowercase().replace('-', '_'))
-        }
-        return apks.firstOrNull { asset ->
-            abiNames.any { it in asset.optString("name").lowercase() }
-        }
-            ?: apks.firstOrNull { "universal" in it.optString("name").lowercase() }
-            ?: apks.singleOrNull()
-    }
-
     /** Whether the release [tag] (published at [publishedAt], ISO-8601 UTC)
      *  should be offered as an update to this build.
      *
@@ -656,5 +644,42 @@ class GitHubUpdateManager(private val context: Context) {
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
         private const val RELEASES_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases"
+
+        /** ABIs the release pipeline publishes as single-ABI splits (plus one
+         *  -universal.apk). Order is irrelevant; matching is exact-token. */
+        private val RELEASE_ABIS = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+
+        /** Picks the release asset matching the device's ABI, falling back to
+         *  the universal APK, then to a sole APK. Two properties matter:
+         *
+         *  1. Exact-token matching. A plain substring test mis-picks: "x86" is
+         *     contained in "x86_64", and the trailing "armeabi" of a 32-bit x86
+         *     device is contained in "armeabi-v7a" — an x86 device previously
+         *     downloaded the armeabi-v7a split (asset order is alphabetical)
+         *     instead of its own.
+         *  2. Device preference order. [abis] is [Build.SUPPORTED_ABIS]
+         *     (injected for tests): the first supported ABI with a matching
+         *     split wins, so an x86_64 device gets the x86_64 split even
+         *     though it also supports 32-bit x86 and the x86 split sorts
+         *     first alphabetically. */
+        internal fun selectApk(assets: List<JSONObject>, abis: Array<String>): JSONObject? {
+            val apks = assets.filter { it.optString("name").endsWith(".apk", true) }
+            val byAbi = apks.mapNotNull { asset ->
+                releaseAbiOf(asset.optString("name"))?.let { it to asset }
+            }.toMap()
+            return abis.firstNotNullOfOrNull { abi -> byAbi[abi.lowercase()] }
+                ?: apks.firstOrNull { "universal" in it.optString("name").lowercase() }
+                ?: apks.singleOrNull()
+        }
+
+        /** The ABI encoded in a release asset name, matched as a delimited
+         *  token (non-[a-z0-9_] on both sides) so "x86" never matches inside
+         *  "x86_64" and "armeabi" never matches inside "armeabi-v7a". */
+        private fun releaseAbiOf(name: String): String? {
+            val lower = name.lowercase()
+            return RELEASE_ABIS.firstOrNull { abi ->
+                Regex("(?<![a-z0-9_])${Regex.escape(abi)}(?![a-z0-9_])").containsMatchIn(lower)
+            }
+        }
     }
 }
