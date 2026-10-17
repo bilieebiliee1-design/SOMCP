@@ -39,6 +39,27 @@ BlutterCoordinator
 
 每个隔离进程只执行一个作业。完成、取消、超时或崩溃后主进程解绑，服务进程退出，避免不同 Dart VM runner 的全局符号和状态在同一进程内共存。
 
+## 内存模型
+
+Dart VM 反序列化 `libapp.so` 快照时必须先建出完整对象图，这是格式层面的硬约束：输入侧不可能真正分块。因此主进程的内存策略不是「少读一点」，而是**让主进程根本不持有对象图**，并把其余每一步都做成与文件体积无关的形态。
+
+四级约束，按收益排序：
+
+1. **进程级隔离**。Dart 堆只存在于 `:blutter` 隔离进程。作业结束、取消或崩溃后进程退出，堆由内核直接回收，不经过主进程 GC，也不会因为一次分析把 UI 拖进 LMKD。
+2. **映射优先于读取**。ELF 解析不再 `readBytes()` 到堆，而是 `open → fstat → mmap(READ_ONLY) → close`，所有读取经由 `ByteView`（`FlutterByteScan.kt`）完成。file-backed 干净页在内存压力下可被内核直接丢弃；`read()` 产生的匿名脏页只能靠 swap 或杀进程回收。mmap 不可用时（部分 FUSE/SAF 挂载）才回退到整份读入，且先过 `MemoryGuard`。
+3. **APK 只读中央目录**。APK 普查走 `ZipFile` 条目表，不解压任何载荷；库提取走流式解压，单条目 64 KiB 缓冲，边写盘边算 SHA-256。摘要与「整份 `ByteArray` 求 SHA-256」字节等价，因此既有结果缓存键不失效。
+4. **尽早失败**。版本指纹（快照哈希、engine revision、Dart 版本、指针模式）在启动 runner 之前算完；不匹配直接返回 `UNSUPPORTED_FLUTTER_VERSION` 与可选覆盖提示，绝不进入隔离进程做无效建堆。
+
+结果侧同样有闸门：`runner-result.json` 上限 512 MiB，解析前先 `MemoryGuard.ensureAnalysisMemory`（解析需要「文本 + 对象树」两份）；内存不足映射为 `INSUFFICIENT_MEMORY` 而非 `RUNNER_RESULT_INVALID`。分页响应改为对已解析对象的浅拷贝，不再整份序列化后重解析。
+
+实测对照（`-Xmx` 限制下的堆峰值，样本为真实 APK 与真实 `.so`）：
+
+| 场景 | 旧实现 | 新实现 |
+| --- | --- | --- |
+| 4.4 MB `libblutter_3_6.so`，`-Xmx512m` | 峰值 75 MiB | 峰值 4 MiB |
+| `.rodata` 33.1 MB 的 `libicudata.so`，`-Xmx128m` | OOM | 峰值 4 MiB |
+| 整包 43 MB APK，`-Xmx64m` | 峰值 57 MiB | 峰值 4 MiB |
+
 ## Runner 清单
 
 `app/src/main/assets/blutter/runners.json` 是 APK 能力的唯一事实来源：
@@ -73,6 +94,22 @@ indexed
 ```
 
 失败原因固定为 `source_unavailable`、`dartvm_compile_error`、`blutter_compile_error`、`android_cross_compile_error`、`android_icu_unavailable`、`android_capstone_unavailable`、`runner_crash`、`snapshot_mismatch`、`modified_engine` 或 `smoke_output_invalid`。未连接设备时不产生失败，只保留 `smokeStatus=not_run`。
+
+### 兼容键与匹配顺序
+
+清单为每个 runner 声明四个兼容键，它们的判定强度并不相同，匹配按此优先级打分：
+
+| 优先级 | 键 | 说明 |
+| --- | --- | --- |
+| 4 | 快照哈希 | Dart 快照格式真正绑定的键。一个哈希会被多个 engine revision 共享（Flutter 3.44.1–3.44.7 全部是 `ace654289f5abc240509fc941453ebc5`），因此这是唯一能识别「清单未枚举该 engine revision」的键。 |
+| 3 | engine revision | 匹配 `engineRevision` 或 `engineRevisions` 列表中的任意一项。 |
+| 1 | Dart 版本 | 最弱的信号，仅在没有更强证据时使用。 |
+
+指针模式（`compressedPointers`）、ABI 与 `analysis` 是硬前置条件，不参与打分：任一项不符即淘汰。全部键都不匹配时返回 `null`，调用方报不支持版本，绝不猜一个 VM 去反序列化异构快照。
+
+runner 的 `snapshotHashes` 由三部分并集而成：`snapshotAliases`、以及 `engineRevisions` 逐项在 `coverage` 表中反查到的 `snapshotHash`。反查这一步是关键——`coverage` 是唯一记录了「某 engine revision 实际发布哪个快照」的表，而 `snapshotAliases` 只包含构建者手工挑选的条目。
+
+拒绝时返回的错误体除 `supportedVersions` 外还带 `coverageHints`：从 `coverage` 中挑出与待分析指纹（engine revision / 快照哈希 / Dart 版本）命中的行，指出应当用哪个 Flutter 版本重建 runner，而不是只回一句「不支持」。
 
 ## 构建矩阵
 
