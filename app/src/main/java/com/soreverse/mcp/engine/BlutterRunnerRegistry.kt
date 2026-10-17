@@ -1,6 +1,7 @@
 package com.soreverse.mcp.engine
 
 import android.content.Context
+import com.soreverse.mcp.core.ShellAssets
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -89,9 +90,7 @@ internal class BlutterRunnerRegistry(private val context: Context) {
         .put("fullyOffline", true)
         .put("runnerCount", runners.size)
 
-    private fun loadManifest(): JSONObject = context.assets.open("blutter/runners.json").bufferedReader().use {
-        JSONObject(it.readText())
-    }
+    private fun loadManifest(): JSONObject = JSONObject(ShellAssets.readText(context, "blutter/runners.json"))
 
     private fun parseRunners(array: JSONArray?, source: String): List<BlutterRunnerDescriptor> {
         if (array == null) return emptyList()

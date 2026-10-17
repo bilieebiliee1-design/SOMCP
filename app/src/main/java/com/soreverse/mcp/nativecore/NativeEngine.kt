@@ -2,6 +2,7 @@ package com.soreverse.mcp.nativecore
 
 import android.content.Context
 import com.soreverse.mcp.core.AppLog
+import com.soreverse.mcp.core.ShellAssets
 import java.io.File
 
 /**
@@ -317,6 +318,10 @@ object RizinNativeEngine : NativeEngine {
 private fun copyAssetDir(context: Context, assetPath: String, outDir: File) {
     val names = context.assets.list(assetPath).orEmpty()
     outDir.mkdirs()
+    if (names.isEmpty()) {
+        copyEncryptedAssetDir(context, assetPath, outDir)
+        return
+    }
     for (name in names) {
         val childAsset = "$assetPath/$name"
         val listed = context.assets.list(childAsset).orEmpty()
@@ -329,5 +334,28 @@ private fun copyAssetDir(context: Context, assetPath: String, outDir: File) {
                 out.outputStream().use { input.copyTo(it) }
             }
         }
+    }
+}
+
+/**
+ * Fallback for APKs packed with the shell's `--encrypt-assets`: the plaintext
+ * asset tree is deleted and replaced by `assets/rtcore/aenc/<path>` ciphertext,
+ * so `AssetManager.list()` reports nothing and the file inventory has to come
+ * from the packer's index ([ShellAssets.encryptedPaths]) instead of a directory
+ * walk.
+ */
+private fun copyEncryptedAssetDir(context: Context, assetPath: String, outDir: File) {
+    val prefix = assetPath.trim('/') + "/"
+    val entries = ShellAssets.encryptedPaths(context).filter { it.startsWith(prefix) }
+    for (rel in entries) {
+        val out = File(outDir, rel.removePrefix(prefix))
+        if (out.exists() && out.length() > 0L) continue
+        out.parentFile?.mkdirs()
+        ShellAssets.open(context, rel).use { input ->
+            out.outputStream().use { input.copyTo(it) }
+        }
+    }
+    if (entries.isNotEmpty()) {
+        AppLog.i("RizinNativeEngine: restored ${entries.size} encrypted asset(s) from $assetPath")
     }
 }
