@@ -669,7 +669,12 @@ class GitHubUpdateManager(private val context: Context) {
             }.toMap()
             return abis.firstNotNullOfOrNull { abi -> byAbi[abi.lowercase()] }
                 ?: apks.firstOrNull { "universal" in it.optString("name").lowercase() }
-                ?: apks.singleOrNull()
+                // Legacy single-APK releases carried no ABI token at all, and
+                // those are still installable everywhere. A lone *ABI-specific*
+                // split must NOT be used as a fallback: it is the wrong
+                // architecture for every other device, which is exactly the
+                // mis-download this selection was rewritten to stop.
+                ?: apks.singleOrNull()?.takeIf { releaseAbiOf(it.optString("name")) == null }
         }
 
         /** The ABI encoded in a release asset name, matched as a delimited
