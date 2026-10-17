@@ -9,6 +9,7 @@ import android.os.ParcelFileDescriptor
 import com.soreverse.mcp.blutter.BlutterRunnerService
 import com.soreverse.mcp.blutter.IBlutterRunner
 import com.soreverse.mcp.blutter.IBlutterRunnerCallback
+import com.soreverse.mcp.core.MemoryGuard
 import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
@@ -18,15 +19,12 @@ import org.json.JSONObject
 internal class BlutterEmbeddedBackend(private val context: Context, private val store: BlutterResultStore) {
     private val active = ConcurrentHashMap<String, ActiveJob>()
 
-    fun start(jobId: String, runner: BlutterRunnerDescriptor, libraries: FlutterLibraries, options: JSONObject) {
-        val jobDir = File(context.noBackupFilesDir, "blutter/v1/jobs/$jobId/input").apply {
-            mkdirs()
-        }
-        val libapp = File(jobDir, "libapp.so").apply { writeBytes(libraries.libapp) }
-        val libflutter = File(jobDir, "libflutter.so").apply { writeBytes(libraries.libflutter) }
-        val output = File(jobDir.parentFile, "runner-result.json").apply { if (exists()) delete() }
+    fun start(jobId: String, runner: BlutterRunnerDescriptor, libraries: FlutterLibraryFiles, options: JSONObject) {
+        val libapp = libraries.libapp
+        val libflutter = libraries.libflutter
+        val output = File(libapp.parentFile?.parentFile, "runner-result.json").apply { if (exists()) delete() }
         val connection =
-            RunnerConnection(jobId, runner, libraries, libapp, libflutter, output, options)
+            RunnerConnection(jobId, runner, libraries, output, options)
         active[jobId] = ActiveJob(connection)
         store.update(jobId, "running", "binding_runner")
         val intent = Intent(context, BlutterRunnerService::class.java)
@@ -53,9 +51,7 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
     private inner class RunnerConnection(
         private val jobId: String,
         private val descriptor: BlutterRunnerDescriptor,
-        private val libraries: FlutterLibraries,
-        private val libapp: File,
-        private val libflutter: File,
+        private val libraries: FlutterLibraryFiles,
         private val output: File,
         private val options: JSONObject
     ) : ServiceConnection {
@@ -68,9 +64,9 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
             var flutterFd: ParcelFileDescriptor? = null
             var resultFd: ParcelFileDescriptor? = null
             try {
-                appFd = ParcelFileDescriptor.open(libapp, ParcelFileDescriptor.MODE_READ_ONLY)
+                appFd = ParcelFileDescriptor.open(libraries.libapp, ParcelFileDescriptor.MODE_READ_ONLY)
                 flutterFd =
-                    ParcelFileDescriptor.open(libflutter, ParcelFileDescriptor.MODE_READ_ONLY)
+                    ParcelFileDescriptor.open(libraries.libflutter, ParcelFileDescriptor.MODE_READ_ONLY)
                 resultFd =
                     ParcelFileDescriptor.open(
                         output,
@@ -144,7 +140,11 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
                 }
                 runCatching { commitOutput() }.onFailure { error ->
                     finishFailure(
-                        "RUNNER_RESULT_INVALID",
+                        if (error is com.soreverse.mcp.core.InsufficientMemoryException) {
+                            "INSUFFICIENT_MEMORY"
+                        } else {
+                            "RUNNER_RESULT_INVALID"
+                        },
                         error.message ?: "Runner result is invalid",
                         false
                     )
@@ -157,13 +157,17 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
             check(output.length() in 2..MAX_RESULT_BYTES) {
                 "Runner result exceeds the allowed size"
             }
+            // Parsing needs the document twice over (text + object tree); refuse
+            // before allocating rather than dying with an OutOfMemoryError in the
+            // main process, which would take the UI down with it.
+            MemoryGuard.ensureAnalysisMemory(output.length(), "Validating the Blutter runner result")
             val result = JSONObject(output.readText())
             val generated = Instant.now().toString()
             val input = JSONObject()
                 .put("displayName", libraries.displayName)
                 .put("abi", libraries.abi)
-                .put("libapp", fileJson(libraries.libappEntry, libraries.libapp))
-                .put("libflutter", fileJson(libraries.libflutterEntry, libraries.libflutter))
+                .put("libapp", fileJson(libraries.libappEntry, libraries.libappSize, libraries.libappSha256))
+                .put("libflutter", fileJson(libraries.libflutterEntry, libraries.libflutterSize, libraries.libflutterSha256))
             val nativeSummary = result.optJSONObject("summary") ?: error("Missing runner summary")
             for (kind in listOf("libraries", "classes", "functions", "objects")) {
                 val page = result.optJSONObject(kind) ?: error("Missing result page: $kind")
@@ -214,7 +218,7 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
                         "native-1"
                     ).put("cacheHit", false).put("durationMillis", 0)
                 )
-            val key = cacheKey(libraries.libapp, libraries.libflutter, descriptor.sha256, options.toString())
+            val key = cacheKey(libraries, descriptor.sha256, options.toString())
             store.update(jobId, "running", "committing")
             store.commit(jobId, result, key)
             finish()
@@ -227,7 +231,7 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
 
         private fun finish() {
             if (active.remove(jobId) != null) runCatching { context.unbindService(this) }
-            runCatching { libapp.parentFile?.deleteRecursively() }
+            runCatching { libraries.libapp.parentFile?.deleteRecursively() }
             runCatching { output.delete() }
         }
     }
@@ -244,19 +248,34 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
         )
     }
 
-    fun cacheKey(libapp: ByteArray, libflutter: ByteArray, runnerSha256: String, options: String): String {
+    /**
+     * Cache key over the two library contents, the runner digest and the canonical
+     * options. The files are streamed instead of read into memory, which produces
+     * the same digest the previous `ByteArray` version did — existing cache
+     * entries stay valid.
+     */
+    fun cacheKey(libraries: FlutterLibraryFiles, runnerSha256: String, options: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        digest.update(libapp)
-        digest.update(libflutter)
+        digest.updateFile(libraries.libapp)
+        digest.updateFile(libraries.libflutter)
         digest.update(runnerSha256.toByteArray())
         digest.update(options.toByteArray())
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun fileJson(name: String, bytes: ByteArray): JSONObject = JSONObject().put("name", name).put("size", bytes.size).put("sha256", sha256(bytes))
-    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
-        "%02x".format(it)
+    private fun MessageDigest.updateFile(file: File) {
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                update(buffer, 0, count)
+            }
+        }
     }
+
+    private fun fileJson(name: String, size: Long, sha256: String): JSONObject = JSONObject().put("name", name).put("size", size).put("sha256", sha256)
+
     private fun validateEntities(items: org.json.JSONArray?, kind: String) {
         require(items != null) { "Missing items for $kind" }
         for (index in 0 until items.length()) {
