@@ -537,6 +537,18 @@ jobs:
             }
           done
 
+          # The app reads its encrypted assets through the shell's PAS1 entry
+          # point, resolved reflectively as
+          # com.soreverse.mcp.rt.shell.NativeBridge.decryptAssetBlob (no
+          # build-time dependency on the shell exists). The shell's own
+          # proguard rules -keep that class and its native methods, so the
+          # names must survive R8 into the exported dex; assert the export
+          # rather than trusting the keep rule.
+          grep -aq 'decryptAssetBlob' "$SHELL_DIR/dex/classes.dex" || {
+            echo "::error::$SHELL_DIR/dex/classes.dex does not carry decryptAssetBlob; the app could not read encrypted assets"
+            exit 1
+          }
+
           # R8 renames every non-kept class, so literal source-name prefixes
           # cannot address the shipped dex. Independently verified against the
           # restored 1.0.22 dex: only 25 classes still live under
@@ -647,6 +659,7 @@ jobs:
           sys.exit(1 if missing else 0)
           PY
 
+
           # VMP hardening applies to ALL release APKs (splits + universal).
           # issues #161/#162 reported librtcore.so SIGSEGV inside
           # instantiateClassLoader on one MuMu 5.24.3 x86_64 environment, but
@@ -680,9 +693,15 @@ jobs:
             # and force dlopen interception for four ABIs' worth of Rizin/LIEF
             # libraries, for a layer this release does not claim.
             #
-            # --no-encrypt-assets: the app reads its own assets through the
-            # standard AssetManager; the shell's transparent AssetManager hook
-            # only covers assets fetched via its own ProtectorAssets wrapper.
+            # --encrypt-assets: every business asset under assets/** is stored
+            # as PAS1 || AES-GCM at assets/rtcore/aenc/<path> and the plaintext
+            # entry is deleted; assets/rtcore/** (the shell's own containers) is
+            # excluded by the packer itself. There is no transparent
+            # AssetManager hook, so this flag and the app's read path are ONE
+            # contract: the app resolves ShellAssets -> the shell's
+            # NativeBridge.decryptAssetBlob reflectively (plaintext fallback for
+            # un-shelled builds). Flipping the flag without that read path ships
+            # an APK whose assets are unreadable at runtime.
             java -jar "$PACKER_JAR" "$apk" -o "$out" \
               --shell-dir "$SHELL_DIR" \
               --profile balanced \
@@ -691,7 +710,7 @@ jobs:
               "${HOLLOW_ARGS[@]}" \
               "${VMP_ARGS[@]}" \
               --no-protect-so \
-              --no-encrypt-assets \
+              --encrypt-assets \
               --no-res-protect \
               --keystore "$STORE_FILE" \
               --alias "$KEY_ALIAS" \
@@ -731,6 +750,15 @@ jobs:
                 exit 1
               }
             done
+
+            # Assets encryption contract (.github/scripts/assetcheck.py,
+            # shared by both workflows so the two call sites cannot drift).
+            # Runs once per APK: the asset inventory is ABI-independent, so
+            # it does not belong inside the per-ABI loop above.
+            python3 "$GITHUB_WORKSPACE/.github/scripts/assetcheck.py" "$out" || {
+              echo "::error::$base failed the assets-encryption check"
+              exit 1
+            }
 
             mv -f "$out" "$apk"
             echo "[vmp] $base virtualized, signed with the release key"
