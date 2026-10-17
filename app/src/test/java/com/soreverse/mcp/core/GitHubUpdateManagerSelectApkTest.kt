@@ -62,6 +62,17 @@ class GitHubUpdateManagerSelectApkTest {
         assertNull(GitHubUpdateManager.selectApk(only64Bit, arrayOf("x86")))
     }
 
+    /** The single-APK fallback exists for legacy releases that shipped one
+     *  ABI-agnostic APK (no ABI token in the name); it must keep working. */
+    @Test
+    fun loneAbiAgnosticApkIsStillPicked() {
+        val legacy = listOf(asset("SOMCP-1.0.19.apk"))
+        assertEquals(
+            "SOMCP-1.0.19.apk",
+            GitHubUpdateManager.selectApk(legacy, arrayOf("arm64-v8a"))?.optString("name")
+        )
+    }
+
     @Test
     fun deviceWithoutSplitFallsBackToUniversal() {
         val picked = GitHubUpdateManager.selectApk(assets, arrayOf("mips"))

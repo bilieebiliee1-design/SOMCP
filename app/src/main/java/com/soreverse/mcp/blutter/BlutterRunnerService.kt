@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import com.soreverse.mcp.core.ShellAssets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -16,9 +17,7 @@ class BlutterRunnerService : Service() {
     private val nextToken = AtomicLong(1)
 
     private val binder = object : IBlutterRunner.Stub() {
-        override fun getManifestJson(): String = assets.open("blutter/runners.json").bufferedReader().use {
-            it.readText()
-        }
+        override fun getManifestJson(): String = ShellAssets.readText(this@BlutterRunnerService, "blutter/runners.json")
 
         override fun run(
             jobId: String,
