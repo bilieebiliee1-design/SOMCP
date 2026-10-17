@@ -1,6 +1,8 @@
 package com.soreverse.mcp.engine
 
 import android.content.Context
+import com.soreverse.mcp.core.InsufficientMemoryException
+import com.soreverse.mcp.core.MemoryGuard
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -54,6 +56,12 @@ internal class BlutterResultStore(context: Context) {
     @Synchronized
     fun get(jobId: String): JSONObject? = readState(jobId)
 
+    /** Per-job working directory; the extracted libraries live in `input/` under it. */
+    fun jobInput(jobId: String): File {
+        requireValidJobId(jobId)
+        return File(File(jobs, jobId), "input")
+    }
+
     @Synchronized
     fun commit(jobId: String, result: JSONObject, key: String): JSONObject {
         requireValidJobId(jobId)
@@ -70,7 +78,15 @@ internal class BlutterResultStore(context: Context) {
         require(key.matches(Regex("^[a-f0-9]{32,128}$"))) { "Invalid result key" }
         val file = File(File(results, key), "result.json")
         if (!file.isFile) return null
-        return runCatching { JSONObject(file.readText()) }.getOrNull()
+        return try {
+            readResult(file)
+        } catch (error: InsufficientMemoryException) {
+            // A cache hit must not silently degrade into "no cache" and re-run the
+            // whole analysis on a device that cannot even parse the stored result.
+            throw error
+        } catch (error: Exception) {
+            null
+        }
     }
 
     @Synchronized
@@ -87,7 +103,7 @@ internal class BlutterResultStore(context: Context) {
         }
         val file = File(File(results, key), "result.json")
         if (!file.isFile) return null
-        val result = JSONObject(file.readText())
+        val result = readResult(file)
         if (kind == null) return result.put("jobId", jobId)
         require(kind in PAGE_KINDS) { "Unsupported result kind" }
         val page = result.optJSONObject(kind) ?: return result.put("jobId", jobId)
@@ -96,7 +112,17 @@ internal class BlutterResultStore(context: Context) {
         val end = minOf(offset + limit, items.length())
         val selected = JSONArray()
         for (index in offset until end) selected.put(items.get(index))
-        val response = JSONObject(result.toString()).put("jobId", jobId)
+        // Shallow copy: `JSONObject(result.toString())` re-serialised and re-parsed
+        // the whole document for every page request, which doubled peak memory on
+        // large results for no gain. Sharing the already-parsed sub-objects is safe
+        // because the caller only serialises the response.
+        val response = JSONObject()
+        val keys = result.keys()
+        while (keys.hasNext()) {
+            val name = keys.next()
+            response.put(name, result.get(name))
+        }
+        response.put("jobId", jobId)
         response.put(
             kind,
             JSONObject()
@@ -163,6 +189,18 @@ internal class BlutterResultStore(context: Context) {
             it.isFile
         }?.let { JSONObject(it.readText()) }
     }.getOrNull()
+
+    /**
+     * `org.json` can only parse a whole document from a `String`, so reading a
+     * result costs its size twice (text + parse tree). The runner caps the result
+     * size, but that cap is far above what a phone heap can take, so the headroom
+     * is checked first and the caller gets `INSUFFICIENT_MEMORY` instead of an
+     * `OutOfMemoryError`.
+     */
+    private fun readResult(file: File): JSONObject {
+        MemoryGuard.ensureAnalysisMemory(file.length(), "Reading the Blutter result")
+        return JSONObject(file.readText())
+    }
     private fun write(file: File, value: JSONObject) {
         file.parentFile?.mkdirs()
         val temp = File(file.parentFile, "${file.name}.${UUID.randomUUID()}.tmp")
