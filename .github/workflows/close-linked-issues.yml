@@ -208,6 +208,12 @@ jobs:
                 if (issue.state === 'open') {
                   await github.rest.issues.update({ owner, repo, issue_number: num, state: 'closed' });
                   console.log(`Closed issue #${num}.`);
+                  try {
+                    await github.rest.issues.lock({ owner, repo, issue_number: num, lock_reason: 'resolved' });
+                    console.log(`Locked conversation on issue #${num} (PR merged).`);
+                  } catch (e) {
+                    console.log('Lock failed (ignored): ' + e.message);
+                  }
                 } else {
                   console.log(`Issue #${num} already ${issue.state}; comment posted.`);
                 }
