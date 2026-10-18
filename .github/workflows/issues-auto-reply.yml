@@ -159,6 +159,12 @@ jobs:
                 if (cur.state === 'open' && !cur.pull_request) {
                   await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
                   console.log('Closed issue #' + issue_number + ' (no log evidence, author ' + author + ').');
+                  try {
+                    await github.rest.issues.lock({ owner, repo, issue_number, lock_reason: 'resolved' });
+                    console.log('Locked conversation on issue #' + issue_number + ' (no log evidence).');
+                  } catch (e) {
+                    console.log('Lock failed (ignored): ' + e.message);
+                  }
                 }
               } catch (e) {
                 console.log('Auto close failed (ignored): ' + e.message);
@@ -292,6 +298,12 @@ jobs:
                   if (cur.state === 'open' && !cur.pull_request) {
                     await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
                     console.log('Closed issue #' + issue_number + ' (author ' + author + ' is in restriction).');
+                    try {
+                      await github.rest.issues.lock({ owner, repo, issue_number, lock_reason: 'spam' });
+                      console.log('Locked conversation on issue #' + issue_number + ' (author restriction).');
+                    } catch (e) {
+                      console.log('Lock failed (ignored): ' + e.message);
+                    }
                   }
                 } catch (e) {}
               }
@@ -469,6 +481,12 @@ jobs:
                 if (cur.state === 'open' && !cur.pull_request) {
                   await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
                   console.log('Closed duplicate issue #' + issue_number + ' (refs: ' + matches.slice(0, 5).map((m) => '#' + m.number + (m.sameAuthor ? '' : '/cross')).join(', ') + ').');
+                  try {
+                    await github.rest.issues.lock({ owner, repo, issue_number, lock_reason: 'spam' });
+                    console.log('Locked conversation on issue #' + issue_number + ' (duplicate).');
+                  } catch (e) {
+                    console.log('Lock failed (ignored): ' + e.message);
+                  }
                 }
               } catch (e) {}
             }
@@ -983,6 +1001,12 @@ jobs:
               if (cur.state === 'open' && !cur.pull_request) {
                 await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
                 console.log('Closed issue #' + issue_number + ' (reply rejected: body contradicts attached logs).');
+                try {
+                  await github.rest.issues.lock({ owner, repo, issue_number, lock_reason: 'resolved' });
+                  console.log('Locked conversation on issue #' + issue_number + ' (log-mismatch rejection).');
+                } catch (e) {
+                  console.log('Lock failed (ignored): ' + e.message);
+                }
               }
             } catch (e) {
               console.log('Auto close failed (ignored): ' + e.message);
