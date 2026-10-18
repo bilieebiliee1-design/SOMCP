@@ -159,6 +159,12 @@ jobs:
               if (pr.state === 'open') {
                 await github.rest.pulls.update({ owner, repo, pull_number, state: 'closed' });
                 console.log(`Closed PR #${pull_number} (author ${author} is in 7-day restriction).`);
+                try {
+                  await github.rest.issues.lock({ owner, repo, issue_number: pull_number, lock_reason: 'spam' });
+                  console.log(`Locked conversation on PR #${pull_number} (author restriction).`);
+                } catch (e) {
+                  console.log('Lock failed (ignored): ' + e.message);
+                }
                 // H2: 仅删除同仓库分支；fork PR 的 head.ref 属于 fork 仓库，
                 // 直接 deleteRef 会误删本仓库同名分支。
                 const head = pr.head && pr.head.ref;
@@ -659,6 +665,12 @@ jobs:
                   });
                   await github.rest.pulls.update({ owner, repo, pull_number, state: 'closed' });
                   console.log(`Closed PR #${pull_number} due to severe review verdict.`);
+                  try {
+                    await github.rest.issues.lock({ owner, repo, issue_number: pull_number, lock_reason: 'resolved' });
+                    console.log(`Locked conversation on PR #${pull_number} (severe review verdict).`);
+                  } catch (e) {
+                    console.log('Lock failed (ignored): ' + e.message);
+                  }
                 }
               } catch (e) {
                 console.log('Close PR failed (ignored): ' + e.message);
@@ -771,6 +783,12 @@ jobs:
                     console.log(`Closed PR #${pull_number} after ${warningCount} warnings in 7 days.`);
                   } catch (e) {
                     console.log('Warning close failed (ignored): ' + e.message);
+                  }
+                  try {
+                    await github.rest.issues.lock({ owner, repo, issue_number: pull_number, lock_reason: 'spam' });
+                    console.log(`Locked conversation on PR #${pull_number} (5-warning restriction).`);
+                  } catch (e) {
+                    console.log('Lock failed (ignored): ' + e.message);
                   }
                   // H2: 仅删除同仓库分支（fork PR 的 head.ref 属于 fork 仓库）。
                   const head = pr.head && pr.head.ref;
@@ -1024,6 +1042,12 @@ jobs:
                 if (issue.state === 'open') {
                   await github.rest.issues.update({ owner, repo, issue_number: num, state: 'closed' });
                   console.log(`Closed issue #${num}.`);
+                  try {
+                    await github.rest.issues.lock({ owner, repo, issue_number: num, lock_reason: 'resolved' });
+                    console.log(`Locked conversation on issue #${num} (PR merged).`);
+                  } catch (e) {
+                    console.log('Lock failed (ignored): ' + e.message);
+                  }
                 } else {
                   console.log(`Issue #${num} already ${issue.state}; comment posted.`);
                 }
