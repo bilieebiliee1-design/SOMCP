@@ -300,6 +300,97 @@ def annotate_deprecated(root):
         path.write_text("".join(lines), encoding="utf-8", newline="\n")
 
 
+# ── frida_maps probe removal ─────────────────────────────────────────
+#
+# The shell's detect_frida() scans /proc/self/maps line-by-line for the
+# literal substrings "frida" / "gum-js" / "linjector" / "frida-agent" /
+# "frida-gadget" / "re.frida.server" and kills the process with
+# CRASH_SEGV("frida_maps") on any hit. SOMCP's own analysis features mmap
+# analyzed artifacts into the app process (e.g. FlutterByteScan's
+# FileChannel.map), and a reverse-engineering app is exactly the kind of
+# app that gets asked to analyze files whose PATH contains "frida" —
+# frida-server / frida-gadget binaries are its bread and butter. The
+# shell then kills the app on a clean, un-injected device (observed
+# 2026-10-19, OPPO PLE110 / ColorOS 16: `rtcore: rasp block: frida_maps`
+# → SIGSEGV 92 s and 262 s after launch; tombstone registers carried the
+# "frid"/"gum-" needle bytes mid-comparison).
+#
+# Removing the maps scan is a narrowing, not a disarm: every other Frida
+# signal in detect_frida() stays live — the port probe (BCF builds), the
+# /proc/net/unix abstract-socket scan, the /data/local/tmp file probe,
+# the thread-name scan, the /proc/self/fd scan and the composite score
+# that escalates weak signals at >= 3. Real Frida injection into the app
+# still trips several of those; a mmap'd analyzed file no longer does.
+RISK_CPP = "native/src/main/cpp/risk/risk.cpp"
+
+
+def remove_frida_maps_scan(root):
+    """Delete the maps_has_frida() probe from the pinned shell source.
+
+    Two edits in native/src/main/cpp/risk/risk.cpp, both located
+    structurally (stripped-line equality + a column-0 brace for the
+    function end) rather than by byte offsets, so the patch survives
+    whitespace-only upstream churn. Every locator must match exactly
+    once; anything else fails loudly so an upstream reshuffle cannot
+    silently turn this into a no-op.
+    """
+    path = root / RISK_CPP
+    if not path.is_file():
+        fail("missing %s" % RISK_CPP)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    body = "".join(lines)
+    if "maps_has_frida" not in body and 'CRASH_SEGV("frida_maps")' not in body:
+        print("upstream no longer carries the frida_maps probe; nothing to do")
+        return
+
+    # 1) The detect_frida() call block: if / PLOGD / CRASH_SEGV / return / }.
+    call_idx = [i for i, l in enumerate(lines)
+                if l.strip() == "if (maps_has_frida()) {"]
+    if len(call_idx) != 1:
+        fail("expected exactly one maps_has_frida() call site, found %d"
+             % len(call_idx))
+    i = call_idx[0]
+    block = [l.strip() for l in lines[i:i + 5]]
+    expected_block = [
+        "if (maps_has_frida()) {",
+        'PLOGD("frida so/maps hit");',
+        'CRASH_SEGV("frida_maps");',
+        "return;",
+        "}",
+    ]
+    if block != expected_block:
+        fail("detect_frida() maps block no longer matches upstream;"
+             " re-check the frida_maps removal")
+    del lines[i:i + 5]
+
+    # 2) The function definition, through its column-0 closing brace.
+    def_idx = [j for j, l in enumerate(lines)
+               if l.strip() == "static bool maps_has_frida() {"]
+    if len(def_idx) != 1:
+        fail("expected exactly one maps_has_frida() definition, found %d"
+             % len(def_idx))
+    j = def_idx[0]
+    end = j
+    while end < len(lines) and lines[end].rstrip("\r\n") != "}":
+        end += 1
+    if end >= len(lines) or end - j < 5:
+        fail("maps_has_frida() body does not match upstream;"
+             " re-check the frida_maps removal")
+    del lines[j:end + 1]
+    # Collapse the doubled blank line left behind between the section
+    # header comment and the next probe's doc comment.
+    if j - 1 >= 0 and lines[j - 1].strip() == "" and j < len(lines) \
+            and lines[j].strip() == "":
+        del lines[j]
+
+    out = "".join(lines)
+    for residue in ("maps_has_frida", 'CRASH_SEGV("frida_maps")'):
+        if residue in out:
+            fail("frida_maps residue survived the removal: %r" % residue)
+    path.write_text(out, encoding="utf-8", newline="\n")
+
+
 def verify(root):
     """Fail unless the tree is clean of the upstream identity.
 
@@ -417,6 +508,7 @@ def main():
     move_package_dirs(root)
     rename_class_files(root, counter)
     annotate_deprecated(root)
+    remove_frida_maps_scan(root)
     verify(root)
     verify_consistency(root)
 
