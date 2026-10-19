@@ -279,12 +279,12 @@ internal fun SettingsCreditsPage(t: UiText) {
                 ),
                 CreditProject(
                     "LSPatch",
-                    if (t.zh) "非 Root 环境的 Xposed 框架实现参考" else "Non-root Xposed framework reference",
+                    if (t.zh) "APK 签名校验绕过参考工具" else "APK signature-bypass reference tool",
                     "https://github.com/LSPosed/LSPatch"
                 ),
                 CreditProject(
                     "Layout Inspect",
-                    if (t.zh) "Xposed 布局检查模块参考" else "Xposed layout inspection module reference",
+                    if (t.zh) "脱壳与对抗参考工具" else "Unpacking and anti-analysis reference tool",
                     "https://github.com/Xposed-Modules-Repo/com.flass.layoutinspect"
                 )
             )
