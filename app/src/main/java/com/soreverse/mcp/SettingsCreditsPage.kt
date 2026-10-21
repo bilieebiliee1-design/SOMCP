@@ -284,8 +284,13 @@ internal fun SettingsCreditsPage(t: UiText) {
                 ),
                 CreditProject(
                     "Layout Inspect",
-                    if (t.zh) "脱壳与对抗参考工具" else "Unpacking and anti-analysis reference tool",
+                    if (t.zh) "脱壳实现参考工具" else "Unpacking implementation reference tool",
                     "https://github.com/Xposed-Modules-Repo/com.flass.layoutinspect"
+                ),
+                CreditProject(
+                    "HMA-OSS",
+                    if (t.zh) "应用隐藏参考工具" else "App-hiding reference tool",
+                    "https://github.com/frknkrc44/HMA-OSS"
                 )
             )
         )
