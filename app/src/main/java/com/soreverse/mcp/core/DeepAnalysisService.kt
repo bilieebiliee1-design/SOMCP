@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -146,6 +147,10 @@ class DeepAnalysisService(private val appContext: Context) {
     }
 
     private data class ModelPage(val models: List<String>, val hasMore: Boolean, val cursor: String?, val nextUrl: String?)
+
+    /** Blocking entry used by the MCP static_analyze_ai tool (heavy tool). */
+    fun analyzeSync(path: String, settings: SettingsStore, zh: Boolean, request: String): Result<String> =
+        runBlocking(Dispatchers.IO) { analyze(path, settings, zh, request) }
 
     suspend fun analyze(path: String, settings: SettingsStore, zh: Boolean, request: String = ""): Result<String> = withContext(Dispatchers.IO) {
         _reportDraft.value = ""
