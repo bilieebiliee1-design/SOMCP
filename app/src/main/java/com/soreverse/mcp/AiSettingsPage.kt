@@ -166,6 +166,7 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
     val scope = rememberCoroutineScope()
     val deepService = remember { DeepAnalysisService(context.applicationContext) }
     var provider by remember { mutableStateOf(settings.aiProvider) }
+    var toolSchemaMode by remember { mutableStateOf(settings.aiToolSchemaMode) }
     var endpoint by remember { mutableStateOf(settings.aiEndpoint) }
     var apiKey by remember { mutableStateOf(settings.aiApiKey) }
     var model by remember { mutableStateOf(settings.aiModel) }
@@ -205,6 +206,29 @@ internal fun SettingsAiDeepPage(t: UiText, settings: SettingsStore) {
                     endpoint = "https://api.openai.com/v1"
                     settings.aiEndpoint = endpoint
                 }
+            }
+        }
+        GlassGroup(
+            title = if (t.zh) "工具调用模式" else "Tool call mode",
+            footer =
+            if (t.zh) {
+                "full=原生 Function Calling（工具 schema 走 API 参数）；skills_like=Skills 风格提示词" +
+                    "（工具改为 Markdown 注入，模型以 <tool_call> 标签调用，" +
+                    "更省 token，也兼容不支持函数调用的端点）。"
+            } else {
+                "full = native function calling; skills_like = tools documented as prompt Markdown with " +
+                    "<tool_call> blocks (fewer tokens, works without function-calling support)."
+            }
+        ) {
+            ChipRow(
+                listOf(
+                    "full" to if (t.zh) "原生调用" else "Native",
+                    "skills_like" to if (t.zh) "Skills 风格" else "Skills-like"
+                ),
+                toolSchemaMode
+            ) {
+                toolSchemaMode = it
+                settings.aiToolSchemaMode = it
             }
         }
         GlassGroup(
