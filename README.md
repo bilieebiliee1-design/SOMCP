@@ -73,13 +73,16 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 - 加密字符串辅助解密（`strdecrypt_api`）：定位密文块、全量扫描 256 个单字节 XOR/add/sub/rol/ror 密钥并按可打印率排序，支持传入多字节 XOR / RC4 密钥试解。
 - 反调试/反 hook 扫描（`antidebug_api`）：按 import / string / code_pattern 三级证据分类，输出风险等级。
 - 导入符号溯源（`import_api`）：经 `.gnu.version_r` 把导入符号精确归属到源库，标注 Bionic 库用途。
+- 静态深度分析 AI（`static_analyze_ai`）：与 `dynamic_analyze_ai` 对等的静态入口，AI 在独立上下文自动驱动取证工具（`so_open → analyze_functions → … → analysis_report`）并输出结构化 Markdown 报告。
+- 应用日志远程读取（`system_logs`）：快照/过滤/清空应用内 500 行日志环形缓冲，远程排查工具错误不再依赖 App 日志页。
+- 工作区辅助（`workspace_overview` / `cache_clear` / `workspace_export`）：概要视图、引擎缓存清理、当前（含编辑会话）SO 字节 base64 导出（附 SHA-256 与架构）。
 - Cloudflare 永久隧道支持配置要展示的 HTTPS 公网地址；认证失败会停止重连并提示更新 token。
 - APK 内 SO 使用流式扫描与按需提取，分析页可一键释放工作区、索引缓存和已结束的 Blutter 数据。
 - 精简工具列表：默认暴露核心 + 网关（`lowlevel` 与 `agent`）+ meta 工具，完整能力通过 `meta_info(action=describe)` 发现。网关类不参与热度晋级——它们是入口而非证据调用，藏起来等于让对应能力不可达。
 
 ## MCP 工具体系
 
-当前共 46 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
+当前共 54 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
 
 推荐工作流：
 
@@ -162,14 +165,14 @@ agent_api(action=roles|run|capabilities, role=..., task=..., workspaceId=...)
 SOMCP 提供一套**独立**的动态分析工具流程，与静态 deep-analysis 循环彼此分离，把「把 `.so` 手动加载到内存 → 执行 → 采集证据 → 交给 AI 分析」串成一条可被 MCP 调用的链路。核心入口是两个工具：
 
 ```text
-dynamic_api(action=capabilities|dispatch|status|analyze, op=unidbg_session_open|unidbg_session_call|unidbg_session_registers|frida_hook|frida_call|analyze, backend=unidbg|frida, targetFunction=...)
+dynamic_api(action=capabilities|dispatch|status|analyze, op=unidbg_session_open|unidbg_session_call|unidbg_session_registers|frida_hook|frida_call|frida_read|frida_write|frida_replace|frida_modules|frida_script|analyze, backend=unidbg|frida, targetFunction=...)
 dynamic_analyze_ai(function=... | evidence=...)
 ```
 
 两个后端共用同一套编排层 `dynamicDispatch`：
 
 - **unidbg（模拟）**：`unidbg_session_open` 把选中的 `.so` 映射进模拟内存，`unidbg_session_call` 解析指定导出函数并执行，随后采集寄存器和目标地址的内存 dump。无需真机，适合快速验证目标函数行为。
-- **frida（真机 hook）**：`FridaBridge` 以纯 Kotlin 实现 `frida-server`/`frida-gadget` 的 TCP 协议客户端，`frida_hook` 通过 JS agent（Interceptor/Module）挂钩目标函数捕获入参与返回，`frida_call` 触发调用并回读 hook 结果。**注意**：`frida-server`/`frida-gadget` 不随 APK 内置，需在已 root 设备上单独安装并在推开时先对目标进程 `ptrace`/注入；未就绪时 `dynamic_api(action=capabilities)` 的 `status.fridaAvailable` 会如实标注 `false`，不会伪装成可用。
+- **frida（真机 hook）**：`FridaBridge` 以纯 Kotlin 实现 `frida-server`/`frida-gadget` 的 TCP 协议客户端，`frida_hook` 通过 JS agent（Interceptor/Module）挂钩目标函数捕获入参与返回，`frida_call` 触发调用并回读 hook 结果（参数支持 int、`0x…` 十六进制指针与自动 `allocUtf8String` 的字符串），`frida_write` 写内存、`frida_replace` 以 JS 片段替换函数实现、`frida_modules` 枚举已加载模块、`frida_script` 在 agent 内执行任意 JS。**注意**：`frida-server`/`frida-gadget` 不随 APK 内置，需在已 root 设备上单独安装并在推开时先对目标进程 `ptrace`/注入；未就绪时 `dynamic_api(action=capabilities)` 的 `status.fridaAvailable` 会如实标注 `false`，不会伪装成可用。
 
 `dynamic_analyze_ai` 复用 `RikkaAgentEngine`，把 `dynamicRun` 证据（寄存器现场、内存 dump、hook 记录、调用返回）喂给 AI 生成结构化动态分析报告：
 
