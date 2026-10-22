@@ -1052,13 +1052,20 @@ internal class FridaBridge(private val context: Context) {
     /** Build the positional argument array for an rpc.exports call. */
     private fun rpcArgs(session: FridaSession, operation: String, params: JSONObject): JSONArray = when (operation) {
         "hookFunction" -> JSONArray().put(params.optString("functionName"))
-        "getEvents", "registers" -> JSONArray()
+        "getEvents", "registers", "enumerateModules" -> JSONArray()
         "callFunction" -> JSONArray()
             .put(params.optString("functionName"))
             .put(params.optString("argsJson"))
         "readMemory" -> JSONArray()
             .put(params.optString("ptrStr"))
             .put(params.optInt("size", 256))
+        "writeMemory" -> JSONArray()
+            .put(params.optString("ptrStr"))
+            .put(params.optString("hex"))
+        "replaceFunction" -> JSONArray()
+            .put(params.optString("functionName"))
+            .put(params.optString("jsBody"))
+        "evalScript" -> JSONArray().put(params.optString("source"))
         else -> JSONArray().apply {
             val arr = params.names()
             if (arr != null) for (i in 0 until arr.length()) put(params.opt(arr.getString(i)))
@@ -1123,16 +1130,80 @@ internal class FridaBridge(private val context: Context) {
             callFunction(functionName, argsJson) {
                 const addr = resolveExport('' + functionName);
                 if (!addr) return { error: 'export-not-found' };
-                const args = JSON.parse('' + argsJson).map(function (n) { return n | 0; });
-                const types = new Array(Math.max(args.length, 1)).fill('int');
+                const raw = JSON.parse('' + argsJson);
+                const types = [];
+                const callArgs = raw.map(function (n) {
+                    if (typeof n === 'number') {
+                        types.push('int');
+                        return n | 0;
+                    }
+                    const s = '' + n;
+                    if (/^0x[0-9a-fA-F]+$/.test(s)) {
+                        types.push('pointer');
+                        return ptr(s);
+                    }
+                    types.push('pointer');
+                    return Memory.allocUtf8String(s);
+                });
+                if (types.length === 0) types.push('int');
                 const fn = new NativeFunction(addr, 'int', types);
-                const retval = fn.apply(null, args);
+                const retval = fn.apply(null, callArgs);
                 return { retval: retval };
             },
             readMemory(ptrStr, size) {
                 const p = ptr('' + ptrStr);
                 const bytes = Memory.readByteArray(p, size | 0);
                 return { hex: bytes ? hexdump(p, { offset: 0, length: size, ansi: false }) : null };
+            },
+            writeMemory(ptrStr, hex) {
+                try {
+                    const p = ptr('' + ptrStr);
+                    const clean = ('' + hex).replace(/[^0-9a-fA-F]/g, '');
+                    if (clean.length === 0 || clean.length % 2 !== 0) {
+                        return { error: 'invalid-hex' };
+                    }
+                    const bytes = [];
+                    for (let i = 0; i + 1 < clean.length; i += 2) {
+                        bytes.push(parseInt(clean.substr(i, 2), 16));
+                    }
+                    Memory.writeByteArray(p, bytes);
+                    return { written: bytes.length };
+                } catch (e) {
+                    return { error: 'write-failed: ' + e };
+                }
+            },
+            replaceFunction(functionName, jsBody) {
+                const addr = resolveExport('' + functionName);
+                if (!addr) return { error: 'export-not-found' };
+                const body = '' + (jsBody || 'return 0;');
+                const replacement = new NativeCallback(function () {
+                    const args = [].slice.call(arguments);
+                    try {
+                        return eval(body);
+                    } catch (e) {
+                        return 0;
+                    }
+                }, 'int', ['int', 'int', 'int', 'int', 'int', 'int', 'int', 'int']);
+                Interceptor.replace(addr, replacement);
+                return { replaced: '' + functionName, at: addr.toString() };
+            },
+            enumerateModules() {
+                return {
+                    modules: Process.enumerateModules().map(function (m) {
+                        return { name: m.name, base: m.base.toString(), size: m.size, path: m.path };
+                    })
+                };
+            },
+            evalScript(source) {
+                try {
+                    const result = eval('' + source);
+                    return {
+                        ok: true,
+                        result: result === undefined ? null : (typeof result === 'object' ? JSON.stringify(result) : String(result))
+                    };
+                } catch (e) {
+                    return { ok: false, error: 'eval-failed: ' + e };
+                }
             },
             registers() {
                 if (!__lastContext) return { error: 'no-context-captured-yet' };

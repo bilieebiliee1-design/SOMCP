@@ -12,7 +12,10 @@
 //
 package com.soreverse.mcp.mcp
 
+import android.util.Base64
 import com.soreverse.mcp.core.AgentKernel
+import com.soreverse.mcp.core.AppLog
+import com.soreverse.mcp.core.DeepAnalysisService
 import com.soreverse.mcp.core.DynamicAnalysisService
 import com.soreverse.mcp.core.HexCodec
 import com.soreverse.mcp.core.SubAgentRoles
@@ -28,6 +31,7 @@ import com.soreverse.mcp.core.subAgentCapabilities
 import com.soreverse.mcp.core.subAgentLimits
 import com.soreverse.mcp.core.subAgentRoleCatalog
 import com.soreverse.mcp.core.toJsonArray
+import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -99,6 +103,85 @@ object ToolCatalog {
         when (a.str("action", "close")) {
             "list" -> e.listWorkspaces()
             else -> e.close(a.str("workspaceId"))
+        }
+    }
+
+    private val workspaceOverview = EngineToolHandler(
+        ToolMeta(
+            "workspace_overview",
+            "工作区总览（概要视图：架构/节区/符号/安全要点）",
+            "Workspace overview: high-level ELF summary (architecture, sections, symbols, security highlights), same view the app UI home uses.",
+            "workspace",
+            ToolClass.EXTRA
+        ) {
+            objectSchema(
+                props {
+                    "workspaceId" str "Workspace ID (from so_open)"
+                    "editSessionId" str "Edit session ID (optional)"
+                    "pathHint" str "Optional path hint when no workspace is open"
+                }
+            )
+        }
+    ) { e, a, _ ->
+        e.overview(a.str("workspaceId"), a.str("editSessionId"), a.str("pathHint"))
+    }
+
+    private val cacheClear = object : ToolHandler {
+        override val meta = ToolMeta(
+            "cache_clear",
+            "清空引擎缓存（扫描缓存/分页缓存）",
+            "Clear engine caches (scan cache and pagination store). Use after swapping files with identical names or when stale results are suspected.",
+            "workspace",
+            ToolClass.EXTRA
+        ) {
+            objectSchema(props { })
+        }
+
+        override fun handle(ctx: ToolContext, args: JSONObject): JSONObject {
+            ctx.engine.clearCaches()
+            return ok(JSONObject().put("cleared", true))
+        }
+    }
+
+    private val workspaceExport = object : ToolHandler {
+        override val meta = ToolMeta(
+            "workspace_export",
+            "导出工作区 SO 字节（base64 + sha256 + 架构）",
+            "Export the current workspace/edit-session SO bytes as base64 with SHA-256 and architecture, for host-side backup or handoff. Heavy: the whole file travels inside the JSON response.",
+            "workspace",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "workspaceId" str "Workspace ID (from so_open)"
+                    "editSessionId" str "Edit session ID (omit to export the pristine workspace copy)"
+                    "maxBytes" int "Safety cap on returned bytes (default 33554432 = 32 MiB)"
+                }
+            )
+        }
+
+        override fun handle(ctx: ToolContext, args: JSONObject): JSONObject {
+            val (bytes, architecture) = ctx.engine.snapshotBytes(args.str("workspaceId"), args.str("editSessionId"))
+            val maxBytes = args.intValue("maxBytes", 32 * 1024 * 1024).coerceAtLeast(1024)
+            if (bytes.size > maxBytes) {
+                return err(
+                    "PAYLOAD_TOO_LARGE",
+                    "Workspace bytes (${bytes.size}) exceed maxBytes ($maxBytes); raise maxBytes if you really want the full payload.",
+                    "size",
+                    bytes.size.toString()
+                )
+            }
+            val sha256 = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+                "%02x".format(it)
+            }
+            return ok(
+                JSONObject()
+                    .put("size", bytes.size)
+                    .put("architecture", architecture)
+                    .put("sha256", sha256)
+                    .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+            )
         }
     }
 
@@ -381,6 +464,49 @@ object ToolCatalog {
             },
             a.intValue("stepCount", 1)
         )
+    }
+
+    private val analyzeOutline = EngineToolHandler(
+        ToolMeta(
+            "analyze_outline",
+            "函数大纲（分支/调用/数据引用的结构速览，不输出完整反汇编）",
+            "Function outline: quick structural view of a function (branches, calls, data references) without full disassembly.",
+            "analyze",
+            ToolClass.CORE
+        ) {
+            objectSchema(
+                props {
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID (optional)"
+                    "locator" str
+                        "Function locator or hex VA. Accepts full locator from analyze_functions, short function name, or 0x... address."
+                    "limit" int "Maximum outline entries"
+                }
+            )
+        }
+    ) { e, a, s ->
+        e.outline(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.intValue("limit", s.defaultLimit))
+    }
+
+    private val analyzeStringXrefs = EngineToolHandler(
+        ToolMeta(
+            "analyze_string_xrefs",
+            "字符串交叉引用（哪些代码引用了这个字符串）",
+            "String cross-references: which code locations reference the given string. Locator is the string entry reference (address or index) from search_strings / analyze_elf(view=list,subView=strings).",
+            "analyze",
+            ToolClass.CORE
+        ) {
+            objectSchema(
+                props {
+                    "workspaceId" str "Workspace ID"
+                    "editSessionId" str "Edit session ID (optional)"
+                    "locator" str "String locator (entry reference or hex VA)"
+                    "limit" int "Maximum references"
+                }
+            )
+        }
+    ) { e, a, s ->
+        e.xrefString(a.str("workspaceId"), a.str("editSessionId"), a.str("locator"), a.intValue("limit", s.defaultLimit))
     }
 
     // ── SEARCH ──
@@ -1322,7 +1448,7 @@ object ToolCatalog {
                     "workspaceId" str "Workspace ID (from so_open)"
                     "editSessionId" str "Edit session ID"
                     "method" str
-                        "Dispatcher method. One of: dynamic status/roots/methods/capabilities/analyze, unidbg_session_{open,call,dump,registers,trace,close}, frida_{status,sessions,open,close,hook,call,read,backtrace}."
+                        "Dispatcher method. One of: dynamic status/roots/methods/capabilities/analyze, unidbg_session_{open,call,dump,registers,trace,close}, frida_{status,sessions,open,close,hook,call,read,write,replace,modules,script,backtrace}."
                     "op".oneOf(
                         "Dispatcher operation",
                         "status",
@@ -1343,6 +1469,10 @@ object ToolCatalog {
                         "frida_hook",
                         "frida_call",
                         "frida_read",
+                        "frida_write",
+                        "frida_replace",
+                        "frida_modules",
+                        "frida_script",
                         "frida_backtrace",
                         "dispatch"
                     )
@@ -1490,6 +1620,53 @@ object ToolCatalog {
                 onSuccess = { ok(JSONObject().put("report", it).put("evidence", evidence.take(8192))) },
                 onFailure = {
                     err("DYNAMIC_AI_FAILED", it.message ?: "AI dynamic analysis failed", "workspaceId", workspaceId)
+                }
+            )
+        }
+    }
+
+    /**
+     * Static counterpart of [dynamicAnalyzeAi]: the same on-device
+     * DeepAnalysisService loop the app UI drives, exposed to MCP clients. The
+     * agent gathers evidence itself through catalog tools in its own context
+     * and returns a structured Markdown report.
+     */
+    private val staticAnalyzeAi = object : ToolHandler {
+        override val meta = ToolMeta(
+            "static_analyze_ai",
+            "静态深度分析 AI（自动取证循环出结构化报告，dynamic_analyze_ai 的静态对等工具）",
+            "Run the on-device static deep-analysis AI: it autonomously drives MCP evidence tools (so_open → analyze_functions → analyze_cfg → analyze_xrefs → analyze_crypto → analysis_report) in its own context and returns a structured Markdown report. Requires the MCP service to be running and AI settings configured.",
+            "analyze",
+            ToolClass.EXTRA,
+            heavy = true
+        ) {
+            objectSchema(
+                props {
+                    "path" str "Target SO path (local path or path relative to the work directory)"
+                    "zh" bool "Report language (default: true)"
+                    "request" str "User focus for this analysis turn"
+                }
+            )
+        }
+
+        override fun handle(ctx: ToolContext, args: JSONObject): JSONObject {
+            val path = args.str("path").ifBlank { args.str("targetPath") }
+            if (path.isBlank()) {
+                return err("PATH_REQUIRED", "static_analyze_ai needs the target SO path", "path", "")
+            }
+            val zh = if (args.has("zh")) args.bool("zh") else true
+            val result = runCatching {
+                DeepAnalysisService(ctx.context).analyzeSync(
+                    path,
+                    ctx.settings,
+                    zh,
+                    args.str("request")
+                ).getOrThrow()
+            }
+            return result.fold(
+                onSuccess = { report -> ok(JSONObject().put("report", report)) },
+                onFailure = {
+                    err("STATIC_AI_FAILED", it.message ?: "AI static deep analysis failed", "path", path)
                 }
             )
         }
@@ -2423,6 +2600,46 @@ object ToolCatalog {
         }
     }
 
+    private val systemLogs = object : ToolHandler {
+        override val meta = ToolMeta(
+            "system_logs",
+            "应用日志（snapshot/clear：远程排查服务与工具错误）",
+            "Read or clear the in-app service log ring buffer (last 500 lines, level-filtered). Use for remote diagnosis of tool errors and service issues.",
+            "system",
+            ToolClass.EXTRA
+        ) {
+            objectSchema(
+                props {
+                    "action".oneOf("snapshot (default) | clear", "snapshot", "clear")
+                    "filter" str "Only return lines containing this substring (case-insensitive)"
+                    "limit" int "Maximum lines returned, keeping the most recent (default 500, max 500)"
+                }
+            )
+        }
+
+        override fun handle(ctx: ToolContext, args: JSONObject): JSONObject = when (args.str("action", "snapshot")) {
+            "clear" -> {
+                AppLog.clear()
+                ok(JSONObject().put("cleared", true))
+            }
+
+            else -> {
+                val filter = args.str("filter")
+                var lines = AppLog.snapshot()
+                if (filter.isNotBlank()) lines = lines.filter { it.contains(filter, ignoreCase = true) }
+                val limit = args.intValue("limit", 500).coerceIn(1, 500)
+                val dropped = (lines.size - limit).coerceAtLeast(0)
+                val shown = if (dropped > 0) lines.drop(dropped) else lines
+                ok(
+                    JSONObject()
+                        .put("total", lines.size)
+                        .put("dropped", dropped)
+                        .put("lines", JSONArray(shown))
+                )
+            }
+        }
+    }
+
     private val appConfig = object : ToolHandler {
         override val meta = ToolMeta(
             "app_config",
@@ -2602,19 +2819,21 @@ object ToolCatalog {
     // ── Registry ──
 
     val ALL: List<ToolHandler> = listOf(
-        soOpen, soClose, apkAnalyze, flutterBlutter,
+        soOpen, soClose, workspaceOverview, cacheClear, workspaceExport, apkAnalyze, flutterBlutter,
         analyzeElf, readStats, analysisReport, analyzeFunctions, analyzeCfg, analyzeCrypto, analyzeXrefs, analyzeEsil,
+        analyzeOutline, analyzeStringXrefs,
         searchBytes, searchStrings,
         readDisasm, readHexdump,
         editHex, editAsm, editSymbol, editFixSections,
         emulateCall, emulateDump,
         unidbgSession, unidbgMemory, unidbgDebug, unidbgBatch,
         diffSo,
-        rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi, agentApi,
+        rizinApi, liefApi, unidbgApi, xansoApi, dynamicApi, dynamicAnalyzeAi, staticAnalyzeAi, agentApi,
         jniApi, packerApi, obfuscApi, strDecryptApi, antiDebugApi, importApi,
         sessionOpen, sessionHistory, sessionAudit,
         buildSo,
         systemControl,
+        systemLogs,
         appConfig,
         metaInfo
     )
