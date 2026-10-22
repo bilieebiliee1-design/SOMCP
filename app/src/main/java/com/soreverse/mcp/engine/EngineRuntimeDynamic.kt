@@ -58,6 +58,10 @@ private val DYNAMIC_METHODS = JSONArray(
         "frida_hook",
         "frida_call",
         "frida_read",
+        "frida_write",
+        "frida_replace",
+        "frida_modules",
+        "frida_script",
         "frida_backtrace"
     )
 )
@@ -119,6 +123,10 @@ internal fun EngineRuntime.dynamicDispatch(
                                     "frida_hook",
                                     "frida_call",
                                     "frida_read",
+                                    "frida_write",
+                                    "frida_replace",
+                                    "frida_modules",
+                                    "frida_script",
                                     "frida_backtrace",
                                     "frida_close"
                                 )
@@ -238,6 +246,68 @@ internal fun EngineRuntime.dynamicDispatch(
                 "readMemory",
                 JSONObject().put("ptrStr", addr).put("size", size.coerceIn(1, 65536))
             ).put("fridaSessionId", sessionId).put("address", addr)
+        }
+
+        "frida_write" -> {
+            val sessionId = args.optString(0)
+            val addr = args.optString(1)
+            val hex = args.optString(2)
+            if (hex.isBlank()) {
+                return@guarded err(
+                    "INVALID_ARGUMENT",
+                    "frida_write needs args[2] = hex bytes to write",
+                    "hex",
+                    ""
+                )
+            }
+            frida.invokeRpc(
+                sessionId,
+                "writeMemory",
+                JSONObject().put("ptrStr", addr).put("hex", hex)
+            ).put("fridaSessionId", sessionId).put("address", addr)
+        }
+
+        "frida_replace" -> {
+            val sessionId = args.optString(0)
+            val symbolName = method.ifBlank { args.optString(1) }
+            if (symbolName.isBlank()) {
+                return@guarded err(
+                    "INVALID_ARGUMENT",
+                    "frida_replace needs the target symbol name (method or args[1])",
+                    "symbolName",
+                    ""
+                )
+            }
+            val jsBody = args.optString(2).ifBlank { "return 0;" }
+            frida.invokeRpc(
+                sessionId,
+                "replaceFunction",
+                JSONObject().put("functionName", symbolName).put("jsBody", jsBody)
+            ).put("fridaSessionId", sessionId).put("symbolName", symbolName)
+        }
+
+        "frida_modules" -> {
+            val sessionId = args.optString(0)
+            frida.invokeRpc(sessionId, "enumerateModules", JSONObject())
+                .put("fridaSessionId", sessionId)
+        }
+
+        "frida_script" -> {
+            val sessionId = args.optString(0)
+            val source = method.ifBlank { args.optString(1) }
+            if (source.isBlank()) {
+                return@guarded err(
+                    "INVALID_ARGUMENT",
+                    "frida_script needs JavaScript source (method or args[1]) to evaluate in the agent",
+                    "source",
+                    ""
+                )
+            }
+            frida.invokeRpc(
+                sessionId,
+                "evalScript",
+                JSONObject().put("source", source)
+            ).put("fridaSessionId", sessionId)
         }
 
         "frida_backtrace" -> {
