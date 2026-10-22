@@ -660,7 +660,8 @@ internal class RikkaAgentEngine(
      * Extracts tool calls the model emitted as `<tool_call>{"tool": "...", "args": {...}}
      * </tool_call>` blocks. A bare JSON object (with `tool`/`name` and `args`/`arguments`/
      * `parameters` keys) is accepted as a single-call fallback; anything unparsable is
-     * ignored so prose never becomes a phantom call.
+     * ignored so prose never becomes a phantom call. Runs once per agent step over the
+     * model text only (a few KB) — a single linear regex pass, no incremental rescans.
      */
     private fun parseTextToolCalls(message: RikkaMessage, step: Int): List<RikkaPart.Tool> {
         val text = message.parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text }
@@ -739,9 +740,10 @@ internal class RikkaAgentEngine(
             properties.keys().forEach { key ->
                 val definition = properties.optJSONObject(key)
                 val type = definition?.optString("type").orEmpty().ifBlank { "any" }
-                val isRequired = required != null && (0 until required.length()).any {
-                    required.optString(it) == key
-                }
+                val isRequired = required != null &&
+                    (0 until required.length()).any {
+                        required.optString(it) == key
+                    }
                 append("- ").append(key).append(" (").append(type).append(", ")
                 append(if (isRequired) "required" else "optional").append(")")
                 val description = definition?.optString("description").orEmpty()
