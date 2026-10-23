@@ -2,7 +2,7 @@
 
 SOMCP 是一个运行在 Android 手机上的本地 SO 逆向 MCP 服务器。它通过 Streamable HTTP 暴露 MCP 工具，让客户端可以在手机上完成 ELF 结构分析、Rizin 反汇编/分析、LIEF ELF 修复/重写、补丁会话、构建导出、Cloudflare Tunnel 暴露和可选 APK MCP 桥接。
 
-当前版本：`1.0.22`（`app/build.gradle.kts` 的 `versionName`，`versionCode` 23）。已发布的正式产物见 [GitHub Releases](https://github.com/bilieebiliee1-design/SOMCP/releases)，两者不必同名：源码树里的版本可以领先于最近一次发布。
+当前版本：`1.0.23`（`app/build.gradle.kts` 的 `versionName`，`versionCode` 24）。已发布的正式产物见 [GitHub Releases](https://github.com/bilieebiliee1-design/SOMCP/releases)，两者不必同名：源码树里的版本可以领先于最近一次发布。
 
 包名：`com.soreverse.mcp`
 
@@ -253,7 +253,7 @@ agent_api(action=capabilities)           # supported / partial / not_covered，�
 - 工具暴露：lean tools、自适应 lean、禁用工具列表、工具结果字符上限、工具调用频率限制。
 - 性能保护：重型工具并发上限、请求超时、工具统计持久化。
 - 原生执行：Unidbg 模拟执行开关。
-- AI 深度分析：provider、API 地址、API Key、模型 ID（可从 `action=roles` 旁的端点拉取模型列表）、temperature、最大迭代、历史压缩阈值、自定义 headers/body、系统提示词。
+- AI 深度分析：provider、API 地址、API Key、模型 ID（可从 `action=roles` 旁的端点拉取模型列表）、temperature、最大迭代、历史压缩阈值、自定义 headers/body、系统提示词、工具调用模式（`full`=原生 Function Calling；`skills_like`=工具以 Skills 风格 Markdown 注入提示词、模型以 `<tool_call>` 标签调用，参考 AstrBot `tool_schema_mode`，省 token 且兼容不支持函数调用的端点，非法值回退 `full`）。
 - 子代理：启用开关、嵌套深度上限、单次会话派生配额、单子代理迭代上限、并发子代理数（详见「子代理」一节；凭据复用上面的 AI 配置，不单独设置）。
 - Blutter：查看内置 Flutter 3.44 / Dart 3.12.2 Runner、离线执行方式和精确兼容性规则。
 - Cloudflare Tunnel：quick/named、目标端口、协议、IP 版本、日志等级、keepalive、重连退避。
