@@ -60,7 +60,8 @@ internal object AgentKernel {
         model = settings.aiModel,
         temperature = settings.aiTemperature,
         customHeaders = stringMap(settings.aiCustomHeadersJson),
-        customBody = additionalBody(settings)
+        customBody = additionalBody(settings),
+        toolSchemaMode = settings.aiToolSchemaMode
     )
 
     /** The single prerequisite every agent path shares. */

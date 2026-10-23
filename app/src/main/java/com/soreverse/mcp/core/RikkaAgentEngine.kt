@@ -44,8 +44,23 @@ internal class RikkaAgentEngine(
     private val model: String,
     private val temperature: Float,
     private val customHeaders: Map<String, String>,
-    private val customBody: Map<String, JsonElement>
+    private val customBody: Map<String, JsonElement>,
+    /**
+     * Tool call mode, following AstrBot's `tool_schema_mode`: `full` sends the
+     * provider's native function-calling schema; `skills_like` documents the
+     * tools as Anthropic-Skills-style Markdown in the system prompt and parses
+     * `<tool_call>` blocks out of the model text, which saves tokens for large
+     * tool sets and works with endpoints that lack function-calling support.
+     * Any unknown value falls back to `full`, mirroring AstrBot's behavior.
+     */
+    private val toolSchemaMode: String = TOOL_SCHEMA_FULL
 ) {
+    private val schemaMode = if (toolSchemaMode == TOOL_SCHEMA_SKILLS_LIKE) {
+        TOOL_SCHEMA_SKILLS_LIKE
+    } else {
+        TOOL_SCHEMA_FULL
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -59,8 +74,12 @@ internal class RikkaAgentEngine(
         requiredTools: List<String> = emptyList(),
         onParts: (List<RikkaPart>) -> Unit
     ): String {
+        val useSkillsLike = schemaMode == TOOL_SCHEMA_SKILLS_LIKE
         val messages = mutableListOf(
-            RikkaMessage("system", listOf(RikkaPart.Text(systemPrompt))),
+            RikkaMessage(
+                "system",
+                listOf(RikkaPart.Text(if (useSkillsLike) skillsLikeSystemPrompt(systemPrompt, tools) else systemPrompt))
+            ),
             RikkaMessage("user", listOf(RikkaPart.Text(userPrompt)))
         )
         val visibleParts = mutableListOf<RikkaPart>()
@@ -72,9 +91,13 @@ internal class RikkaAgentEngine(
                 onParts(visibleParts + assistant.parts)
             }
             messages += assistant
-            val calls = assistant.parts.filterIsInstance<RikkaPart.Tool>().filter {
-                it.result ==
-                    null
+            val calls = if (useSkillsLike) {
+                parseTextToolCalls(assistant)
+            } else {
+                assistant.parts.filterIsInstance<RikkaPart.Tool>().filter {
+                    it.result ==
+                        null
+                }
             }
             if (calls.isEmpty()) {
                 val missing = requiredTools.filterNot(executedTools::contains)
@@ -92,54 +115,48 @@ internal class RikkaAgentEngine(
                     )
                     return@repeat
                 }
-                return assistant.parts.filterIsInstance<RikkaPart.Text>().joinToString("") {
+                val text = assistant.parts.filterIsInstance<RikkaPart.Text>().joinToString("") {
                     it.text
                 }.trim()
+                return if (useSkillsLike) stripToolCallBlocks(text) else text
             }
-            calls.forEach { call ->
-                val requestedName = call.name.trim()
-                val shortName = requestedName.substringAfterLast('.').substringAfterLast('/')
-                val tool = tools.firstOrNull { it.name == requestedName }
-                    ?: tools.firstOrNull { it.name.equals(requestedName, ignoreCase = true) }
-                    ?: tools.firstOrNull { it.name.equals(shortName, ignoreCase = true) }
-                val result = if (tool == null) {
-                    JSONObject()
-                        .put("status", "error")
-                        .put("error", "unknown_tool")
-                        .put("tool", requestedName)
-                        .put("available_tools", tools.map { it.name })
-                        .toString()
-                } else {
-                    val args = runCatching { JSONObject(call.arguments.ifBlank { "{}" }) }
-                        .getOrElse {
+            if (useSkillsLike) {
+                val rendered = StringBuilder()
+                val resultParts = mutableListOf<RikkaPart.Tool>()
+                calls.forEach { call ->
+                    val result = executeToolCall(call, tools, executedTools)
+                    rendered
+                        .append("<tool_response>\n")
+                        .append(
                             JSONObject()
-                                .put("status", "error")
-                                .put("error", "invalid_arguments")
-                                .put("tool", requestedName)
-                                .put("details", it.message.orEmpty())
-                                .toString()
-                        }
-                    if (args is String) {
-                        args
-                    } else {
-                        tool.execute(args as JSONObject).also { executedTools += tool.name }
-                    }
+                                .put("tool", call.name.trim())
+                                .put("result", result)
+                        )
+                        .append("\n</tool_response>\n")
+                    resultParts += call.copy(name = call.name.trim(), result = result)
+                    onParts(visibleParts + resultParts)
                 }
-                val completed = call.copy(result = result)
-                messages[messages.lastIndex] = messages.last().copy(
-                    parts = messages.last().parts.map {
-                        if (it is RikkaPart.Tool &&
-                            it.id == call.id
-                        ) {
-                            completed
-                        } else {
-                            it
+                visibleParts += resultParts
+                messages += RikkaMessage("user", listOf(RikkaPart.Text(rendered.toString())))
+            } else {
+                calls.forEach { call ->
+                    val result = executeToolCall(call, tools, executedTools)
+                    val completed = call.copy(result = result)
+                    messages[messages.lastIndex] = messages.last().copy(
+                        parts = messages.last().parts.map {
+                            if (it is RikkaPart.Tool &&
+                                it.id == call.id
+                            ) {
+                                completed
+                            } else {
+                                it
+                            }
                         }
-                    }
-                )
-                onParts(visibleParts + messages.last().parts)
+                    )
+                    onParts(visibleParts + messages.last().parts)
+                }
+                visibleParts += messages.last().parts
             }
-            visibleParts += messages.last().parts
         }
         error("Maximum tool steps exceeded")
     }
@@ -430,24 +447,26 @@ internal class RikkaAgentEngine(
                 }
             }
         }
-        putJsonArray("tools") {
-            tools.forEach { tool ->
-                add(
-                    buildJsonObject {
-                        put("type", "function")
-                        put(
-                            "function",
-                            buildJsonObject {
-                                put("name", tool.name)
-                                put("description", tool.description)
-                                put(
-                                    "parameters",
-                                    json.parseToJsonElement(tool.schema.toString())
-                                )
-                            }
-                        )
-                    }
-                )
+        if (schemaMode == TOOL_SCHEMA_FULL) {
+            putJsonArray("tools") {
+                tools.forEach { tool ->
+                    add(
+                        buildJsonObject {
+                            put("type", "function")
+                            put(
+                                "function",
+                                buildJsonObject {
+                                    put("name", tool.name)
+                                    put("description", tool.description)
+                                    put(
+                                        "parameters",
+                                        json.parseToJsonElement(tool.schema.toString())
+                                    )
+                                }
+                            )
+                        }
+                    )
+                }
             }
         }
         customBody.forEach { (key, value) -> put(key, value) }
@@ -541,15 +560,17 @@ internal class RikkaAgentEngine(
                 }
             }
         }
-        putJsonArray("tools") {
-            tools.forEach { tool ->
-                add(
-                    buildJsonObject {
-                        put("name", tool.name)
-                        put("description", tool.description)
-                        put("input_schema", json.parseToJsonElement(tool.schema.toString()))
-                    }
-                )
+        if (schemaMode == TOOL_SCHEMA_FULL) {
+            putJsonArray("tools") {
+                tools.forEach { tool ->
+                    add(
+                        buildJsonObject {
+                            put("name", tool.name)
+                            put("description", tool.description)
+                            put("input_schema", json.parseToJsonElement(tool.schema.toString()))
+                        }
+                    )
+                }
             }
         }
         customBody.forEach { (key, value) -> put(key, value) }
@@ -572,5 +593,155 @@ internal class RikkaAgentEngine(
         } else {
             "$it/v1/messages"
         }
+    }
+
+    /**
+     * Single execution path shared by both tool call modes: resolves the call
+     * against the tool list (exact → case-insensitive → short name) and runs
+     * it, turning unknown tools / unparsable arguments into structured error
+     * payloads instead of aborting the run.
+     */
+    private suspend fun executeToolCall(call: RikkaPart.Tool, tools: List<RikkaTool>, executedTools: MutableSet<String>): String {
+        val requestedName = call.name.trim()
+        val shortName = requestedName.substringAfterLast('.').substringAfterLast('/')
+        val tool = tools.firstOrNull { it.name == requestedName }
+            ?: tools.firstOrNull { it.name.equals(requestedName, ignoreCase = true) }
+            ?: tools.firstOrNull { it.name.equals(shortName, ignoreCase = true) }
+        if (tool == null) {
+            return JSONObject()
+                .put("status", "error")
+                .put("error", "unknown_tool")
+                .put("tool", requestedName)
+                .put("available_tools", tools.map { it.name })
+                .toString()
+        }
+        val args = runCatching { JSONObject(call.arguments.ifBlank { "{}" }) }
+            .getOrElse {
+                JSONObject()
+                    .put("status", "error")
+                    .put("error", "invalid_arguments")
+                    .put("tool", requestedName)
+                    .put("details", it.message.orEmpty())
+                    .toString()
+            }
+        if (args is String) {
+            return args
+        }
+        return tool.execute(args as JSONObject).also { executedTools += tool.name }
+    }
+
+    /**
+     * Extracts tool calls the model emitted as `<tool_call>{"tool": "...", "args": {...}}
+     * </tool_call>` blocks. A bare JSON object (with `tool`/`name` and `args`/`arguments`/
+     * `parameters` keys) is accepted as a single-call fallback; anything unparsable is
+     * ignored so prose never becomes a phantom call. Runs once per agent step over the
+     * model text only (a few KB) — a single linear regex pass, no incremental rescans.
+     */
+    private fun parseTextToolCalls(message: RikkaMessage): List<RikkaPart.Tool> {
+        val text = message.parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text }
+        if (text.isBlank()) return emptyList()
+        val payloads = TOOL_CALL_BLOCK_REGEX.findAll(text).map { it.groupValues[1].trim() } +
+            listOfNotNull(bareToolCallPayload(text))
+        return payloads.mapIndexedNotNull { index, payload ->
+            val obj = runCatching { JSONObject(payload) }.getOrNull() ?: return@mapIndexedNotNull null
+            val name = obj.optString("tool").ifBlank { obj.optString("name") }.trim()
+            if (name.isBlank()) {
+                return@mapIndexedNotNull null
+            }
+            val args = obj.optJSONObject("args")
+                ?: obj.optJSONObject("arguments")
+                ?: obj.optJSONObject("parameters")
+                ?: JSONObject()
+            RikkaPart.Tool(id = "skills_call_$index", name = name, arguments = args.toString(), index = index)
+        }.toList()
+    }
+
+    private fun bareToolCallPayload(text: String): String? {
+        val trimmed = text.trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+        val obj = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
+        val hasName = obj.has("tool") || obj.has("name")
+        val hasArgs = obj.optJSONObject("args") != null ||
+            obj.optJSONObject("arguments") != null ||
+            obj.optJSONObject("parameters") != null
+        return if (hasName && (hasArgs || obj.length() <= 2)) trimmed else null
+    }
+
+    /** Anthropic-Skills-style Markdown documentation injected instead of native tools. */
+    private fun skillsLikeSystemPrompt(systemPrompt: String, tools: List<RikkaTool>): String = buildString {
+        append(systemPrompt)
+        append("\n\n# Tool use (skills-like mode)\n\n")
+        append(
+            "Tools are documented below instead of being passed through the provider's function-calling API. "
+        )
+        append(
+            "To invoke a tool, emit a `<tool_call>` block containing exactly one JSON object with the tool "
+        )
+        append("name and its arguments, then stop. Emit one block per call; multiple blocks run in order. ")
+        append(
+            "Results arrive in a `<tool_response>` block in the following user message; do not repeat them. "
+        )
+        append("Never invent tools or parameters; use only the documented names and argument types.\n\n")
+        append("<tool_call>\n")
+        append("{\"tool\": \"so_open\", \"args\": {\"path\": \"/data/local/tmp/libtarget.so\"}}\n")
+        append("</tool_call>\n\n## Tool reference\n")
+        tools.forEach { tool ->
+            append("\n### ").append(tool.name).append("\n\n").append(tool.description).append("\n\n")
+            append("signature: ").append(tool.name).append(schemaSignature(tool.schema)).append("\n")
+            append(schemaParams(tool.schema))
+        }
+    }
+
+    private fun schemaSignature(schema: JSONObject): String {
+        val properties = schema.optJSONObject("properties") ?: return "()"
+        val names = properties.keys().asSequence().toList()
+        if (names.isEmpty()) return "()"
+        return names.joinToString(", ", "(", ")") { key ->
+            val type = properties.optJSONObject(key)?.optString("type").orEmpty()
+            "$key: ${type.ifBlank { "any" }}"
+        }
+    }
+
+    private fun schemaParams(schema: JSONObject): String {
+        val properties = schema.optJSONObject("properties")
+        val required = schema.optJSONArray("required")
+        val rendered = if (properties == null) {
+            ""
+        } else {
+            buildString {
+                properties.keys().forEach { key ->
+                    val definition = properties.optJSONObject(key)
+                    val type = definition?.optString("type").orEmpty().ifBlank { "any" }
+                    val isRequired = required != null &&
+                        (0 until required.length()).any {
+                            required.optString(it) == key
+                        }
+                    append("- ").append(key).append(" (").append(type).append(", ")
+                    append(if (isRequired) "required" else "optional").append(")")
+                    val description = definition?.optString("description").orEmpty()
+                    if (description.isNotBlank()) {
+                        append(": ").append(description)
+                    }
+                    append('\n')
+                }
+            }
+        }
+        return rendered.ifBlank { "(no parameters)\n" }
+    }
+
+    private fun stripToolCallBlocks(text: String): String = text
+        .replace(TOOL_CALL_BLOCK_REGEX, "")
+        .replace("\n{3,}".toRegex(), "\n\n")
+        .trim()
+
+    companion object {
+        const val TOOL_SCHEMA_FULL = "full"
+        const val TOOL_SCHEMA_SKILLS_LIKE = "skills_like"
+
+        private val TOOL_CALL_BLOCK_REGEX = Regex("<tool_call>\\s*([\\s\\S]*?)\\s*</tool_call>")
     }
 }

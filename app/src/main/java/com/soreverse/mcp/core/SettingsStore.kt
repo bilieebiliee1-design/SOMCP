@@ -765,6 +765,14 @@ class SettingsStore(context: Context) {
             value.ifBlank { DEFAULT_AI_SYSTEM_PROMPT }
         ).apply()
 
+    /** Tool call mode: "full" (native function calling) or "skills_like" (prompt-documented tools). */
+    var aiToolSchemaMode: String
+        get() = prefs.getString("aiToolSchemaMode", "full") ?: "full"
+        set(value) = prefs.edit().putString(
+            "aiToolSchemaMode",
+            if (value == "skills_like") "skills_like" else "full"
+        ).apply()
+
     // ---- Sub-agents (nested agent runs spawned by an agent or by agent_api) ----
 
     /** Master switch. Off means no `spawn_subagent` tool is advertised and
@@ -973,6 +981,7 @@ class SettingsStore(context: Context) {
                     .put("customHeadersJson", aiCustomHeadersJson)
                     .put("customBodyJson", aiCustomBodyJson)
                     .put("systemPromptChars", aiSystemPrompt.length)
+                    .put("toolSchemaMode", aiToolSchemaMode)
                     .put("subAgentEnabled", subAgentEnabled)
                     .put("subAgentMaxDepth", subAgentMaxDepth)
                     .put("subAgentMaxConcurrent", subAgentMaxConcurrent)
@@ -1178,6 +1187,7 @@ class SettingsStore(context: Context) {
         applyInt(ai, "historySoftLimit") { aiHistorySoftLimit = it }
         applyStr(ai, "customHeadersJson") { aiCustomHeadersJson = it }
         applyStr(ai, "customBodyJson") { aiCustomBodyJson = it }
+        applyStr(ai, "toolSchemaMode") { aiToolSchemaMode = it }
         if (allowSecrets) {
             applySecret(ai, "apiKey") { aiApiKey = it }
         }
