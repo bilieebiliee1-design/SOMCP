@@ -679,7 +679,7 @@ internal class RikkaAgentEngine(
                 ?: obj.optJSONObject("parameters")
                 ?: JSONObject()
             RikkaPart.Tool(id = "skills_call_${step}_$index", name = name, arguments = args.toString(), index = index)
-        }
+        }.toList()
     }
 
     private fun bareToolCallPayload(text: String): String? {
