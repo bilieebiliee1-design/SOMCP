@@ -43,8 +43,8 @@ android {
         applicationId = "com.soreverse.mcp"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "1.0.22"
+        versionCode = 24
+        versionName = "1.0.23"
 
         // Publishtime of the release this APK was built from (ISO-8601 UTC).
         // The release workflow overrides it via -PpublishedAt; default empty so
