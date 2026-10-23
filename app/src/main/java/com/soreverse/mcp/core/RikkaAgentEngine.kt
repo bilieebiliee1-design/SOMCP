@@ -85,7 +85,6 @@ internal class RikkaAgentEngine(
         val visibleParts = mutableListOf<RikkaPart>()
         val executedTools = linkedSetOf<String>()
         repeat(maxSteps.coerceIn(1, 256)) {
-            val step = it
             var assistant = RikkaMessage("assistant", emptyList())
             stream(messages, tools).collect { delta ->
                 assistant = assistant.copy(parts = mergeParts(assistant.parts, delta))
@@ -93,7 +92,7 @@ internal class RikkaAgentEngine(
             }
             messages += assistant
             val calls = if (useSkillsLike) {
-                parseTextToolCalls(assistant, step)
+                parseTextToolCalls(assistant)
             } else {
                 assistant.parts.filterIsInstance<RikkaPart.Tool>().filter {
                     it.result ==
@@ -125,50 +124,23 @@ internal class RikkaAgentEngine(
                 val rendered = StringBuilder()
                 val resultParts = mutableListOf<RikkaPart.Tool>()
                 calls.forEach { call ->
-                    val (result, completed) = executeSkillCall(call, tools, executedTools)
+                    val result = executeToolCall(call, tools, executedTools)
                     rendered
                         .append("<tool_response>\n")
                         .append(
                             JSONObject()
-                                .put("tool", completed.name)
+                                .put("tool", call.name.trim())
                                 .put("result", result)
                         )
                         .append("\n</tool_response>\n")
-                    resultParts += completed
+                    resultParts += call.copy(name = call.name.trim(), result = result)
                     onParts(visibleParts + resultParts)
                 }
                 visibleParts += resultParts
                 messages += RikkaMessage("user", listOf(RikkaPart.Text(rendered.toString())))
             } else {
                 calls.forEach { call ->
-                    val requestedName = call.name.trim()
-                    val shortName = requestedName.substringAfterLast('.').substringAfterLast('/')
-                    val tool = tools.firstOrNull { it.name == requestedName }
-                        ?: tools.firstOrNull { it.name.equals(requestedName, ignoreCase = true) }
-                        ?: tools.firstOrNull { it.name.equals(shortName, ignoreCase = true) }
-                    val result = if (tool == null) {
-                        JSONObject()
-                            .put("status", "error")
-                            .put("error", "unknown_tool")
-                            .put("tool", requestedName)
-                            .put("available_tools", tools.map { it.name })
-                            .toString()
-                    } else {
-                        val args = runCatching { JSONObject(call.arguments.ifBlank { "{}" }) }
-                            .getOrElse {
-                                JSONObject()
-                                    .put("status", "error")
-                                    .put("error", "invalid_arguments")
-                                    .put("tool", requestedName)
-                                    .put("details", it.message.orEmpty())
-                                    .toString()
-                            }
-                        if (args is String) {
-                            args
-                        } else {
-                            tool.execute(args as JSONObject).also { executedTools += tool.name }
-                        }
-                    }
+                    val result = executeToolCall(call, tools, executedTools)
                     val completed = call.copy(result = result)
                     messages[messages.lastIndex] = messages.last().copy(
                         parts = messages.last().parts.map {
@@ -623,37 +595,39 @@ internal class RikkaAgentEngine(
         }
     }
 
-    /** Executes one parsed skills-like call and returns the payload plus the display part. */
-    private suspend fun executeSkillCall(call: RikkaPart.Tool, tools: List<RikkaTool>, executedTools: MutableSet<String>): Pair<String, RikkaPart.Tool> {
+    /**
+     * Single execution path shared by both tool call modes: resolves the call
+     * against the tool list (exact → case-insensitive → short name) and runs
+     * it, turning unknown tools / unparsable arguments into structured error
+     * payloads instead of aborting the run.
+     */
+    private suspend fun executeToolCall(call: RikkaPart.Tool, tools: List<RikkaTool>, executedTools: MutableSet<String>): String {
         val requestedName = call.name.trim()
         val shortName = requestedName.substringAfterLast('.').substringAfterLast('/')
         val tool = tools.firstOrNull { it.name == requestedName }
             ?: tools.firstOrNull { it.name.equals(requestedName, ignoreCase = true) }
             ?: tools.firstOrNull { it.name.equals(shortName, ignoreCase = true) }
-        val result = if (tool == null) {
-            JSONObject()
+        if (tool == null) {
+            return JSONObject()
                 .put("status", "error")
                 .put("error", "unknown_tool")
                 .put("tool", requestedName)
                 .put("available_tools", tools.map { it.name })
                 .toString()
-        } else {
-            val args = runCatching { JSONObject(call.arguments.ifBlank { "{}" }) }
-                .getOrElse {
-                    JSONObject()
-                        .put("status", "error")
-                        .put("error", "invalid_arguments")
-                        .put("tool", requestedName)
-                        .put("details", it.message.orEmpty())
-                        .toString()
-                }
-            if (args is String) {
-                args
-            } else {
-                tool.execute(args as JSONObject).also { executedTools += tool.name }
-            }
         }
-        return result to call.copy(name = requestedName, result = result)
+        val args = runCatching { JSONObject(call.arguments.ifBlank { "{}" }) }
+            .getOrElse {
+                JSONObject()
+                    .put("status", "error")
+                    .put("error", "invalid_arguments")
+                    .put("tool", requestedName)
+                    .put("details", it.message.orEmpty())
+                    .toString()
+            }
+        if (args is String) {
+            return args
+        }
+        return tool.execute(args as JSONObject).also { executedTools += tool.name }
     }
 
     /**
@@ -663,7 +637,7 @@ internal class RikkaAgentEngine(
      * ignored so prose never becomes a phantom call. Runs once per agent step over the
      * model text only (a few KB) — a single linear regex pass, no incremental rescans.
      */
-    private fun parseTextToolCalls(message: RikkaMessage, step: Int): List<RikkaPart.Tool> {
+    private fun parseTextToolCalls(message: RikkaMessage): List<RikkaPart.Tool> {
         val text = message.parts.filterIsInstance<RikkaPart.Text>().joinToString("") { it.text }
         if (text.isBlank()) return emptyList()
         val payloads = TOOL_CALL_BLOCK_REGEX.findAll(text).map { it.groupValues[1].trim() } +
@@ -678,7 +652,7 @@ internal class RikkaAgentEngine(
                 ?: obj.optJSONObject("arguments")
                 ?: obj.optJSONObject("parameters")
                 ?: JSONObject()
-            RikkaPart.Tool(id = "skills_call_${step}_$index", name = name, arguments = args.toString(), index = index)
+            RikkaPart.Tool(id = "skills_call_$index", name = name, arguments = args.toString(), index = index)
         }.toList()
     }
 
@@ -733,26 +707,30 @@ internal class RikkaAgentEngine(
     }
 
     private fun schemaParams(schema: JSONObject): String {
-        val properties = schema.optJSONObject("properties") ?: return "(no parameters)\n"
+        val properties = schema.optJSONObject("properties")
         val required = schema.optJSONArray("required")
-        if (properties.length() == 0) return "(no parameters)\n"
-        return buildString {
-            properties.keys().forEach { key ->
-                val definition = properties.optJSONObject(key)
-                val type = definition?.optString("type").orEmpty().ifBlank { "any" }
-                val isRequired = required != null &&
-                    (0 until required.length()).any {
-                        required.optString(it) == key
+        val rendered = if (properties == null) {
+            ""
+        } else {
+            buildString {
+                properties.keys().forEach { key ->
+                    val definition = properties.optJSONObject(key)
+                    val type = definition?.optString("type").orEmpty().ifBlank { "any" }
+                    val isRequired = required != null &&
+                        (0 until required.length()).any {
+                            required.optString(it) == key
+                        }
+                    append("- ").append(key).append(" (").append(type).append(", ")
+                    append(if (isRequired) "required" else "optional").append(")")
+                    val description = definition?.optString("description").orEmpty()
+                    if (description.isNotBlank()) {
+                        append(": ").append(description)
                     }
-                append("- ").append(key).append(" (").append(type).append(", ")
-                append(if (isRequired) "required" else "optional").append(")")
-                val description = definition?.optString("description").orEmpty()
-                if (description.isNotBlank()) {
-                    append(": ").append(description)
+                    append('\n')
                 }
-                append('\n')
             }
         }
+        return rendered.ifBlank { "(no parameters)\n" }
     }
 
     private fun stripToolCallBlocks(text: String): String = text
