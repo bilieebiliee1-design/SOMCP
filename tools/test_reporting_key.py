@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-test_reporting_key.py — round-trip test for the reporting API key codec.
+test_reporting_key.py — round-trip test for the native key codecs.
 
-Verifies that the *production* C++ decoder (app/src/main/cpp/reporting_key.h,
-compiled unchanged) reproduces exactly what app/generate_header.py encrypts:
+Verifies that the *production* C++ decoders (app/src/main/cpp/reporting_key.h
+and app/src/main/cpp/pin_decode.h, compiled unchanged) reproduce exactly what
+app/generate_header.py encrypts:
 
   for each case:
     1. run generate_header.py with a TM key (+ optional reporting key)
-    2. emit rk_expected.h with the expected plaintext bytes
+    2. emit rk_expected.h / pins_expected.h with the expected plaintext bytes
     3. compile tools/test_reporting_key.cpp to wasm32 with clang (NDK's)
-    4. run check() under node; 0 == round-trip OK
+    4. run check() / check_pins() under node; 0 == round-trip OK
 
 Also asserts the python-side guards: over-long keys and the all-zero fallback
 TM secret must make the generator fail instead of shipping weak material.
@@ -22,8 +23,9 @@ Requires: node on PATH and an NDK clang++ (override via RK_CLANGXX).
 # Copyright (C) 2026 bilieebiliee1-design
 #
 # This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License version 3 as published by
-# the Free Software Foundation.
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -44,6 +46,11 @@ REPO = Path(__file__).resolve().parent.parent
 GEN = REPO / "app" / "generate_header.py"
 HARNESS = REPO / "tools" / "test_reporting_key.cpp"
 CPP_DIR = REPO / "app" / "src" / "main" / "cpp"
+
+# Canonical pin plaintexts live in the generator (single source of truth);
+# importing it here keeps the expected values from drifting into a second copy.
+sys.path.insert(0, str(REPO / "app"))
+import generate_header as gen  # noqa: E402
 
 def _ndk_search_roots() -> list[Path]:
     """Candidate NDK roots in priority order: explicit NDK vars, then
@@ -102,14 +109,29 @@ def write_expected(tmp: Path, plain: str) -> None:
     )
 
 
-def wasm_roundtrip(clangxx: Path, tmp: Path) -> int:
+def write_pins_expected(tmp: Path) -> None:
+    body = "\n".join(
+        f'static const char* {name} = "{value}";'
+        for name, value in [
+            ("kExpectedSha256", gen.EXPECTED_SHA256),
+            ("kExpectedMD5", gen.EXPECTED_MD5),
+            ("kExpectedSHA1", gen.EXPECTED_SHA1),
+            ("kExpectedSHA512", gen.EXPECTED_SHA512),
+            ("kExpectedPackage", gen.EXPECTED_PACKAGE),
+        ]
+    )
+    (tmp / "pins_expected.h").write_text(body + "\n", encoding="utf-8")
+
+
+def wasm_roundtrip(clangxx: Path, tmp: Path, export: str = "check") -> int:
     exe = str(clangxx)
     wasm = tmp / "check.wasm"
     cp = subprocess.run(
         [exe, "--target=wasm32-unknown-unknown", "-std=c++17", "-O1",
          "-nostdlib", "-fno-exceptions", "-fno-rtti", "-Wall", "-Wextra",
          "-I", str(tmp), "-I", str(CPP_DIR),
-         "-Wl,--no-entry", "-Wl,--export=check", "-Wl,--allow-undefined",
+         "-Wl,--no-entry", "-Wl,--export=check", "-Wl,--export=check_pins",
+         "-Wl,--allow-undefined",
          "-o", str(wasm), str(HARNESS)],
         check=False, capture_output=True, text=True,
     )
@@ -118,7 +140,7 @@ def wasm_roundtrip(clangxx: Path, tmp: Path) -> int:
         raise RuntimeError("wasm compile failed")
     js = (
         "const fs=require('fs');const b=fs.readFileSync(process.argv[1]);"
-        "WebAssembly.instantiate(b,{}).then(r=>process.exit(r.instance.exports.check()));"
+        f"WebAssembly.instantiate(b,{{}}).then(r=>process.exit(r.instance.exports.{export}()));"
     )
     return subprocess.run(["node", "-e", js, str(wasm)], check=False).returncode
 
@@ -169,8 +191,27 @@ def main() -> int:
                 ok = False
                 continue
             write_expected(tmp, plain)
+            # The harness compiles both codecs in one TU, so the pin
+            # expectations must exist for the reporting-key cases too.
+            write_pins_expected(tmp)
             rc = wasm_roundtrip(clangxx, tmp)
             ok &= case_ok(f"round-trip: {name}", rc == 0)
+
+    # Signer-pin arrays: same generator run (no reporting key), decoder is
+    # pin_decode.h. Every array must come back byte-for-byte.
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        p = run_gen(tmp, tm, [])
+        if p.returncode != 0:
+            print(f"[FAIL] signer-pin arrays: generator failed: {p.stderr.strip()}")
+            ok = False
+        else:
+            write_pins_expected(tmp)
+            # The harness compiles both codecs in one TU; this case injects no
+            # reporting key, so the expected reporting plaintext is empty.
+            write_expected(tmp, "")
+            rc = wasm_roundtrip(clangxx, tmp, export="check_pins")
+            ok &= case_ok("round-trip: signer-pin arrays", rc == 0)
 
     print("ALL OK" if ok else "FAILURES PRESENT")
     return 0 if ok else 1
