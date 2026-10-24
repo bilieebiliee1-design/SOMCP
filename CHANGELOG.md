@@ -2,6 +2,9 @@
 
 # 更新日志
 
+## 1.0.23
+- **版本号提升：versionName 1.0.22 → 1.0.23，versionCode 23 → 24**（`app/build.gradle.kts`）。1.0.22 tag 已按主线最新代码重切后，主线进入 1.0.23 开发周期；本次仅调整版本元数据、无功能改动，后续功能条目在本段中部追加。
+
 ## 1.0.22
 - **Flutter 解析改为「映射优先、流式落盘、尽早失败」，主进程堆峰值从与库体积成正比降到与库体积无关**（`engine/FlutterByteScan.kt` 新增、`engine/FlutterArtifactInspector.kt` 重写、`engine/FlutterModels.kt` +23、`engine/BlutterCoordinator.kt`、`engine/BlutterEmbeddedBackend.kt`、`engine/BlutterResultStore.kt`、`engine/BlutterRunnerRegistry.kt`、`docs/blutter-backend.md` +37、`app/src/test/java/com/soreverse/mcp/engine/FlutterArtifactInspectorTest.kt` 新增、`app/src/test/java/com/soreverse/mcp/engine/BlutterRunnerMatcherTest.kt` 新增）。动因是对「Flutter 解析工具 1.0」APK 的静态逆向结论：Dart VM 反序列化 `libapp.so` 快照必须先建完整对象图，输入侧**不可能**真正分块，因此原实现「一次性读进 `ByteArray` 再切片」的峰值内存不是可以靠调小缓冲解决的性能问题，而是格式层面的硬约束——唯一正确的做法是让主进程根本不持有对象图，并把其余每一步都做成与文件体积无关的形态。
   - **映射优先于读取（核心改动）**。新增 `ByteView` 抽象（`ArrayByteView` 堆数组后端 / `MappedByteView` mmap 后端），ELF 解析不再 `readBytes()` 到堆，而是 `FileChannel.open(READ_ONLY) → map(READ_ONLY) → close`，`.rodata` 也不再切片成 `ByteArray`，改为携带 `rodataOffset/rodataSize` 在映射上直接读。file-backed 干净页在内存压力下可被内核直接丢弃，而 `read()` 产生的匿名脏页只能靠 swap 或 LMKD 杀进程回收——这是本次收益的主要来源。mmap 不可用时（部分 FUSE/SAF 挂载）才回退整份读入，且先过 `MemoryGuard.ensureAnalysisMemory`。
