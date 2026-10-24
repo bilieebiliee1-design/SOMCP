@@ -22,10 +22,28 @@ class ElfParser(private val data: ByteArray) {
         val type = r.u16(16)
         val machine = r.u16(18)
         val entry = if (bits == 64) r.u64(24) else r.u32(24)
+        val phoff = if (bits == 64) r.u64(32) else r.u32(28)
         val shoff = if (bits == 64) r.u64(40) else r.u32(32)
+        val phentsize = r.u16(if (bits == 64) 54 else 42)
+        val phnum = r.u16(if (bits == 64) 56 else 44)
         val shentsize = if (bits == 64) r.u16(58) else r.u16(46)
         val shnum = if (bits == 64) r.u16(60) else r.u16(48)
         val shstrndx = if (bits == 64) r.u16(62) else r.u16(50)
+
+        val programHeaders = (0 until phnum).mapNotNull { idx ->
+            val off = (phoff + idx.toLong() * phentsize).toInt()
+            if (off < 0 || off + phentsize > data.size) return@mapNotNull null
+            ProgramHeaderInfo(
+                type = r.u32(off),
+                flags = if (bits == 64) r.u32(off + 4) else r.u32(off + 24),
+                offset = if (bits == 64) r.u64(off + 8) else r.u32(off + 4),
+                vaddr = if (bits == 64) r.u64(off + 16) else r.u32(off + 8),
+                paddr = if (bits == 64) r.u64(off + 24) else r.u32(off + 12),
+                filesz = if (bits == 64) r.u64(off + 32) else r.u32(off + 16),
+                memsz = if (bits == 64) r.u64(off + 40) else r.u32(off + 20),
+                align = if (bits == 64) r.u64(off + 48) else r.u32(off + 28)
+            )
+        }
 
         val rawSections = (0 until shnum).map { idx ->
             val off = (shoff + idx.toLong() * shentsize).toInt()
@@ -159,7 +177,33 @@ class ElfParser(private val data: ByteArray) {
             if (sec.name !in setOf(".rodata", ".strtab", ".dynstr")) continue
             extractStrings(sectionBytes(sec), sec.offset, sec.name, strings)
         }
-        return ElfFile(data, bits, little, type, machine, entry, sections, symbols, dynSymbols, relocs, strings)
+        val dynamicEntries = parseDynamicEntries(r, bits, programHeaders, sections)
+        return ElfFile(
+            data, bits, little, type, machine, entry, sections, symbols, dynSymbols, relocs, strings,
+            programHeaders, dynamicEntries
+        )
+    }
+
+    /** PT_DYNAMIC 优先、SHT_DYNAMIC 节兜底，读到 DT_NULL 或区间结束为止。 */
+    private fun parseDynamicEntries(r: Reader, bits: Int, programHeaders: List<ProgramHeaderInfo>, sections: List<SectionInfo>): List<DynamicEntryInfo> {
+        val dynamicPhdr = programHeaders.firstOrNull { it.type == 2L }
+        val dynamicSection = sections.firstOrNull { it.type == 6L }
+        val offset = dynamicPhdr?.offset ?: dynamicSection?.offset
+        val size = dynamicPhdr?.filesz ?: dynamicSection?.size
+        if (offset == null || size == null || offset < 0 || size <= 0) return emptyList()
+        val start = offset.toInt().coerceIn(0, Int.MAX_VALUE)
+        val end = min(start + size.toInt(), Int.MAX_VALUE)
+        val entrySize = if (bits == 64) 16 else 8
+        val out = mutableListOf<DynamicEntryInfo>()
+        var off = start
+        while (off + entrySize <= end) {
+            val tag = if (bits == 64) r.s64(off) else r.s32(off).toLong()
+            val value = if (bits == 64) r.u64(off + 8) else r.u32(off + 4)
+            out += DynamicEntryInfo(tag, value)
+            if (tag == 0L) break
+            off += entrySize
+        }
+        return out
     }
 
     private fun sectionBytes(section: SectionInfo): ByteArray {

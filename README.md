@@ -82,7 +82,7 @@ Release 输出体积随原生后端更新变化，以 GitHub Release 资产页�
 
 ## MCP 工具体系
 
-当前共 54 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
+当前共 84 个内置工具，准确数量以 `tools/list` 返回的 `_meta.fullToolCount` 为准；默认 lean 模式会广告核心、底层网关和 meta 工具，降低 LLM 初始化上下文成本。
 
 推荐工作流：
 
