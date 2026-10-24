@@ -860,6 +860,15 @@ jobs:
                   console.log('Auto-merge failed (ignored): ' + e.message);
                 }
                 if (merged) {
+                  // Lock the merged PR's own conversation (same policy as the
+                  // linked issues closed below): after merge only maintainers
+                  // can keep commenting. Lock failure never blocks the flow.
+                  try {
+                    await github.rest.issues.lock({ owner, repo, issue_number: pull_number, lock_reason: 'resolved' });
+                    console.log(`Locked conversation on merged PR #${pull_number} (auto-merge).`);
+                  } catch (e) {
+                    console.log('Lock merged PR failed (ignored): ' + e.message);
+                  }
                   // The auto-merge used this run's GITHUB_TOKEN. GitHub
                   // suppresses PR `closed` events that are caused by a
                   // workflow's GITHUB_TOKEN, so the standalone
