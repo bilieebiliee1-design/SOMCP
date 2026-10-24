@@ -181,9 +181,28 @@ jobs:
 
       - name: Comment and close linked issues
         uses: actions/github-script@v7
+        env:
+          # 锁定 PR 本体对话需要 PR 编号（dispatch 补跑时事件里没有 pull_request）。
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
         with:
           script: |
             const fs = require('fs');
+            const { owner, repo } = context.repo;
+            // 先锁已合并 PR 本体的对话——与下方关联 issue 的锁定同一口径，
+            // 且不依赖本 PR 是否有关联 issue。仅在实际已合并时锁定
+            // （dispatch 手动补跑的目标也应是已合并 PR）。
+            const prNumber = Number(process.env.PR_NUMBER || 0);
+            if (prNumber) {
+              try {
+                const { data: prNow } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+                if (prNow.merged) {
+                  await github.rest.issues.lock({ owner, repo, issue_number: prNumber, lock_reason: 'resolved' });
+                  console.log(`Locked conversation on merged PR #${prNumber}.`);
+                }
+              } catch (e) {
+                console.log('Lock merged PR failed (ignored): ' + e.message);
+              }
+            }
             let list = '';
             try { list = fs.readFileSync('/tmp/linked_issues.txt', 'utf8').trim(); } catch (e) {}
             if (!list) {
