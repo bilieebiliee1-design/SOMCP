@@ -47,7 +47,7 @@ jobs:
             const fs = require('fs');
             const { owner, repo } = context.repo;
             const pull_number = Number(process.env.PR_NUMBER || context.issue.number);
-            const isManual = github.event_name === 'workflow_dispatch';
+            const isManual = context.eventName === 'workflow_dispatch';
             let pr;
             if (isManual) {
               pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
