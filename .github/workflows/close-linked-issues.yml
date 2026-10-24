@@ -209,7 +209,6 @@ jobs:
               console.log('No linked issues to process.');
               return;
             }
-            const { owner, repo } = context.repo;
             for (const raw of list.split(/\s+/)) {
               const num = Number(raw);
               if (!num) continue;
