@@ -17,7 +17,7 @@ class CryptoFingerprintTest {
 
     private fun algorithms(r: org.json.JSONObject): List<String> {
         val arr = r.getJSONArray("algorithms")
-        return (0 until arr.length()).map { arr.getJSONObject(i).getString("algorithm") }
+        return (0 until arr.length()).map { arr.getJSONObject(it).getString("algorithm") }
     }
 
     @Test
@@ -58,7 +58,7 @@ class CryptoFingerprintTest {
         val sbox = byteArrayOf(
             0x63, 0x7c, 0x77, 0x7b, 0xf2.toByte(), 0x6b, 0x6f, 0xc5.toByte(), 0x30, 0x01, 0x67, 0x2b, 0xfe.toByte(), 0xd7.toByte(), 0xab.toByte(), 0x76,
             0xca.toByte(), 0x82.toByte(), 0xc9.toByte(), 0x7d, 0xfa.toByte(), 0x59, 0x47, 0xf0.toByte(), 0xad.toByte(), 0xd4.toByte(), 0xa2.toByte(),
-            0xaf.toByte(), 0x9c.toByte(), 0xa4, 0x72, 0xc0.toByte()
+            0xaf.toByte(), 0x9c.toByte(), 0xa4.toByte(), 0x72, 0xc0.toByte()
         )
         val blob = sbox + sbox + sbox + sbox + sbox
         val elf = ElfFile(

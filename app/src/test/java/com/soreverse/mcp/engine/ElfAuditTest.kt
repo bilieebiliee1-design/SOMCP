@@ -146,6 +146,52 @@ class ElfAuditTest {
     }
 
     @Test
+    fun parserReads32BitPhdrLayoutPerSpec() {
+        // Elf32_Phdr: type@0, offset@4, vaddr@8, paddr@12, filesz@16, memsz@20,
+        // flags@24, align@28 — flags sits AFTER memsz on 32-bit (unlike 64-bit,
+        // where it is at +4). Every field gets a distinct value so any offset
+        // mixup flips the assertion.
+        fun le32(v: Long) = byteArrayOf(
+            (v and 0xff).toByte(),
+            ((v shr 8) and 0xff).toByte(),
+            ((v shr 16) and 0xff).toByte(),
+            ((v shr 24) and 0xff).toByte()
+        )
+
+        fun le16(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v shr 8) and 0xff).toByte())
+
+        fun phdr32(type: Long, offset: Long, vaddr: Long, paddr: Long, filesz: Long, memsz: Long, flags: Long, align: Long) =
+            le32(type) + le32(offset) + le32(vaddr) + le32(paddr) + le32(filesz) + le32(memsz) + le32(flags) + le32(align)
+
+        // e_ident(16) + e_type@16 + e_machine@18(EM_ARM) + e_version@20 + entry@24 +
+        // phoff@28 + shoff@32 + e_flags@36 + ehsize@40 + phentsize@42 + phnum@44 +
+        // shentsize@46 + shnum@48 + shstrndx@50 (total 52).
+        val ehdr = byteArrayOf(0x7f, 0x45, 0x4c, 0x46, 1, 1, 1, 0) + ByteArray(8) +
+            le16(3) + le16(40) + le32(0) + le32(0) + le32(52) +
+            le32(0) + le32(0) + le16(52) +
+            le16(32) + le16(2) + le16(40) + le16(0) + le16(0)
+        val body = ehdr +
+            phdr32(1, 0x10, 0x20, 0x30, 0x40, 0x50, 0x7, 0x1000) +
+            phdr32(4, 0x60, 0x70, 0x80, 0x90, 0xa0, 0x4, 0x4)
+        val elf = ElfParser(body).parse()
+        assertEquals(2, elf.programHeaders.size)
+        val load = elf.programHeaders[0]
+        assertEquals(1L, load.type)
+        assertEquals(0x10L, load.offset)
+        assertEquals(0x20L, load.vaddr)
+        assertEquals(0x30L, load.paddr)
+        assertEquals(0x40L, load.filesz)
+        assertEquals(0x50L, load.memsz)
+        assertEquals(0x7L, load.flags)
+        assertEquals(0x1000L, load.align)
+        val note = elf.programHeaders[1]
+        assertEquals(4L, note.type)
+        assertEquals(0xa0L, note.memsz)
+        assertEquals(0x4L, note.flags)
+        assertEquals(0x4L, note.align)
+    }
+
+    @Test
     fun androidIdentDecodesSdkNdkAndBuild() {
         val ident = NativeProfile.androidIdent(data, elf)
         assertTrue(ident.getBoolean("found"))
