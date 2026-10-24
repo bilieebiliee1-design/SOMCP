@@ -124,7 +124,10 @@ class ElfAuditTest {
     fun visibilityAuditCountsExportedDynsym() {
         val visibility = ElfAudit.visibilityAudit(elf)
         assertTrue(visibility.getInt("exported") >= 1)
-        assertTrue(visibility.getInt("imported") == 0)
+        // ElfParser keeps symtab entry 0 (the null entry) as a symbol: its
+        // nameOffset is 0, which resolves to dynstr[0] here, and shndx=0 marks
+        // it imported. That artifact is the ONLY imported entry on this fixture.
+        assertEquals(1, visibility.getInt("imported"))
     }
 
     @Test

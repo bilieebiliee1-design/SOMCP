@@ -55,7 +55,9 @@ class JniMangleTest {
             JniMangle.encode("a.B", "arr", "([Ljava/lang/String;)V")
         )
         val r = JniMangle.decode("Java_a_B_arr___3Ljava_lang_String_2")
-        assertEquals("([Ljava/lang/String;)V", r.getString("signature"))
+        // The long name carries the argument descriptor only: the return type V
+        // is dropped by encode, so decode cannot and must not report it.
+        assertEquals("([Ljava/lang/String;)", r.getString("signature"))
     }
 
     @Test

@@ -365,11 +365,11 @@ internal object ElfAudit {
 
     private val STRING_TAGS = mapOf(1L to "needed", 14L to "soname", 15L to "rpath", 29L to "runpath")
 
-    private fun dynstrBytes(data: ByteArray, elf: ElfFile): Pair<ByteArray, Long>? {
+    /** DT_STRTAB bytes (length DT_STRSZ); string tag values are offsets into this table. */
+    private fun dynstrBytes(data: ByteArray, elf: ElfFile): ByteArray? {
         val strtabVaddr = elf.dynamicEntries.firstOrNull { it.tag == 5L }?.value ?: return null
         val strsz = elf.dynamicEntries.firstOrNull { it.tag == 10L }?.value?.toInt() ?: 4096
-        val bytes = bytesForVaddr(data, elf, strtabVaddr, strsz.coerceIn(1, 1 shl 20)) ?: return null
-        return bytes to strtabVaddr
+        return bytesForVaddr(data, elf, strtabVaddr, strsz.coerceIn(1, 1 shl 20))
     }
 
     // ── elf_dynamic_tags ──
@@ -383,8 +383,9 @@ internal object ElfAudit {
                 .put("name", dynamicTagName(e.tag))
                 .put("value", "0x${e.value.toString(16)}")
             val kind = STRING_TAGS[e.tag]
-            if (kind != null && dynstr != null && e.value >= dynstr.second) {
-                item.put(kind, cstr(dynstr.first, (e.value - dynstr.second).toInt()))
+            // String tag values are offsets into DT_STRTAB, not vaddrs.
+            if (kind != null && dynstr != null && e.value >= 0 && e.value < dynstr.size) {
+                item.put(kind, cstr(dynstr, e.value.toInt()))
             }
             items.put(item)
         }
@@ -562,17 +563,19 @@ internal object ElfAudit {
 
     fun neededList(data: ByteArray, elf: ElfFile): List<String> {
         val dynstr = dynstrBytes(data, elf) ?: return emptyList()
+        // DT_NEEDED/DT_SONAME/DT_RPATH/DT_RUNPATH values are byte offsets INTO the
+        // string table, not vaddrs: no strtab-base subtraction here.
         return elf.dynamicEntries.filter { it.tag == 1L }.mapNotNull { e ->
-            val off = e.value - dynstr.second
-            cstr(dynstr.first, off.toInt()).takeIf { it.isNotBlank() }
+            if (e.value < 0 || e.value > Int.MAX_VALUE) return@mapNotNull null
+            cstr(dynstr, e.value.toInt()).takeIf { it.isNotBlank() }
         }
     }
 
     fun soname(data: ByteArray, elf: ElfFile): String? {
         val dynstr = dynstrBytes(data, elf) ?: return null
         val tag = elf.dynamicEntries.firstOrNull { it.tag == 14L } ?: return null
-        val off = tag.value - dynstr.second
-        return cstr(dynstr.first, off.toInt()).takeIf { it.isNotBlank() }
+        if (tag.value < 0 || tag.value > Int.MAX_VALUE) return null
+        return cstr(dynstr, tag.value.toInt()).takeIf { it.isNotBlank() }
     }
 
     // ── symbol_visibility_audit ──
