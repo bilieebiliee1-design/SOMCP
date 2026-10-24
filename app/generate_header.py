@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
 """
 generate_header.py
-Generates key_generated.h containing XOR-encoded arrays and the rotating
-multi-byte XOR key for use in native_probe.cpp.
+Generates key_generated.h containing SHA-256-CTR-encoded arrays plus the TM
+secret they are keyed under, for use in native_probe.cpp.
 
 The encoded arrays contain:
   - kEncodedExpectedSha256: SHA-256 of the official release build record
   - kEncodedMD5: MD5 hash for reference
   - kEncodedSHA1: SHA-1 hash for reference
   - kEncodedSHA512: SHA-512 hash for reference
-  - kEncodedExpectedPackage: XOR-encoded package name "com.soreverse.mcp"
+  - kEncodedExpectedPackage: encoded package name "com.soreverse.mcp"
 
-The key is read from the $TM environment variable (16 hex chars = 8 bytes).
-
-The reporting API key (log-report-platform X-API-Key) does NOT use the
-rotating-XOR scheme: it is encrypted under a SHA-256 counter-mode keystream
-  master          = SHA256(TM secret || salt(16B random per build))
+Every array (signer pins and the reporting API key alike) is encrypted under
+a SHA-256 counter-mode keystream stretched from the TM secret:
+  master          = SHA256(TM secret || salt)
   keystream blk i = SHA256(master || LE32(i))
   cipher          = plaintext XOR keystream
 so no short repeating key pattern and no plaintext ever sit in the artifact.
-The runtime decoder lives in reporting_key.h. The generated header
-deliberately contains NO key material in comments.
+The pins use a fixed domain-separation salt (kPinSalt) because they are build
+constants and the header must stay reproducible; the reporting API key uses a
+per-build random salt. Runtime decoders: pin_decode.h (pins) and
+reporting_key.h (reporting key). The generated header deliberately contains
+NO key material in comments.
+
+The TM secret is read from the $TM environment variable (16 hex chars =
+8 bytes).
 
 Usage:
     python generate_header.py --key <16-hex-chars> --dst <key_generated.h>
@@ -59,9 +63,11 @@ def parse_key(hex_str: str) -> list:
     return [int(s[i:i+2], 16) for i in range(0, 16, 2)]
 
 
-def xor_encode(plain: str, key: list) -> list:
-    """Encode plaintext bytes using rotating XOR with the given key."""
-    return [ord(c) ^ key[i % len(key)] for i, c in enumerate(plain)]
+# Fixed domain-separation salt for the signer-pin arrays. Not secret: it only
+# pins the pins' keystream domain apart from the reporting key's (which draws
+# a per-build random salt). Fixed rather than random because the pins are
+# build constants — key_generated.h must stay a pure function of $TM.
+PIN_SALT = hashlib.sha256(b"SOMCP signer-pin domain v1").digest()[:16]
 
 
 def read_local_prop(name: str) -> str:
@@ -85,7 +91,7 @@ def read_local_prop(name: str) -> str:
     return ""
 
 
-def fmt_array(name: str, data: list, indent: int = 4) -> str:
+def fmt_array(name: str, data, indent: int = 4) -> str:
     """Format a byte array as C source code."""
     spaces = " " * indent
     lines = [f"{spaces}static const uint8_t {name}[] = {{"]
@@ -99,18 +105,17 @@ def fmt_array(name: str, data: list, indent: int = 4) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Reporting API key encryption (SHA-256 counter-mode keystream)
+# SHA-256 counter-mode keystream encryption
 #
-# MUST stay byte-for-byte in sync with app/src/main/cpp/reporting_key.h:
-#   master = SHA256(TM secret || salt(16B)); the TM secret is already present
-#   in the binary for the signer-pin arrays, so here it is *stretched* into a
-#   dedicated reporting master; salt is a per-build random nonce.
-#   keystream block i = SHA256(master || LE32(i));
-#   ciphertext = plaintext XOR keystream (blocks concatenated, truncated).
-# The plaintext depends only on (TM secret, LRP_API_KEY), so every CI build
-# reproduces the exact same key material.
+# Used for BOTH the signer-pin arrays (fixed PIN_SALT) and the reporting API
+# key (per-build random salt). The C++ decoders MUST stay byte-for-byte in
+# sync: pin_decode.h for the pins, app/src/main/cpp/reporting_key.h for the
+# reporting key.
+#   master          = SHA256(TM secret || salt)
+#   keystream blk i = SHA256(master || LE32(i))
+#   ciphertext      = plaintext XOR keystream (blocks concatenated, truncated)
 # ---------------------------------------------------------------------------
-RK_MAX_KEY_LEN = 512  # decoder rejects anything longer; API keys are far shorter
+RK_MAX_KEY_LEN = 512  # decoder rejects anything longer; pins and API keys are far shorter
 
 
 def rk_keystream(master: bytes, n: int) -> bytes:
@@ -120,18 +125,26 @@ def rk_keystream(master: bytes, n: int) -> bytes:
     return bytes(blocks[:n])
 
 
-def encode_reporting_key(plain: str, tm_key: list, salt: bytes) -> bytes:
-    """Return the ciphertext bytes for the reporting API key."""
+def ctr_encode(plain: str, tm_key: list, salt: bytes) -> bytes:
+    """Return the ciphertext bytes for [plain] under the TM-keyed keystream."""
     data = plain.encode("utf-8")
     if len(data) > RK_MAX_KEY_LEN:
-        raise ValueError(f"reporting key exceeds {RK_MAX_KEY_LEN} bytes")
+        raise ValueError(f"plaintext exceeds {RK_MAX_KEY_LEN} bytes")
     master = hashlib.sha256(bytes(tm_key) + salt).digest()
     return bytes(a ^ b for a, b in zip(data, rk_keystream(master, len(data))))
 
 
+# Plaintext values to encode (these are the known/canonical values).
+EXPECTED_SHA256 = "90FEDAC1F020C6C5D1DD1A635DB5C3B7579F5B87647E2C2C00966D3BCB0F8B6F"  # official release signing certificate
+EXPECTED_MD5 = "A0B1C2D3E4F5061728394A5B6C7D8E9F"  # for reference
+EXPECTED_SHA1 = "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4"  # for reference
+EXPECTED_SHA512 = "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90"  # for reference
+EXPECTED_PACKAGE = "com.soreverse.mcp"  # package name pin
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate key_generated.h with XOR-encoded signature arrays"
+        description="Generate key_generated.h with SHA-256-CTR-encoded signature arrays"
     )
     parser.add_argument(
         "--key",
@@ -169,32 +182,20 @@ def main():
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Plaintext values to encode (these are the known/canonical values)
-    # SHA-256 of the official release signing certificate
-    EXPECTED_SHA256 = "90FEDAC1F020C6C5D1DD1A635DB5C3B7579F5B87647E2C2C00966D3BCB0F8B6F"
-    # MD5 for reference
-    EXPECTED_MD5 = "A0B1C2D3E4F5061728394A5B6C7D8E9F"
-    # SHA-1 for reference
-    EXPECTED_SHA1 = "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4"
-    # SHA-512 for reference
-    EXPECTED_SHA512 = "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90"
-    # Package name pin
-    EXPECTED_PACKAGE = "com.soreverse.mcp"
-
-    # Encode all arrays with the new key
+    # Encode all pin arrays under the SHA-256-CTR keystream (fixed salt).
     arrays = {
-        "kEncodedExpectedSha256": xor_encode(EXPECTED_SHA256, key),
-        "kEncodedMD5": xor_encode(EXPECTED_MD5, key),
-        "kEncodedSHA1": xor_encode(EXPECTED_SHA1, key),
-        "kEncodedSHA512": xor_encode(EXPECTED_SHA512, key),
-        "kEncodedExpectedPackage": xor_encode(EXPECTED_PACKAGE, key),
+        "kEncodedExpectedSha256": ctr_encode(EXPECTED_SHA256, key, PIN_SALT),
+        "kEncodedMD5": ctr_encode(EXPECTED_MD5, key, PIN_SALT),
+        "kEncodedSHA1": ctr_encode(EXPECTED_SHA1, key, PIN_SALT),
+        "kEncodedSHA512": ctr_encode(EXPECTED_SHA512, key, PIN_SALT),
+        "kEncodedExpectedPackage": ctr_encode(EXPECTED_PACKAGE, key, PIN_SALT),
     }
     lengths = {name: len(v) for name, v in arrays.items()}
 
     # log-report-platform reporting API key (X-API-Key), injected at build time
     # from $LRP_API_KEY (CI secret) or --reporting-key. Encrypted under a
-    # SHA-256-CTR keystream stretched from the TM secret (see
-    # encode_reporting_key). The plaintext is NEVER printed or logged.
+    # SHA-256-CTR keystream stretched from the TM secret (see ctr_encode).
+    # The plaintext is NEVER printed or logged.
     reporting_key = args.reporting_key
     if reporting_key is None:
         reporting_key = os.environ.get("LRP_API_KEY", "")
@@ -204,13 +205,14 @@ def main():
     reporting_key = reporting_key.strip()
     if reporting_key and all(b == 0 for b in key):
         # The all-zero fallback TM key is public knowledge; encrypting with it
-        # would amount to shipping the plaintext. Fail the build instead.
+        # would key the keystream off a value every artifact carries. Fail the
+        # build instead.
         print("ERROR: refusing to encrypt the reporting key with the all-zero "
               "fallback TM key; provide a real $TM secret.", file=sys.stderr)
         sys.exit(1)
     try:
         rk_salt = secrets.token_bytes(16)
-        rk_cipher = encode_reporting_key(reporting_key, key, rk_salt)
+        rk_cipher = ctr_encode(reporting_key, key, rk_salt)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
@@ -219,17 +221,27 @@ def main():
     parts = []
     parts.append("""// ---------------------------------------------------------------------------
 // AUTO-GENERATED — DO NOT EDIT
-// Generated by generate_header.py at build time. Contains ONLY encoded /
-// encrypted byte arrays — no plaintext secrets, and no secret in comments.
+// Generated by generate_header.py at build time. Contains ONLY encrypted
+// byte arrays — no plaintext secrets, and no secret in comments.
 // ---------------------------------------------------------------------------
 #pragma once
 
-// Multi-byte rotating XOR key (injected at build time from $TM secret)
-static const uint8_t kXorKey[] = {""" + ", ".join(f"0x{b:02X}" for b in key) + """};
-static const size_t kXorKeyLen = """ + str(len(key)) + """;
+// TM secret (injected at build time from $TM). Key material for every
+// SHA-256-CTR keystream below; never a plaintext literal.
+static const uint8_t kTmKey[] = {""" + ", ".join(f"0x{b:02X}" for b in key) + """};
+static const size_t kTmKeyLen = """ + str(len(key)) + """;
+
+// Fixed domain-separation salt for the signer-pin arrays (not secret).
+// Runtime decoder: pin_decode.h.
+static const uint8_t kPinSalt[] = {""" + ", ".join(f"0x{b:02X}" for b in PIN_SALT) + """};
+static const size_t kPinSaltLen = """ + str(len(PIN_SALT)) + """;
 
 """)
 
+    # Signer-pin arrays, SHA-256-CTR encrypted (runtime decoder: pin_decode.h):
+    #   master          = SHA256(kTmKey || kPinSalt)
+    #   keystream blk i = SHA256(master || LE32(i))
+    #   plaintext       = array XOR keystream
     for name, enc_bytes in sorted(arrays.items()):
         parts.append(fmt_array(name, enc_bytes))
         len_name = name + "Len"
@@ -238,7 +250,7 @@ static const size_t kXorKeyLen = """ + str(len(key)) + """;
     # ---- reporting API key (SHA-256-CTR; runtime decoder: reporting_key.h) ----
     parts.append("""// ---------------------------------------------------------------------------
 // Reporting API key (log-report-platform X-API-Key), SHA-256-CTR encrypted:
-//   master          = SHA256(kXorKey || kRkSalt)
+//   master          = SHA256(kTmKey || kRkSalt)
 //   keystream blk i = SHA256(master || LE32(i))
 //   plaintext       = kRepApiKeyCipher XOR keystream
 // kRkSalt is a per-build random nonce. A length of 0 unambiguously means
