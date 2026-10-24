@@ -923,37 +923,38 @@ static bool crc32_matches_inflated(const uint8_t* compressed, size_t compressed_
 }
 
 // ---------------------------------------------------------------------------
-// Obfuscated expected signer digest
+// Encrypted expected signer digest
 //
 // The SHA-256 hex string of the official release signing certificate is
-// stored with a rotating multi-byte XOR cipher so it never appears as a
-// plain-text literal in the binary. The encoded arrays and key are defined
-// in key_generated.h (generated at build time from the TM GitHub secret).
+// stored under a SHA-256 counter-mode keystream so it never appears as a
+// plain-text literal in the binary. The encrypted arrays, the TM secret and
+// the pin salt are defined in key_generated.h (generated at build time from
+// the TM GitHub secret); the runtime decoder is pin_decode.h.
 // ---------------------------------------------------------------------------
-// All encoded arrays and the XOR key are defined in key_generated.h:
+// All encrypted arrays and the TM key material are defined in key_generated.h:
 //   #include "key_generated.h"  (at line 787 below)
 // ---------------------------------------------------------------------------
 
 #include "key_generated.h"
 #include "reporting_key.h"  // pulls in sha256_impl.h (shared SHA-256 primitives)
+#include "pin_decode.h"     // SHA-256-CTR decoder for the signer-pin arrays
 
 // Compiles the AGPL-3.0 license text into this library. Exactly one
 // translation unit per shared library may include it; see license_notice.h.
 #include "license_notice.h"
 
 /**
- * Decodes a rotating multi-byte XOR-encoded hex string into a plain hex string.
- * Each byte is XOR'd with kXorKey[i % kXorKeyLen] (from key_generated.h).
+ * Decodes a SHA-256-CTR-encoded pin array from key_generated.h into a
+ * std::string, then wipes the stack buffer it was decoded into.
  *
  * Used only for the signer-pin arrays. The reporting API key deliberately
- * does NOT go through this scheme — see reporting_key.h.
+ * does NOT go through this scheme — see rk::decode_api_key (reporting_key.h).
  */
-static std::string decode_xor_hex(const uint8_t* encoded, size_t len) {
-    std::string result;
-    result.reserve(len);
-    for (size_t i = 0; i < len; i++) {
-        result.push_back(static_cast<char>(encoded[i] ^ kXorKey[i % kXorKeyLen]));
-    }
+static std::string decode_pin(const uint8_t* encoded, size_t len) {
+    char buf[pin::kMaxPinLen];
+    size_t n = pin::decode(encoded, len, buf, sizeof(buf));
+    std::string result(buf, n);
+    rk::secure_zero(buf, sizeof(buf));
     return result;
 }
 
@@ -2038,13 +2039,14 @@ static int probe_archive(const uint8_t* apk, size_t apk_size) {
 
 /**
  * Returns the expected SHA-256 digest of the official release signing
- * certificate. The value is stored XOR-encoded in key_generated.h and decoded
- * at runtime, so it does not appear as a plain-text literal in the .so binary.
+ * certificate. The value is stored SHA-256-CTR-encrypted in key_generated.h
+ * and decoded at runtime, so it does not appear as a plain-text literal in
+ * the .so binary.
  */
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_NativeProbe_nativeGetPinnedFingerprint(
     JNIEnv* env, jobject thiz) {
-    std::string digest = decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
+    std::string digest = decode_pin(kEncodedExpectedSha256, kEncodedExpectedSha256Len);
     jstring out = env->NewStringUTF(digest.c_str());
     wipe_string(digest);
     return out;
@@ -2400,9 +2402,9 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeReadEnvelopeV234(
 
 /**
  * Matches the running package id against the pinned value
- * ("com.soreverse.mcp"). The expected value is stored XOR-obfuscated in the
- * binary, so a repackaged build with a changed applicationId is rejected here
- * even if the Java context reports a spoofed package name.
+ * ("com.soreverse.mcp"). The expected value is stored SHA-256-CTR-encrypted
+ * in the binary, so a repackaged build with a changed applicationId is
+ * rejected here even if the Java context reports a spoofed package name.
  *
  * @return JNI_TRUE if [packageName] matches the pin, JNI_FALSE otherwise.
  */
@@ -2424,7 +2426,7 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeMatchPackageId(
     env->ReleaseStringUTFChars(packageName, pkg);
 
     std::string expected =
-        decode_xor_hex(kEncodedExpectedPackage, kEncodedExpectedPackageLen);
+        decode_pin(kEncodedExpectedPackage, kEncodedExpectedPackageLen);
     const bool ok = (actual == expected);
     wipe_string(expected);
     if (!ok) {
@@ -2560,7 +2562,7 @@ Java_com_soreverse_mcp_nativecore_NativeProbe_nativeVerifyBlock(
     }
 
     std::string pinned =
-        normalize_hex(decode_xor_hex(kEncodedExpectedSha256, kEncodedExpectedSha256Len));
+        normalize_hex(decode_pin(kEncodedExpectedSha256, kEncodedExpectedSha256Len));
 
     bool fatal = false;
     const int code = verify_sign_block(apk.data(), apk.size(), eocd_pos,
