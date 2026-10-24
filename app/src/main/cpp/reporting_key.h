@@ -6,7 +6,7 @@
 //
 // The key is injected at build time (see app/generate_header.py) and stored
 // in key_generated.h encrypted under a SHA-256 counter-mode keystream:
-//   master          = SHA256(kXorKey || kRkSalt)
+//   master          = SHA256(kTmKey || kRkSalt)
 //   keystream blk i = SHA256(master || LE32(i))
 //   plaintext       = kRepApiKeyCipher XOR keystream
 // There is no short repeating XOR pattern and no plaintext anywhere in the
@@ -36,7 +36,7 @@ inline void secure_zero(void* p, size_t n) {
 inline void derive_master(uint8_t master[32]) {
     Sha256 s;
     sha256_init(&s);
-    sha256_update(&s, kXorKey, kXorKeyLen);
+    sha256_update(&s, kTmKey, kTmKeyLen);
     sha256_update(&s, kRkSalt, 16);
     sha256_final(&s, master);
     secure_zero(&s, sizeof(s));
