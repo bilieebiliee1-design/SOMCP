@@ -71,7 +71,7 @@ internal object SynthElf {
             ByteArray(32)
         )
         val sections = mutableListOf(
-            Sec(".dynsym", 11, 0x2, dynsym, entsize = 24, link = 1),
+            Sec(".dynsym", 11, 0x2, dynsym, entsize = 24, link = 2),
             Sec(".dynstr", 3, 0x2, dynstr),
             Sec(".rela.dyn", 4, 0x2, rela, entsize = 24, link = 1),
             Sec(".dynamic", 6, 0x6, dynamic, entsize = 16, link = 2),

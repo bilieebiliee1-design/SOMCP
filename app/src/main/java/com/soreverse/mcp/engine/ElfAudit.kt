@@ -180,7 +180,9 @@ internal object ElfAudit {
                 }
             }
         }
-        val covered = data.size - gaps.sumOf { g -> g.getLong("size") }
+        var gapTotal = 0L
+        for (i in 0 until gaps.length()) gapTotal += gaps.getJSONObject(i).getLong("size")
+        val covered = data.size - gapTotal
         val coverage = if (data.isEmpty()) 100.0 else covered * 100.0 / data.size
         return JSONObject()
             .put("fileSize", data.size)

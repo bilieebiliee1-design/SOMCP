@@ -16,6 +16,17 @@ import org.json.JSONObject
 /** Loads APK bytes for the audit tools; returns the error envelope on any gate failure. */
 internal fun EngineRuntime.loadApkAuditInput(path: String): Pair<ByteArray, JSONObject?> {
     if (path.isBlank()) return ByteArray(0) to err("INVALID_ARGUMENT", "APK path is required", "path", path)
+    // Reject absolute paths and traversal segments before any filesystem or SAF
+    // access: the work-directory reader resolves by relative path only, and a
+    // canonical form keeps the allow-list check meaningful.
+    val normalized = path.replace('\\', '/')
+    val segments = normalized.split('/').filter { it.isNotEmpty() && it != "." }
+    val traversal = normalized.startsWith("/") ||
+        normalized.contains(":") ||
+        segments.any { it == ".." }
+    if (traversal) {
+        return ByteArray(0) to err("PATH_NOT_ALLOWED", "APK path must be relative and stay inside its root", "path", path)
+    }
     val local = File(path)
     if (local.isFile && !isAllowedLocalInput(local)) {
         return ByteArray(0) to err(
@@ -63,7 +74,7 @@ internal fun EngineRuntime.loadApkAuditInput(path: String): Pair<ByteArray, JSON
     return bytes to null
 }
 
-private fun apkAuditOk(path: String, bytes: ByteArray, payload: JSONObject): JSONObject = ok(
+private fun EngineRuntime.apkAuditOk(path: String, bytes: ByteArray, payload: JSONObject): JSONObject = ok(
     JSONObject()
         .put("path", path)
         .put("size", bytes.size)

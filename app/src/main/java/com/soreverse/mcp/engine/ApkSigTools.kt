@@ -554,7 +554,7 @@ internal object ApkSigTools {
                 anomaly("windows_drive", "drive-absolute entry name", e.name)
             }
             if (e.localOffset >= layout.cdOffset) anomaly("bad_local_offset", "local header points into central directory", e.name)
-            if (e.flags and 0x1L != 0) anomaly("encrypted_entry", "entry is flagged encrypted", e.name)
+            if (e.flags and 0x1 != 0) anomaly("encrypted_entry", "entry is flagged encrypted", e.name)
             if (e.method != 0 && e.method != 8) anomaly("unknown_method", "compression method ${e.method}", e.name)
             if (e.name.endsWith(".so", true) && e.method == 0 && e.localOffset % 4096L != 0L) {
                 anomaly("unaligned_so", "stored .so is not 4096-aligned (zipalign)", e.name)
