@@ -109,13 +109,13 @@ target_sources(rz_native PRIVATE zstd_compat_stub.cpp)
 
 # Generate key_generated.h from the TM GitHub Actions secret.
 # The key is read from $TM (16 hex chars = 8 bytes). If $TM is not set,
-# local development builds fall back to a per-build RANDOM key (the encoded
+# local development builds fall back to a per-build RANDOM key (the encrypted
 # arrays and the key ship together inside the same .so, so consistency is
 # per-build by design and a random fallback loses nothing). The old fixed
-# all-zero fallback meant XOR == plaintext: every debug artifact and every CI
-# release built without TM carried the signer pins as readable ASCII - never
-# do that again. Hardened builds (REQUIRE_NATIVE_BACKENDS=ON) must provide
-# the secret.
+# all-zero fallback meant the rotating-XOR key was zero, i.e. every debug
+# artifact and every CI release built without TM carried the signer pins as
+# readable ASCII - never do that again. Hardened builds
+# (REQUIRE_NATIVE_BACKENDS=ON) must provide the secret.
 set(KEY_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/key_generated.h")
 
 # This CMakeLists is the top-level source dir for the Android Gradle plugin,
@@ -124,18 +124,18 @@ set(KEY_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/key_generated.h")
 set(GEN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../../../../app/generate_header.py")
 
 if(DEFINED ENV{TM} AND NOT "$ENV{TM}" STREQUAL "")
-    set(XOR_KEY "$ENV{TM}")
-    message(STATUS "[xor-key] generating key_generated.h from TM secret")
+    set(TM_KEY "$ENV{TM}")
+    message(STATUS "[key-gen] generating key_generated.h from TM secret")
 elseif(REQUIRE_NATIVE_BACKENDS)
     message(FATAL_ERROR
-        "[xor-key] TM environment variable not set.\n"
+        "[key-gen] TM environment variable not set.\n"
         "  Set `$env:TM = '<16-hex-chars>' before building."
     )
 else()
-    string(RANDOM LENGTH 16 ALPHABET "0123456789abcdef" XOR_KEY)
+    string(RANDOM LENGTH 16 ALPHABET "0123456789abcdef" TM_KEY)
     message(STATUS
-        "[xor-key] TM not set; using a per-build random fallback key "
-        "(pins stay encoded; rebuilds produce different key material).")
+        "[key-gen] TM not set; using a per-build random fallback key "
+        "(pins stay encrypted; rebuilds produce different key material).")
 endif()
 
 # The reporting API key (log-report-platform X-API-Key) is read by
@@ -152,17 +152,17 @@ else()
 endif()
 
 execute_process(
-    COMMAND python "${GEN_SCRIPT}"
-        --key "${XOR_KEY}"
-        --dst "${KEY_GENERATED}"
+  COMMAND python "${GEN_SCRIPT}"
+      --key "${TM_KEY}"
+      --dst "${KEY_GENERATED}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../../../.."
     RESULT_VARIABLE GEN_RESULT
 )
 if(NOT GEN_RESULT EQUAL 0)
-    message(FATAL_ERROR "[xor-key] generation failed. Check generate_header.py output.")
+    message(FATAL_ERROR "[key-gen] generation failed. Check generate_header.py output.")
 endif()
 
-message(STATUS "[xor-key] using header: ${KEY_GENERATED}")
+message(STATUS "[key-gen] using header: ${KEY_GENERATED}")
 
 # Make the generated header available to native_probe.cpp
 target_include_directories(rz_native PRIVATE
