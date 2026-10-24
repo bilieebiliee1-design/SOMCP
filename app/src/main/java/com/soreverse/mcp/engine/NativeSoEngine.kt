@@ -201,4 +201,53 @@ class NativeSoEngine(context: Context) {
     fun emulate(workspaceId: String, editSessionId: String, symbolName: String, args: JSONArray, trace: Boolean): JSONObject =
         runtime.emulate(workspaceId, editSessionId, symbolName, args, trace)
     fun dumpMemory(workspaceId: String, editSessionId: String, addr: Long, size: Int): JSONObject = runtime.dumpMemory(workspaceId, editSessionId, addr, size)
+
+    // ── T1 audit batch (elf_* / str_* / crypto_* / patch_* / apk_* / evidence) ──
+
+    fun elfAbiProfile(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfAbiProfile(workspaceId, editSessionId)
+    fun elfByteLedger(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfByteLedger(workspaceId, editSessionId)
+    fun elfSectionAnomaly(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfSectionAnomaly(workspaceId, editSessionId)
+    fun elfPhdrInvariants(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfPhdrInvariants(workspaceId, editSessionId)
+    fun elfDynamicTags(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfDynamicTags(workspaceId, editSessionId)
+    fun elfDtFlags(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfDtFlags(workspaceId, editSessionId)
+    fun elfHashTables(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfHashTables(workspaceId, editSessionId)
+    fun elfRelocCensus(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.elfRelocCensus(workspaceId, editSessionId)
+    fun dtNeededResolve(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.dtNeededResolve(workspaceId, editSessionId)
+    fun symbolVisibilityAudit(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.symbolVisibilityAudit(workspaceId, editSessionId)
+    fun codePaddingCaves(workspaceId: String, editSessionId: String = "", minSize: Int = 16): JSONObject =
+        runtime.codePaddingCaves(workspaceId, editSessionId, minSize)
+
+    fun patchCaveFinder(workspaceId: String, editSessionId: String = "", minSize: Int = 16): JSONObject =
+        runtime.patchCaveFinder(workspaceId, editSessionId, minSize)
+
+    fun jniMangleCodec(args: JSONObject): JSONObject = runtime.jniMangleCodec(args)
+    fun androidIdentNote(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.androidIdentNote(workspaceId, editSessionId)
+    fun ndkToolchainFingerprint(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.ndkToolchainFingerprint(workspaceId, editSessionId)
+
+    fun libcxxVariant(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.libcxxVariant(workspaceId, editSessionId)
+    fun strEncodingCensus(workspaceId: String, editSessionId: String = "", limit: Int = 200): JSONObject =
+        runtime.strEncodingCensus(workspaceId, editSessionId, limit)
+
+    fun strLiteralClasses(workspaceId: String, editSessionId: String = "", limit: Int = 500): JSONObject =
+        runtime.strLiteralClasses(workspaceId, editSessionId, limit)
+
+    fun cryptoConstFingerprint(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.cryptoConstFingerprint(workspaceId, editSessionId)
+
+    fun cryptoHashConstants(workspaceId: String, editSessionId: String = ""): JSONObject = runtime.cryptoHashConstants(workspaceId, editSessionId)
+
+    fun netEndpointExtract(workspaceId: String, editSessionId: String = "", limit: Int = 300): JSONObject =
+        runtime.netEndpointExtract(workspaceId, editSessionId, limit)
+
+    fun filePathRoots(workspaceId: String, editSessionId: String = "", limit: Int = 300): JSONObject = runtime.filePathRoots(workspaceId, editSessionId, limit)
+
+    fun envPropertyKeys(workspaceId: String, editSessionId: String = "", limit: Int = 300): JSONObject =
+        runtime.envPropertyKeys(workspaceId, editSessionId, limit)
+
+    fun patchLengthGuard(args: JSONObject): JSONObject = runtime.patchLengthGuard(args)
+    fun patchApplyVerify(workspaceId: String, editSessionId: String): JSONObject = runtime.patchApplyVerify(workspaceId, editSessionId)
+    fun apkSigVerify(path: String): JSONObject = runtime.apkSigVerify(path)
+    fun apkCertInfo(path: String): JSONObject = runtime.apkCertInfo(path)
+    fun apkZipAnomaly(path: String): JSONObject = runtime.apkZipAnomaly(path)
+    fun apkAbiCoverage(path: String): JSONObject = runtime.apkAbiCoverage(path)
+    fun evidenceManifest(workspaceId: String, claims: org.json.JSONArray): JSONObject = runtime.evidenceManifest(workspaceId, claims)
 }
