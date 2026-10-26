@@ -53,9 +53,15 @@ data class GitHubRelease(
     val apkUrl: String,
     val apkSize: Long,
     val checksumUrl: String?,
-    /** Release publishtime (ISO-8601, UTC). "" when the API omitted it. Used to
-     *  tell a same-version republish apart from the build already installed. */
-    val publishedAt: String = ""
+    /** Release publishtime (ISO-8601, UTC). "" when the API omitted it. Paired
+     *  with [createdAt] to tell a same-version republish apart from the release
+     *  a user already has. */
+    val publishedAt: String = "",
+    /** Release-record creation time (ISO-8601, UTC). Falls back to
+     *  [publishedAt] when the API omitted it. A release whose [publishedAt] is
+     *  later than this was created first and (re)published later — a republish
+     *  of the same version. */
+    val createdAt: String = ""
 )
 
 sealed interface UpdateCheckResult {
@@ -184,7 +190,7 @@ class GitHubUpdateManager(private val context: Context) {
     }
 
     /** Highest non-draft release of the requested prerelease state; ties
-     *  (same-version republish) break by publishtime. */
+     *  (the same tag kept across a republish) break by publishtime. */
     private fun newestRelease(array: JSONArray, prerelease: Boolean): JSONObject? {
         var candidate: JSONObject? = null
         var candidateTime = ""
@@ -226,15 +232,6 @@ class GitHubUpdateManager(private val context: Context) {
         return comparePrerelease(prereleaseOf(left), prereleaseOf(right))
     }
 
-    /** Component-wise core comparison, zero-padded; null when equal. */
-    private fun compareCore(left: List<Int>, right: List<Int>): Int? {
-        for (index in 0 until maxOf(left.size, right.size)) {
-            val comparison = (left.getOrNull(index) ?: 0).compareTo(right.getOrNull(index) ?: 0)
-            if (comparison != 0) return comparison
-        }
-        return null
-    }
-
     /** Pre-release suffix (after the first '-', build metadata '+' dropped);
      *  null for a clean release tag. */
     private fun prereleaseOf(version: String): String? {
@@ -270,17 +267,17 @@ class GitHubUpdateManager(private val context: Context) {
         }
     }
 
-    /** Numeric core of a version tag: the dotted numbers before any
-     *  -suffix/+build. */
-    private fun versionParts(version: String): List<Int> = version.trim().removePrefix(
-        "v"
-    ).substringBefore('-').substringBefore('+').split('.').mapNotNull(String::toIntOrNull)
-
     private fun buildRelease(root: JSONObject, required: Boolean): UpdateCheckResult {
         val tag = root.optString("tag_name")
         val publishedAt = root.optString("published_at")
             .ifBlank { root.optString("created_at") }
-        if (!isUpdateOfferable(tag, publishedAt)) return UpdateCheckResult.Current
+        // The record's own creation moment: the API always sends created_at, and
+        // a republished release keeps it while published_at moves past it.
+        val createdAt = root.optString("created_at")
+            .ifBlank { publishedAt }
+        if (!isUpdateOfferable(tag, publishedAt, createdAt, BuildConfig.VERSION_NAME)) {
+            return UpdateCheckResult.Current
+        }
         val assets = root.optJSONArray("assets")
         val apk = assets?.let { selectApk((0 until it.length()).map { index -> it.getJSONObject(index) }, Build.SUPPORTED_ABIS) }
             ?: return if (required) error("Release has no APK for ${Build.SUPPORTED_ABIS.joinToString()}") else UpdateCheckResult.Current
@@ -302,7 +299,8 @@ class GitHubUpdateManager(private val context: Context) {
                 checksumUrl = checksum?.optString(
                     "browser_download_url"
                 )?.takeIf(String::isNotBlank),
-                publishedAt = publishedAt
+                publishedAt = publishedAt,
+                createdAt = createdAt
             )
         )
     }
@@ -551,33 +549,6 @@ class GitHubUpdateManager(private val context: Context) {
         return true
     }
 
-    /** Whether the release [tag] (published at [publishedAt], ISO-8601 UTC)
-     *  should be offered as an update to this build.
-     *
-     *  Compares the NUMERIC CORE only against this APK's versionName (which
-     *  never carries a beta suffix): a higher core is always offered — that
-     *  covers both new stables and newer betas. Equal core is the
-     *  same-version case (republish, or beta1 -> beta2): offered only when
-     *  the release was published AFTER this APK's own release moment, which
-     *  the release workflow embeds via -PpublishedAt
-     *  (BuildConfig.RELEASE_PUBLISHED_AT). That single rule resolves the
-     *  users-indistinguishable-by-versionName dilemma: a stable 1.0.22 user
-     *  has embedded the final's publishtime, so the older beta 1.0.22-x
-     *  (published before it) is never offered; a beta1 user has beta1's
-     *  publishtime, so beta2 (published later) is offered. Dev/test builds
-     *  have no embedded moment and suppress equal-core offers entirely.
-     *  Lower core: never. ISO-8601 UTC strings sort lexicographically. */
-    private fun isUpdateOfferable(tag: String, publishedAt: String): Boolean {
-        val core = compareCore(versionParts(tag), versionParts(BuildConfig.VERSION_NAME))
-        return when {
-            core != null && core > 0 -> true
-            core != null -> false
-            else -> publishedAt.isNotBlank() &&
-                BuildConfig.RELEASE_PUBLISHED_AT.isNotBlank() &&
-                publishedAt > BuildConfig.RELEASE_PUBLISHED_AT
-        }
-    }
-
     private suspend fun verifyChecksum(file: File, url: String, assetName: String = file.name): String {
         var expected: String? = null
         var lastFailure: Throwable? = null
@@ -644,6 +615,49 @@ class GitHubUpdateManager(private val context: Context) {
     companion object {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
         private const val RELEASES_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases"
+
+        /** Whether the release [tag] (published at [publishedAt], record created
+         *  at [createdAt]) should be offered as an update to the APK built with
+         *  [currentVersionName].
+         *
+         *  Compares the NUMERIC CORE only against this APK's versionName (which
+         *  never carries a beta suffix): a higher core is always offered — that
+         *  covers both new stables and newer betas. Lower core: never.
+         *
+         *  Equal core is the same-version case (republish, or beta1 -> beta2
+         *  under one versionName). The old rule compared the release's
+         *  published_at against the APK's embedded build instant, but the
+         *  release job embeds its START time and publishes the release at its
+         *  END — so published_at was ALWAYS later than every installed APK's
+         *  baseline, and the newest release was offered to its own users
+         *  forever ("已是最新版仍提示有最新版本"). The release record's own two
+         *  timestamps carry the same information without any build-time
+         *  coupling: a first publish lands with published_at == created_at,
+         *  while a republish (delete/recreate, or draft-then-publish) moves
+         *  published_at past created_at. Offer an equal-core release only on
+         *  that republish signal; ISO-8601 UTC strings sort lexicographically. */
+        internal fun isUpdateOfferable(tag: String, publishedAt: String, createdAt: String, currentVersionName: String): Boolean {
+            val core = compareCore(versionParts(tag), versionParts(currentVersionName))
+            return when {
+                core != null -> core > 0
+                else -> publishedAt.isNotBlank() && createdAt.isNotBlank() && publishedAt > createdAt
+            }
+        }
+
+        /** Numeric core of a version tag: the dotted numbers before any
+         *  -suffix/+build. */
+        internal fun versionParts(version: String): List<Int> = version.trim().removePrefix(
+            "v"
+        ).substringBefore('-').substringBefore('+').split('.').mapNotNull(String::toIntOrNull)
+
+        /** Component-wise core comparison, zero-padded; null when equal. */
+        internal fun compareCore(left: List<Int>, right: List<Int>): Int? {
+            for (index in 0 until maxOf(left.size, right.size)) {
+                val comparison = (left.getOrNull(index) ?: 0).compareTo(right.getOrNull(index) ?: 0)
+                if (comparison != 0) return comparison
+            }
+            return null
+        }
 
         /** ABIs the release pipeline publishes as single-ABI splits (plus one
          *  -universal.apk). Order is irrelevant; matching is exact-token. */
