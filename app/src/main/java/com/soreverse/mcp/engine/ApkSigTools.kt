@@ -410,6 +410,7 @@ internal object ApkSigTools {
                         val cert = CertificateFactory.getInstance("X.509").generateCertificate(der.inputStream()) as X509Certificate
                         signerReport.put("certSha256", sha256(der))
                         signerReport.put("subject", cert.subjectDN.name.take(160))
+                        CompromisedCaBlocklist.match(cert)?.let { signerReport.put("compromisedCa", it.toJson()) }
                         if (parsed.minSdk != null) signerReport.put("minSdk", parsed.minSdk).put("maxSdk", parsed.maxSdk)
                         // digest recompute per signer's digest records
                         val digestReports = JSONArray()
@@ -480,7 +481,7 @@ internal object ApkSigTools {
     fun certJson(cert: X509Certificate): JSONObject {
         val md = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
         val md1 = MessageDigest.getInstance("SHA-1").digest(cert.encoded)
-        return JSONObject()
+        val json = JSONObject()
             .put("subject", cert.subjectDN.name)
             .put("issuer", cert.issuerDN.name)
             .put("serial", cert.serialNumber.toString(16))
@@ -491,6 +492,8 @@ internal object ApkSigTools {
             .put("selfSigned", cert.subjectDN == cert.issuerDN)
             .put("sha256", hexStr(md).uppercase())
             .put("sha1", hexStr(md1).uppercase())
+        CompromisedCaBlocklist.match(cert)?.let { json.put("compromisedCa", it.toJson()) }
+        return json
     }
 
     fun certInfo(apk: ByteArray): JSONObject {
@@ -526,10 +529,16 @@ internal object ApkSigTools {
             }
         }
         val items = JSONArray()
-        certs.forEach { (source, cert) -> items.put(certJson(cert).put("source", source)) }
+        var blockedCount = 0
+        certs.forEach { (source, cert) ->
+            val item = certJson(cert).put("source", source)
+            if (item.has("compromisedCa")) blockedCount++
+            items.put(item)
+        }
         return JSONObject()
             .put("certCount", certs.size)
             .put("certificates", items)
+            .put("blockedCount", blockedCount)
             .put("expired", certs.any { it.second.notAfter.time < System.currentTimeMillis() })
     }
 

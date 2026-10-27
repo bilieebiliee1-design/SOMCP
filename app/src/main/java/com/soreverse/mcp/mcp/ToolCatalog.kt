@@ -3269,8 +3269,8 @@ object ToolCatalog {
     private val apkSigVerify = EngineToolHandler(
         ToolMeta(
             "apk_sig_verify",
-            "解析并校验 APK v2/v3 签名块：重算分块摘要并验证签名",
-            "Parse and verify APK Signing Block v2/v3: recompute the chunked content digests (0xa5/0x5a spec tree) and verify signer signatures against the embedded certificate.",
+            "解析并校验 APK v2/v3 签名块：重算分块摘要并验证签名，签名者命中已知泄漏 CA 时附 compromisedCa 标记",
+            "Parse and verify APK Signing Block v2/v3: recompute the chunked content digests (0xa5/0x5a spec tree) and verify signer signatures against the embedded certificate. Signers chained to CAs with leaked keys (e.g. CVE-2026-111943) carry a compromisedCa marker.",
             "workspace",
             ToolClass.EXTRA
         ) {
@@ -3285,8 +3285,8 @@ object ToolCatalog {
     private val apkCertInfo = EngineToolHandler(
         ToolMeta(
             "apk_cert_info",
-            "输出签名证书主体/颁发者/算法/有效期/指纹",
-            "Certificate details from the signing block and META-INF PKCS#7 entries: subject, issuer, validity, algorithms, SHA-256/SHA-1 fingerprints.",
+            "输出签名证书主体/颁发者/算法/有效期/指纹，命中已知泄漏 CA 时附 compromisedCa 标记",
+            "Certificate details from the signing block and META-INF PKCS#7 entries: subject, issuer, validity, algorithms, SHA-256/SHA-1 fingerprints. Certificates issued by CAs with leaked keys (e.g. CVE-2026-111943) carry a compromisedCa marker; blockedCount summarizes the hits.",
             "workspace",
             ToolClass.EXTRA
         ) {
