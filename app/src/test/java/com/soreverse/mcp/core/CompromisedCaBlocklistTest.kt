@@ -118,8 +118,8 @@ class CompromisedCaBlocklistTest {
     @Test
     fun crossSignatureUnderTheAaaRootSharesTheLeakedKeyAndIsBlocked() {
         assertTrue(
-            crossSignedByAaa.issuerX500Principal.name.contains("AAA Certificate Services"),
-            crossSignedByAaa.issuerX500Principal.name
+            crossSignedByAaa.issuerX500Principal.name,
+            crossSignedByAaa.issuerX500Principal.name.contains("AAA Certificate Services")
         )
         assertNotEquals(serialHex(issuedByEmSign), serialHex(crossSignedByAaa))
         assertEquals("A024FDF4BA665C785CE4A020483858B7", serialHex(crossSignedByAaa))
