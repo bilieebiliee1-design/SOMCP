@@ -97,6 +97,7 @@ class CloudflareTunnelManager(private val context: Context, private val settings
         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .withCompromisedCaBlocklist()
         .build()
 
     private val _status = AtomicReference(TunnelStatus())

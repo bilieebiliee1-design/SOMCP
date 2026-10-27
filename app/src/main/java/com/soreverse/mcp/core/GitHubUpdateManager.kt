@@ -97,6 +97,7 @@ class GitHubUpdateManager(private val context: Context) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
+        .withCompromisedCaBlocklist()
         .build()
     private val probeClient = client.newBuilder()
         .connectTimeout(4, TimeUnit.SECONDS)

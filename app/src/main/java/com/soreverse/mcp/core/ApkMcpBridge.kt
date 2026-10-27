@@ -54,6 +54,7 @@ class ApkMcpBridge(private val settings: SettingsStore) {
             OkHttpClient.Builder()
                 .connectTimeout(8, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.SECONDS)
+                .withCompromisedCaBlocklist()
                 .build()
         }
 
