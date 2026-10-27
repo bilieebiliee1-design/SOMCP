@@ -48,8 +48,13 @@ import okhttp3.OkHttpClient
  *
  * Enforcement lives in the app process, not in the device trust store, so it holds
  * regardless of whether a given device has received the platform's distrust update.
- * Note that it cannot cover the tunnel data plane: that TLS is performed inside the
- * bundled cloudflared (Go) child process, which this class has no way to instrument.
+ *
+ * It does not cover the tunnel data plane. The cloudflared child does its own path
+ * building against `/system/etc/security/cacerts` rather than through Conscrypt, so it
+ * neither sees this wrapper nor inherits the Mainline distrusted-CA list. A child-side
+ * route does exist — Go's crypto/x509 honours SSL_CERT_FILE and SSL_CERT_DIR — but it
+ * means generating a filtered bundle at runtime, which would break every tunnel if it
+ * is ever wrong, so it is deliberately not attempted here.
  */
 object CompromisedCaBlocklist {
 
