@@ -188,6 +188,13 @@ android {
         }
         resources {
             excludes += setOf(
+                // unidbg-android 的上游 jar 与 patched jar 各带一份同样的 tzdata，
+                // :app:mergeDebugJavaResource 以
+                //   「2 files found with path 'android/sdk23/system/usr/share/zoneinfo/tzdata'」
+                // 直接失败。两份内容一致（patched jar 只改过 Java 类），排掉不影响产物。
+                // 与 class 重复是两回事：上面那些 exclude 管的是依赖图，这一条管的是
+                // java 资源合并，依赖排干净了它在某些路径上仍可能被合并器看见。
+                "android/sdk23/system/usr/share/zoneinfo/tzdata",
                 "DebugProbesKt.bin",
                 "cc.c",
                 "r_styles.ini",
@@ -386,4 +393,33 @@ dependencies {
 
     // Argon2 key derivation for encrypted backup/restore
     implementation("com.lambdapioneer.argon2kt:argon2kt:1.6.0")
+}
+
+// 上游 unidbg-* 坐标必须从**整张依赖图**里排掉：patched jar 走本地 Maven 仓库、
+// 版本号 `x.y.z.1`，靠「高版本胜出」顶掉同名模块 —— 但那条路对下面这个 group 不生效。
+//
+// JitPack 对同一个仓库给两种坐标布局：`com.github.<user>` 与 `com.github.<user>.<repo>`，
+// unidbg 两个都在用。`x.y.z.1` 与 `x.y.z` 只有在 group:module 完全相同时才会进同一次
+// 冲突解析；`com.github.zhkl0228.unidbg:unidbg-api` 与
+// `com.github.zhkl0228:unidbg-api` 是两份互不相干的模块，高版本号够不着它。
+// CNB 上 checkDebugDuplicateClasses 的 333 条重复类**全部**来自后者：
+//
+//   Duplicate class com.github.unidbg.AbstractEmulator found in modules
+//     unidbg-api-0.9.9-android-patched.jar and
+//     com.github.zhkl0228.unidbg:unidbg-api:0.9.9
+//
+// 写在整个 configuration 上而不是某个依赖块里：同一坐标有多条传递路径
+// （unicorn2 → unidbg-api → unidbg-android，demumble / unicorn 各自也会带），
+// 逐块写 exclude 只挡得住自己那一条。
+//
+// 只排这四个模块，不整组排：`unicorn:1.0.15` 是 unicorn.* 唯一的来源（见上面那段
+// 注释），整组排掉会在 session_open 时 ClassNotFoundException。
+val upstreamUnidbgGroups = listOf("com.github.zhkl0228", "com.github.zhkl0228.unidbg")
+val upstreamUnidbgModules = listOf("unidbg-api", "unidbg-android", "capstone", "keystone")
+configurations.configureEach {
+    upstreamUnidbgGroups.forEach { upstreamGroup ->
+        upstreamUnidbgModules.forEach { upstreamModule ->
+            exclude(group = upstreamGroup, module = upstreamModule)
+        }
+    }
 }
