@@ -24,9 +24,13 @@
  *     - com.github.zhkl0228.unidbg:unidbg-android:0.9.9
  *
  * 做法：在解析**之前**把上游那份从 selector 列表里摘掉 ——
- * `incoming.artifactView { beforeResolve { ... } }`，`beforeResolve` 回调拿到的是
- * `ComponentSelector` 集合，`removeAll` 之后 Gradle 根本不会解析上游那个模块，
- * 冲突也就无从发生。判据是「这个配置里有没有同名 patched jar」（看
+ * `configuration.incoming.beforeResolve { ... }`，回调拿到的是
+ * `ResolvableDependencies`，它的 `dependencies` 是待解析的 selector 集合，
+ * `removeAll` 之后 Gradle 根本不会解析上游那个模块，冲突也就无从发生。
+ * （别挂到 `incoming.artifactView { }` 上：那是 ResolutionOutputs，
+ *  `ArtifactViewConfiguration` 没有 beforeResolve，实测报
+ *  `Could not find method beforeResolve()`，而且抛在 apply 插件阶段，
+ *  整个工程连配置都过不去。）判据是「这个配置里有没有同名 patched jar」（看
  * `allDependencies` 的构件名，不触发解析），与「谁把它带进来的」无关 ——
  * 逐个 exclude 堵来路这条路已经试过：带上游 jar 进来的路径不止一个，排掉一条，
  * 换条路径又漏回来。
@@ -69,39 +73,37 @@ def somcpPatchedModules = [
 ] as Set
 
 configurations.configureEach { configuration ->
-    configuration.incoming.artifactView { view ->
-        view.beforeResolve { resolvableDependencies ->
-            // 先判「这个配置里有没有 patched jar」（不变量 2）：只看构件名，
-            // 不触发解析。files() 依赖在配置期就已经在 allDependencies 里了。
-            Set<String> patchedNames = configuration.allDependencies
-                .collect { it.name }
-                .findAll { it != null && it.contains('-patched') }
-
-            if (patchedNames.isEmpty()) {
-                return
-            }
-
-            Set<String> shadowed = somcpPatchedModules
-                .findAll { module -> patchedNames.any { it.startsWith("${module}-") } } as Set
-            if (shadowed.isEmpty()) {
-                return
-            }
-
-            def dropped = resolvableDependencies.dependencies.findAll { dependency ->
-                def selector = dependency as ModuleComponentSelector
-                selector.group in somcpPatchedGroups && shadowed.contains(selector.module)
-            }*.toString()
-
-            if (dropped.isEmpty()) {
-                return
-            }
-
-            // 不变量 3：依赖图被动过，日志里看得见。
-            logger.lifecycle("[patched-jars] ${configuration.name}: drop upstream ${dropped.join(', ')}")
-            resolvableDependencies.dependencies.removeAll { dependency ->
-                def selector = dependency as ModuleComponentSelector
-                selector.group in somcpPatchedGroups && shadowed.contains(selector.module)
-            }
+    configuration.incoming.beforeResolve { resolvableDependencies ->
+        // 先判「这个配置里有没有 patched jar」（不变量 2）：只看依赖名，不触发解析。
+        // files() 依赖在配置期就已经在 allDependencies 里了。
+        Set<String> patchedNames = configuration.allDependencies
+            .collect { it.name }
+            .findAll { it != null && it.contains('-patched') }
+        if (patchedNames.isEmpty()) {
+            return
         }
+
+        Set<String> shadowed = somcpPatchedModules
+            .findAll { module -> patchedNames.any { it.startsWith("${module}-") } } as Set
+        if (shadowed.isEmpty()) {
+            return
+        }
+
+        // 真正要动的是**解析中的那张图**：`resolvableDependencies.dependencies` 是
+        // beforeResolve 时刻的 selector 集合，removeAll 之后上游那个模块不会被解析；
+        // 而 `allDependencies` 只是声明（files() 也在里面，没有 group/module 可比）。
+        def matches = { dependency ->
+            dependency instanceof ModuleComponentSelector &&
+                dependency.group in somcpPatchedGroups &&
+                shadowed.contains(dependency.module)
+        }
+        def dropped = resolvableDependencies.dependencies.findAll(matches)*.toString()
+        if (dropped.isEmpty()) {
+            return
+        }
+
+        // 不变量 3：依赖图被动过，日志里看得见。
+        logger.lifecycle("[patched-jars] ${configuration.name}: drop upstream ${dropped.join(', ')}")
+        resolvableDependencies.dependencies.removeAll(matches)
     }
 }
