@@ -460,7 +460,7 @@ androidx / compose / ktor / okhttp 全没进缓存，而日志只看得到一句
 做一次「只看缓存」的复核。
 
 第二遍里 `settings.gradle.kts` 那条 `somcpPatchedLocal` 仓库仍然照抄保留 —— 第一遍铺
-在 `app/build/patched-jars-repo` 的那四个 `.1` 还在那儿，第二遍的最小 `:app` 没有
+在 `app/libs/build/patched-jars-repo` 的那四个 `.1` 还在那儿，第二遍的最小 `:app` 没有
 `dependencies {}`，用不上，留着只为「预热和运行期看同一份仓库列表」。
 
 ### 裁根脚本时要把 `extra["somcp*"]` 留下
@@ -696,8 +696,8 @@ implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zh
 另外还要排掉上游的第二个 group（`com.github.zhkl0228.unidbg`），理由与做法见下面
 「「高版本胜出」够不着第二个 group」一节。
 
-**B. 坐标能解析到 patched 内容。** 插件同时在 `app/build/patched-jars-repo` 生成一个最小
-Maven 仓库：
+**B. 坐标能解析到 patched 内容。** 插件同时在 `app/libs/build/patched-jars-repo` 生成一个最小
+Maven 仓库（不在 `build/` 下：buildDir 中途被清空会让 `.1` 变成「找不到依赖」）：
 
 | patched jar | 坐标 |
 | --- | --- |
@@ -715,6 +715,10 @@ Maven 仓库：
 中非 test scope 的条目。最典型的是 `capstone:3.1.8.1` —— 它在坐标世界里没有第二个声明方
 （`unidbg-unicorn2` 那三条 `exclude` 就是证据），空壳 POM 会让它的 `jna` /
 `native-lib-loader` 整片消失，编译或许还过，运行期 JNA 那条路径直接找不到类。
+
+唯一的裁剪是 capstone / keystone 这两条（`app` 自己声明了它们）：抄进 `unidbg-api` 的
+POM 就多一条把上游同名模块吊回图的路径，而下面那组 `exclude` 挡的是
+`com.github.zhkl0228:<module>`，挡不住 POM 传递。
 
 版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 分段比版本，`patched` 这种非数字段
 排在数字段**之前**，实测 `0.9.9.patched < 0.9.9`，上游反而胜出。
@@ -808,14 +812,14 @@ error writing value of type
 `fce2fc8` 之后，patched jar 走的是「声明时换坐标」：`app/build.gradle.kts` 里那四条
 `implementation(patchedJar("x.jar", "x.y.z.1"))` 会被插件在**声明的那一刻**换成
 `x.y.z.1` 坐标依赖（`dependency.useTarget(...)`），jar 与 POM 由插件写进
-`app/build/patched-jars-repo` —— 也就是 `settings.gradle.kts` 里 `somcpPatchedLocal`
+`app/libs/build/patched-jars-repo` —— 也就是 `settings.gradle.kts` 里 `somcpPatchedLocal`
 那个仓库的 url。**两边必须是同一个绝对路径**（见下面「路径」那一节）。
 
 预热必须跟着这条走：**第一遍按原样带着插件跑**，否则预热下的是上游 `x.y.z`、
 运行期用的是 `x.y.z.1`，两份缓存对不上。所以顺序是
 
 1. `publish_patched_local_repo()`：照口径表把四个 `.1` 的 jar + POM 铺进
-   `app/build/patched-jars-repo`（`settings.gradle.kts` 里那个仓库 url），
+   `app/libs/build/patched-jars-repo`（`settings.gradle.kts` 里那个仓库 url），
    POM 的 `<dependencies>` 从插件里的 `somcpPatchedPomDependencies` 读，与运行期逐条一致；
 2. `rewrite_root_script()`；
 3. `cold_build` —— 这一遍里插件是真的 apply 的。
