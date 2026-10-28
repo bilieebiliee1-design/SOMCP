@@ -18,10 +18,43 @@
 # 清空成一行 rootProject.name，Gradle 就只剩缺省的 gradlePluginPortal，
 # 预热去 Google 找不到 AGP 的 marker，运行期又反过来缺 aliyun 镜像。
 # 用 grep 取整块，取不到就失败（比静默生成一个残缺工程强）。
+#
+# 三件事一起做才成立：预热工程里不能有 buildSrc（见「buildSrc」那段），
+# 不能有仓库的 settings / 子项目脚本（上面两半），也不能留下仓库的 app 脚本。
 set -euo pipefail
 
 DIR="${1:-/tmp/cnb-warmup}"
 cd "$DIR"
+
+# --- buildSrc：预热工程里必须没有 -------------------------------------------
+# Gradle 只要看见 settings 所在目录有 buildSrc/，就会在**配置任何工程之前**
+# 先把它当成一个独立的 included build 编译一遍，用的是它自己那份
+# buildSrc/build.gradle.kts —— 那份里写的是 `kotlin-dsl` 插件，而这次预热的
+# 目的恰恰是「把插件下进用户目录」，判定成了鸡生蛋：
+#
+#   Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+#   - Searched in the following repositories:
+#       Gradle Central Plugin Repository
+#
+# 两个问题叠在一起：本地没有这份插件（冷启动），仓库列表里又只有缺省的
+# gradlePluginPortal（buildSrc 不继承 settings 的 pluginManagement 与
+# dependencyResolutionManagement，镜像预热那两条 --init-script 也管不到它），
+# 于是镜像的预热层与运行期的「只看缓存」复核会双双失败。
+#
+# 预热不需要 buildSrc：它只在**运行期**配置期把 app/libs/*-patched.jar 复制成
+# 带元数据的本地仓库，而那份仓库与 libs/ 都不在 docker:cache 的构建上下文里。
+# 少了它，buildSrc 里定义的插件与 repo 都没了，但也不会有人用到 —— :app 的
+# 脚本由本文件生成，只有 plugins {} 与最小 android {}。
+#
+# 只删这里的副本：/tmp/cnb-warmup 是 Dockerfile 里 COPY 出来的临时目录，
+# 仓库自己的 buildSrc/ 一个字节都不动。
+#
+# 位置很关键：必须在第一次调用 gradle 之前，而且 Dockerfile 那边也要有一道
+# （补丁段是既有环境），否则只删这里会被「预热目录是上次留下的」这种状态绕过去。
+if [ -d buildSrc ]; then
+  rm -rf buildSrc
+  echo "[warmup] removed buildSrc/ from the warmup project (see the comment above)"
+fi
 
 # --- 先把 SDK / namespace 读出来 --------------------------------------------
 # 见 MAGIC-WARMUP-READVAL

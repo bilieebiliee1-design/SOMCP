@@ -124,6 +124,9 @@ COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
 # 出现在构建上下文里，所以这里得先把目录建出来。
 RUN mkdir -p /tmp/cnb-warmup/app
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
+# 构建上下文里带进来的 buildSrc/ 一律不要，理由见上面关于 buildSrc 的那段。
+# 单独一层：预热段是镜像里最贵的一层，补丁不应让它整体重建。
+RUN rm -rf /tmp/cnb-warmup/buildSrc
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
 # 曾因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
 #
@@ -168,6 +171,25 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #     报 `set: Illegal option -o pipefail` 以退出码 2 结束整层构建 —— 这一步
 #     在 if 之外，会让整层直接以退出码 2 结束。脚本自己的 shebang 是 bash，
 #     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
+#   * **预热工程里不能有 buildSrc**：Gradle 只要在 settings 所在目录看到
+#     buildSrc/，就会在配置任何工程之前先把它当 included build 编译一遍，用的是
+#     buildSrc/build.gradle.kts 自己那份 `kotlin-dsl` 插件声明。而这次预热的
+#     目的正是「把插件下进用户目录」—— 插件还没下就要求它先在本地可用，鸡生蛋。
+#     报错长这样（cnb-fhv-1k621k7qm，卡在运行期的「只看缓存」复核上）：
+#       Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+#       - Searched in the following repositories:
+#           Gradle Central Plugin Repository
+#     两个原因叠在一起：这份插件本地没有（冷启动），而 buildSrc 既不继承
+#     settings 的 pluginManagement / dependencyResolutionManagement，镜像那两条
+#     --init-script 也管不到它，列表里只剩缺省的 gradlePluginPortal。
+#     预热不需要它：buildSrc 只在**运行期**把 app/libs/*-patched.jar 复制成带
+#     元数据的本地仓库，而 libs/ 本来就不在 docker:cache 的构建上下文里。
+#     所以 COPY 之后立刻删掉 —— 删的是 /tmp/cnb-warmup 里的副本，仓库自己的
+#     buildSrc/ 不动。scripts/cnb/warmup-project.sh 里有同一道（幂等），
+#     两边都留是为了「容器里那份是上次留下的」这种情况也不会漏。
+#   * **预热命令关掉 configuration-cache**：运行期的 gradle.properties 开着它，
+#     预热工程每次只有一次执行机会，存下来的配置缓存毫无收益，却在
+#     「读:app 的依赖图」这类一次性工程上多一个可能失败的点。
 #   * 联网预热用的 GRADLE_USER_HOME 是 /tmp/cnb-warmup-home，而「只看缓存」的
 #     复核脚本不在那儿 —— 别再加一步往那个目录里 cp：脚本本体只放 /opt/cnb，
 #     两次调用都用 -Dcnb.cacheOnlyScript 显式指过去。早先的做法是
@@ -189,6 +211,7 @@ RUN set -eu; \
     printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
     if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 900 \
          /opt/gradle/bin/gradle --no-daemon --console=plain --info \
+         --no-configuration-cache \
          --init-script /opt/cnb/gradle-init.gradle \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
          -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
@@ -204,6 +227,7 @@ RUN set -eu; \
     fi; \
     if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 300 \
          /opt/gradle/bin/gradle --offline --no-daemon --console=plain --info \
+         --no-configuration-cache \
          -PcnbCacheOnlyCheck \
          --init-script /opt/cnb/gradle-init.gradle \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \

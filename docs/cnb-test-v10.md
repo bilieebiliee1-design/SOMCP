@@ -265,8 +265,13 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 - `scripts/cnb/warmup-project.sh` —— 把下面几个文件改写成最小工程
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
   插件版本、仓库声明与重试参数
-- `app/build.gradle.kts` —— 预热工程声明了 `include(":app")`，解析 `:app` 的依赖图
-  要读它（缺了它配置子项目直接失败）
+- `buildSrc/build.gradle.kts` —— **带进来是为了删掉**，见下一段。它只提供前缀，
+  让 Dockerfile 里那句 `rm -rf /tmp/cnb-warmup/buildSrc` 不会因为文件不存在而报错，
+  也让人一眼看出「这个目录是被有意剔除的」
+- `app/build.gradle.kts` **不在** `by` 里：预热工程的 `:app` 脚本由
+  `warmup-project.sh` 生成（只含 `plugins {}` + 最小 `android {}`），仓库那份的
+  `dependencies {}` 里有 `files("libs/*-patched.jar")` 与 `module("g:a:v")`，
+  两者都会让预热以「脚本编译失败」收场，而报错点离真因很远
 
 在 `by` 里声明只解决「进上下文」，不解决「进镜像」：Dockerfile 里必须再 `COPY`
 一次，否则 `RUN` 阶段根本看不到它们（曾因此失败在
@@ -298,7 +303,9 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
   加上这条之后 `androidx.core` / `androidx.compose.ui` / `io.ktor` /
   `com.squareup.okhttp3` 都在，用户目录从 612 MB 到 619 MB —— 代价很小。
 - 预热命令与运行期同一条路：`CNB_BUILD_ID`（`gradle-init.gradle` 走同一分支）+
-  两个 init script + 同一个 shim。区别只有两点：不给 `--offline`（预热的活就是联网），
+  两个 init script + 同一个 shim。区别只有三点：不给 `--offline`（预热的活就是联网），
+  加 `--no-configuration-cache`（`gradle.properties` 里开着它，而预热工程每次只有一次
+  执行机会，存下来的配置缓存毫无收益，却在这类一次性工程上多一个失败点），
   以及 `GRADLE_USER_HOME` 显式指到 `/tmp/cnb-warmup-home` 再 `cp -a` 回
   `/opt/gradle-user-home`——镜像 `ENV` 里是 `/root/.gradle`，不显式给的话预热结果
   会被收尾的 `rm -rf /root/.gradle` 一起删掉，等于白预热。
@@ -336,6 +343,39 @@ ERROR: process "/bin/sh -c ..." did not complete successfully: exit code: 2
 warning、镜像照常产出」的兜底都进不去 —— 一段本该降级的逻辑把整层构建判死。
 运行期那边一直是 `bash scripts/cnb/...`，两边入口不一致才留下这个洞。现在改成
 `bash -x`，与脚本 shebang、与 `.cnb.yml` 里所有 stage 的调用方式对齐。
+
+### 预热工程里不能有 `buildSrc`
+
+Gradle 只要在 settings 所在目录看到 `buildSrc/`，就会在配置任何工程**之前**先把它
+当 included build 编译一遍，用的是 `buildSrc/build.gradle.kts` 自己那份
+`kotlin-dsl` 插件声明。而预热的全部目的就是把这些插件下进用户目录 ——
+插件还没下就先要求它本地可用，是标准的鸡生蛋：
+
+```
+* Where:
+Build file '/workspace/buildSrc/build.gradle.kts' line: 15
+* What went wrong:
+Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found in any of the following sources:
+- Searched in the following repositories:
+    Gradle Central Plugin Repository
+```
+
+（`cnb-fhv-1k621k7qm`，红点点在运行期的「只看缓存」复核上 —— 镜像预热其实也倒在同一处，
+只是那一层的日志被 90 分钟的镜像构建一起吞了。）
+
+两个原因叠在一起：这份插件本地没有（冷启动），而 `buildSrc` **既不继承**
+`settings.gradle.kts` 的 `pluginManagement` / `dependencyResolutionManagement`
+（`RepositoriesMode.FAIL_ON_PROJECT_REPOS` 管不到它），镜像传的两条 `--init-script`
+也管不到它，于是仓库列表里只剩缺省的 `gradlePluginPortal`。
+
+预热本来就不需要 `buildSrc`：它只在**运行期**的配置阶段把 `app/libs/*-patched.jar`
+复制成带元数据的本地仓库，而 `libs/` 与那份产物都不在 `docker:cache` 的上下文里。
+剔除之后 `settings.gradle.kts` 里那条 `somcpPatchedLocalJars` 仓库仍然保留（它指向的
+目录不存在，Gradle 视为「什么都找不到」），依赖图照样解析。
+
+做法是两处幂等的 `rm -rf`：`warmup-project.sh` 一进目录就删（保证任何调用顺序都先删
+后跑），Dockerfile 在 `COPY` 之后紧接着删一条（对「预热目录是上次留下的」这种状态也成立）。
+删的都是 `/tmp/cnb-warmup` 里的副本，仓库自己的 `buildSrc/` 一个字节不碰。
 
 ## 预热失败与工具链失败的分界
 
