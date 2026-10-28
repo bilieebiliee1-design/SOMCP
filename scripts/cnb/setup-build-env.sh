@@ -80,7 +80,14 @@ if [ "$WARMUP_CHECK" = "1" ]; then
     log "gradle user home: warmup cache verified (offline help OK)"
   else
     tail -n 40 /tmp/cnb-warmup-check.log >&2 || true
-    fail "gradle warmup cache is incomplete: \`gradle --offline help\` failed. The image warmup step (image/cnb-tools.Dockerfile) did not finish; rebuild the base image (docker:cache) rather than retrying the pipeline (set GRADLE_WARMUP_CHECK=0 to skip this check while debugging)"
+    fail "gradle warmup cache is incomplete: `gradle --offline help` failed." \
+      "The image warmup step (image/cnb-tools.Dockerfile) did not finish. Check, in order:" \
+      "(1) if the Stage log says \"remote image cache hit\", this is an OLD image —" \
+      ".cnb.yml docker:cache.versionBy must list the warmup inputs, otherwise edits" \
+      "to the warmup scripts never invalidate the cache;" \
+      "(2) the image build log carries a [warmup] WARNING — that is the real network failure." \
+      "Rebuild the base image (docker:cache) instead of retrying the pipeline" \
+      "(set GRADLE_WARMUP_CHECK=0 to skip this check while debugging)"
   fi
   rm -f /tmp/cnb-warmup-check.log
 fi
