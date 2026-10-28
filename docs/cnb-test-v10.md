@@ -178,3 +178,29 @@ CI-only keystore（`keytool -genkeypair`，每次运行随机），并用它签 
 - **`app/src/main/jniLibs/*.so` 由 gradle 任务编译生成**（`buildUnidbgNative`），
   仓库本身不提交这些产物；因此本流水线在 CNB 上产出的 APK 同样依赖
   `third_party/*` submodule 齐全，缺 submodule 会在 `校验代码准备` 直接失败。
+
+## 镜像构建上下文
+
+`docker:cache` 的 `docker build` 上下文**只包含 Dockerfile 和 `by` 声明的文件**，
+不是整个仓库。所以 Dockerfile 里 `COPY` 到或读到的每个仓库文件都必须在 `by` 里出现，
+漏一个的报错形态是：
+
+```
+failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not found
+```
+
+看着像路径写错，实际是文件没进上下文——这种情况下 Dockerfile 里不管写什么路径都找不到。
+
+当前 `by` 包含：
+
+- `image/cnb-tools.Dockerfile` —— Dockerfile 自身
+- `scripts/cnb/gradle-init.gradle` —— `COPY` 进 `/opt/gradle-user-home/init.d/`
+- `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
+  插件版本、仓库声明与 Maven 重试参数
+
+这三个构建脚本在 Dockerfile 里必须用**相对路径**（`/build.gradle.kts`）读。
+写 `/workspace/build.gradle.kts` 不行：`WORKDIR /workspace` 虽然在文件末尾，
+但镜像里没有源码。
+
+`versionBy` 仍只写 Dockerfile。被 `by` 额外带进上下文的文件只解决「可见性」，
+不该让缓存版本跟着漂移；预热本身吃 `RUN` 层缓存，构建脚本变了 Gradle 会自己重解析。

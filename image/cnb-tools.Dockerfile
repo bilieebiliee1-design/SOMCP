@@ -72,15 +72,22 @@ RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
 COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
 
 # 预热用的最小工程：插件版本与仓库声明都从仓库自己的构建脚本里读，不另抄一份。
+# build.gradle.kts / settings.gradle.kts / gradle.properties 由 .cnb.yml 的
+# docker:cache.by 带进构建上下文（docker:cache 只复制 Dockerfile 与 by 声明的
+# 文件），所以这里必须写相对路径；写 /workspace/... 会在镜像里找不到。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     mkdir -p /tmp/cnb-warmup; \
     cd /tmp/cnb-warmup; \
-    sed -n '/^plugins {/,/^}/p' /workspace/build.gradle.kts > build.gradle.kts; \
-    sed -n '/^pluginManagement {/,/^}/p' /workspace/settings.gradle.kts > settings.gradle.kts; \
+    sed -n '/^plugins {/,/^}/p' /build.gradle.kts > build.gradle.kts; \
+    sed -n '/^pluginManagement {/,/^}/p' /settings.gradle.kts > settings.gradle.kts; \
     printf 'rootProject.name = "cnb-warmup"\n' >> settings.gradle.kts; \
+    # 重试参数也要带上：warmup 是整条流水线里最冷的一次依赖解析。
+    cp /gradle.properties .; \
     grep -q 'org.jetbrains.kotlin.android' build.gradle.kts; \
-    gradle --no-daemon --console=plain help; \
+    # gradle-init.gradle 只在 CNB_BUILD_ID 存在时才追加镜像，这里补一个，
+    # 让镜像层里的预热走和运行期完全一样的仓库列表。
+    CNB_BUILD_ID=warmup gradle --no-daemon --console=plain help; \
     cd /; rm -rf /tmp/cnb-warmup /root/.gradle/daemon /root/.gradle/.tmp; \
     rm -rf /root/.gradle; \
     du -sh /opt/gradle-user-home
