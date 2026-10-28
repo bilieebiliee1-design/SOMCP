@@ -151,11 +151,13 @@ fi
 for tool in meson ninja cmake gcc g++ pkg-config python3 git; do
   command -v "$tool" > /dev/null || fail "missing host build tool '$tool'"
 done
-# app/src/main/cpp/CMakeLists.txt 用 `COMMAND python` 跑 generate_header.py。
-# GitHub 的 runner 上 `python` 天然存在，裸镜像里只有 python3；缺了它 Release
-# 构建会在 CMake 配置阶段 FATAL_ERROR，而且是在原生编译之后才暴露。
-command -v python > /dev/null \
-  || fail "missing 'python' on PATH (CMakeLists.txt invokes \`python\` for generate_header.py; install python-is-python3)"
+# app/generate_header.py 由 CMake 在配置期调用（生成 key_generated.h）。CMake 侧
+# 已经先 find_program(NAMES python python3) 再调用，找不到会自己报清楚；这里断言
+# python3 是为了让「镜像少装了解释器」在流水线早期暴露，而不是等到 Debug 构建的
+# CMake 配置里 —— 那里失败了也只有一句 [key-gen]，红点还会落到后面 Dex2C 的
+# no release APK 上。
+command -v python3 > /dev/null \
+  || fail "missing python3 on PATH (app/generate_header.py is invoked at CMake configure time)"
 log "host tools: $(meson --version | sed 's/^/meson /')$(ninja --version | sed 's/^/ ninja /')$(cmake --version | head -1 | sed 's/^/ /')"
 
 # --- submodule 完整性 ------------------------------------------------------
