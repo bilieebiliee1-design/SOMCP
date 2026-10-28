@@ -77,23 +77,22 @@ warm_build() {
     help :app:dependencies --configuration releaseRuntimeClasspath
 }
 
-# --- buildSrc 的插件不进预热工程 ---------------------------------------------
+# --- 第一遍：只停用 buildSrc 插件的**声明**，不删 buildSrc ---------------------
 # 不在 plugins {} 里声明版本、只躺在 buildSrc/src 里的插件（本仓库的
-# `somcp.patched-local-jars`）在预热工程里两头堵：
+# `somcp.patched-local-jars`）在第一遍里必须停用：第一遍跑的是真实的
+# app/build.gradle.kts，而预热工程要跑的是「仓库的依赖图」，不是「这个插件改造过的
+# 依赖图」。停用之后 patched jar 由下面两个函数换成普通坐标。
 #
-#   * 留着 buildSrc 却不在 :app 声明它，Gradle 报
-#     `Plugin [id: '...'] was not found ... Plugin Repositories (plugin dependency
-#      must include a version number for this source)`；
-#   * 删掉 buildSrc 却保留那行 `id("...")`，报的是同一句，落在
-#     app/build.gradle.kts 的 plugins {} 上（cnb-hkj-1k624u580）。而 :app 的
-#     dependencies {} 全写在 plugins {} 之后 —— 脚本编译不过，androidx / compose /
-#     ktor / okhttp 一行都求值不到，预热等于只做了一半。
-#
-# 所以两边一起断：预热目录里没有 buildSrc/，app 脚本里那行 id(...) 行尾注释掉。
-# 这个插件干的是「把 app/libs 下的 jar 顶掉上游同坐标模块」，而预热工程里那些
-# 上游坐标本来就不出现，去掉它不影响依赖图的完整性。
+# **第一遍不能删 buildSrc**：预热的目的就是把它那份插件 marker 及其传递依赖下进
+# 用户目录；而运行期每个 stage 都要真的编译 buildSrc，`--offline` 复核读的正是
+# 这份缓存。早先第二遍直接 `rm -rf buildSrc`，预热工程里从来没有过它，于是复核
+# 连续几轮都倒在
+#   * Where: Build file '/workspace/buildSrc/build.gradle.kts' line: 23
+#   Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+#     Searched in the following repositories: Gradle Central Plugin Repository
+# 现在第一遍按仓库原样把它编译一遍（marker 进缓存），第二遍再换成占位
+# （stage_buildsrc_placeholder），保证「预热的工程形状 = 运行期的工程形状」。
 disable_buildsrc_plugin() {
-  rm -rf buildSrc
   if grep -q 'somcp\.patched-local-jars' app/build.gradle.kts; then
     # 注释加在**行尾**，不是整行替换：行号不能动。app 脚本里 :app 的签名配置用
     # `releaseKeystoreProperties.getProperty(...)` 读 release/keystore.properties，
@@ -114,19 +113,74 @@ disable_buildsrc_plugin() {
   fi
 }
 
+# --- 第二遍：buildSrc 换成占位（不删） ---------------------------------------
+# 第一遍已经把真实 buildSrc 的插件 marker 连同传递依赖下进缓存，第二遍写什么都
+# 不影响结果；占位只为「第二遍这份小工程自己也跑得通」，且保持与运行期同形状。
+#
+# 占位内容：
+#   * plugins {} 里的插件 id **从仓库那份 buildSrc/build.gradle.kts 读**，不写死 ——
+#     「两边用同一个插件」必须由源码决定，靠人记同步迟早对不上；
+#   * 仓库列表只取 pluginManagement 里那层 repositories（**不能整块复制**
+#     pluginManagement，那是 settings 才有的 DSL，放进 build 脚本会报
+#     `Unresolved reference 'pluginManagement'`）；
+#   * 没有 src/：只解析、不产出。仓库那份里定义的 somcp.patched-local-jars 在第二遍
+#     的 app 脚本里已经被注释掉，用不上。
+stage_buildsrc_placeholder() {
+  local plugin_line
+  plugin_line="$(awk '
+    /^plugins[[:space:]]*\{/ { inp = 1; next }
+    inp && /^\}/ { exit }
+    inp && /`[a-z-]+`/ { line = $0 }
+    END { if (line != "") print line }
+  ' buildSrc/build.gradle.kts | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [ -n "$plugin_line" ] \
+    || { echo "[warmup] ERROR: no backtick plugin id in buildSrc/build.gradle.kts; the placeholder needs the same plugin as the real buildSrc" >&2; exit 1; }
+
+  awk '
+    /^pluginManagement[[:space:]]*\{/ { inpm = 1; next }
+    !inpm { next }
+    /^[[:space:]]*repositories[[:space:]]*\{/ { inrepo = 1; depth = 0 }
+    inrepo {
+      depth += gsub(/\{/, "{")
+      depth -= gsub(/\}/, "}")
+      print
+      if (depth == 0) { exit }
+    }
+  ' settings.gradle.kts > buildsrc-repositories.tmp
+  grep -q 'mavenCentral\|google()\|gradlePluginPortal()' buildsrc-repositories.tmp \
+    || { echo "[warmup] ERROR: pluginManagement repositories not found in settings.gradle.kts" >&2; exit 1; }
+
+  rm -rf buildSrc
+  mkdir -p buildSrc
+  {
+    echo '// 由 scripts/cnb/warmup-project.sh 生成：预热第二遍用的 buildSrc 占位。'
+    echo '// 插件与仓库选择抄仓库那份 buildSrc —— 预热的工程形状必须等于运行期，'
+    echo '// 否则它的插件 marker 不会被预热，运行期的 --offline 复核就会缺件。'
+    echo 'plugins {'
+    echo "    ${plugin_line}"
+    echo '}'
+    echo ''
+    echo '// 取自仓库 settings.gradle.kts 的 pluginManagement：buildSrc 是 included'
+    echo '// build，主工程的仓库声明与 --init-script 的仓库对它都不生效。'
+    cat buildsrc-repositories.tmp
+  } > buildSrc/build.gradle.kts
+  rm -f buildsrc-repositories.tmp
+  echo "[warmup] buildSrc/ replaced with a marker-only placeholder (same plugin as the repo)"
+}
+
 # --- patched jar 的本地仓库：预热的第二遍也要能解析 x.y.z.1 -------------------
-# 运行期这份仓库由 buildSrc 的插件在 `app/build/patched-jars-repo` 生成；预热工程
-# 不带 buildSrc，settings.gradle.kts 里那条 `somcpPatchedLocal` 就指向一个空目录，
-# 第二遍（最小工程）的 files() 依赖换成坐标之后就解析不到 `.1`。
+# 运行期这份仓库由 buildSrc 的插件在 `app/build/patched-jars-repo` 生成；预热第二遍
+# 用的是占位 buildSrc（不产出任何插件），settings.gradle.kts 里那条
+# `somcpPatchedLocal` 就指向一个空目录，第二遍的坐标依赖因此解析不到 `.1`。
 #
 # 这里按同一个布局自己造一份：口径表直接从仓库应用脚本的 somcpPatchedJars 表里
 # 读（group:module:version 与 jar 文件名一一对应），jar 从 app/libs/ 复制，POM 用
 # 最小写的（上游那份 POM 是上游模块自己的事，本地仓库只声明「有这么个构件」）。
 # 表读不到就跳过：那说明应用脚本换了写法，预热只覆盖上游坐标，判据交给第一遍。
 #
-# 必须排在 disable_buildsrc_plugin **之前**：那个函数的第一步就是 `rm -rf buildSrc`，
-# 排在它后面就永远读不到口径表，只剩一句 WARNING，第二遍解析 `.1` 时才会报
-# 「找不到依赖」—— 跟真正的原因隔着十万八千里。
+# 排在 disable_buildsrc_plugin / stage_buildsrc_placeholder 之前：口径表就住在
+# buildSrc/src 里，第二遍那道会把整个目录换掉，排在后面就永远读不到表，只剩一句
+# WARNING，第二遍解析 `.1` 时才会报「找不到依赖」—— 跟真正的原因隔着十万八千里。
 publish_patched_local_repo() {
   local app_script=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
   local target_dir=app/build/patched-jars-repo
@@ -323,7 +377,7 @@ SETTINGS
 #   1. prepare_runtime_layout → publish_patched_local_repo → disable_buildsrc_plugin
 #      → neutralize_patched_factory → rewrite_root_script → cold_build
 #      （仓库原样，联网，失败即整层失败）
-#   2. simplify_* → warm_build（最小工程，失败只打 WARNING）
+#   2. stage_buildsrc_placeholder → simplify_* → warm_build（最小工程，只打 WARNING）
 echo "[warmup] pass 1/2: repository as-is (app/build.gradle.kts + app/libs)"
 prepare_runtime_layout
 publish_patched_local_repo
@@ -340,13 +394,15 @@ else
   exit 1
 fi
 
-echo "[warmup] pass 2/2: minimal project (generated :app script)"
+echo "[warmup] pass 2/2: minimal project (buildSrc placeholder, generated :app script)"
+stage_buildsrc_placeholder
 simplify_app_script
 simplify_settings_script
 
 echo "[warmup] project rewritten in $DIR:"
 sed 's/^/[warmup]   /' build.gradle.kts
 sed 's/^/[warmup]   /' app/build.gradle.kts
+sed 's/^/[warmup]   /' buildSrc/build.gradle.kts
 sed 's/^/[warmup]   /' settings.gradle.kts
 
 if warm_build > /tmp/cnb-warmup-2.log 2>&1; then
