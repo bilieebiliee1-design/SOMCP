@@ -194,9 +194,17 @@ org.jetbrains.kotlin.plugin.compose   200
 GitHub 的 `ubuntu-latest` 自带一批裸镜像没有的工具，缺了它们报错点会离根因很远，
 因此 `image/cnb-tools.Dockerfile` 显式补齐，并在 `setup-build-env.sh` 里断言：
 
-- `python`（`python-is-python3`）：`app/src/main/cpp/CMakeLists.txt` 用 `COMMAND python` 调
-  `app/generate_header.py`。缺它时 CMake 在 key-gen 处 `FATAL_ERROR`，而这一步发生在
-  原生编译（约 30 分钟）之后，症状是 Release 构建失败、Dex2C 找不到 APK。
+- `python3` 与 `python`（`python-is-python3`）：`app/src/main/cpp/CMakeLists.txt` 在配置期
+  调 `app/generate_header.py` 生成 `key_generated.h`。解释器现在由 CMake 的
+  `find_program(NAMES python python3)` 解析，找不到会明确报错；`python` 这个名字仍然保留，
+  与 GitHub runner 上的环境一致（`meson` 与 `dcc` 里写 `python` 的地方不用改）。
+  注意这一步失败的症状**不在** CMake 报错里：`execute_process` 拿到的裸 `python`
+  不存在时 RESULT 非 0 而 stderr 为空，只有一句
+  `[key-gen] generation failed. Check generate_header.py output.`；而 Debug 构建的
+  CMake 加载失败在 Gradle 侧只标成 `executionHistory` 不可缓存（warning），
+  Debug 构建因此「成功」但没有产出 APK，红点落在后面 `Dex2C 加固` 的
+  `no release APK found` 上。判断顺序：先看 `Debug 构建` 日志里有没有
+  `[key-gen]`，再看 dcc 的 no APK。
 - `meson` / `ninja-build` / `cmake` / `gcc` / `g++` / `pkg-config`：原工作流用 `apt-get` 装，
   这里前移到镜像（任务容器非 root）。
 - GNU 版 `find` / 常规 `coreutils`：`native-cache-key.sh` 的清理依赖 `-mindepth`。
