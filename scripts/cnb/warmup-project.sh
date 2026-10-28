@@ -126,19 +126,34 @@ WARMUP_MIN_SDK="$(read_val somcpMinSdk)"
 [ -n "$WARMUP_COMPILE_SDK" ] || { echo "[warmup] ERROR: no compileSdk in root build.gradle.kts" >&2; exit 1; }
 [ -n "$WARMUP_MIN_SDK" ] || { echo "[warmup] ERROR: no minSdk in root build.gradle.kts" >&2; exit 1; }
 
-# --- 根 build.gradle.kts：只留 plugins {} ----------------------------------
+# --- 根 build.gradle.kts：只留 plugins {} 与 extra 三件套 --------------------
 # 只保留**根**工程的插件声明，`plugins {}` 块之外的任何一行都不进预热工程：
 # 根脚本里那些 `configurations.configureEach { ... }` / `tasks.withType<...>` 在
 # 预热工程里没有对应的插件与子工程，求值会直接抛异常；而把 `dependencies { ... }`
 # 整块搬过去更糟 —— warmup 工程里没有 libs/ 下的 jar，也没有仓库能补回来。
-awk '
-  /^plugins[[:space:]]*\{/ { inblock = 1 }
-  inblock { print }
-  inblock && /^\}/ { exit }
-' build.gradle.kts > build.gradle.kts.new
-grep -q 'com.android.application' build.gradle.kts.new \
-  || { echo "[warmup] ERROR: no plugins {} block in build.gradle.kts" >&2; exit 1; }
-mv build.gradle.kts.new build.gradle.kts
+#
+# 例外是 `extra["somcp*"]` 那几行：第一遍跑的是**真实的** app/build.gradle.kts，
+# 它里面写着 `rootProject.extra["somcpNamespace"] as String`。把这几行剪掉，
+# :app 一进配置阶段就抛
+#     Cannot get property 'somcpNamespace' on extra properties extension as it does not exist
+# （cnb-qno-1k625acuu），而报错点看起来跟预热裁剪毫无关系。这几行是纯字面量
+# 赋值、不引用任何插件，留在预热工程里没有副作用。
+rewrite_root_script() {
+  awk '
+    /^plugins[[:space:]]*\{/ { inblock = 1 }
+    inblock { print }
+    inblock && /^\}/ { exit }
+  ' build.gradle.kts > build.gradle.kts.new
+  grep -q 'com.android.application' build.gradle.kts.new \
+    || { echo "[warmup] ERROR: no plugins {} block in build.gradle.kts" >&2; exit 1; }
+  grep -E '^[[:space:]]*extra\["somcp' build.gradle.kts >> build.gradle.kts.new || true
+  # 判据：预热工程里必须能读到那三行，否则第一遍的真实 :app 脚本求值必炸。
+  for key in somcpNamespace somcpCompileSdk somcpMinSdk; do
+    grep -q "extra\[\"$key\"\]" build.gradle.kts.new \
+      || { echo "[warmup] ERROR: extra[\"$key\"] lost in the warmup root script" >&2; exit 1; }
+  done
+  mv build.gradle.kts.new build.gradle.kts
+}
 
 # --- app/build.gradle.kts：第二遍才改写成只声明插件的模块脚本 ---------------
 # **第一遍用仓库里真实的 app 脚本**（app/build.gradle.kts 与 app/libs/ 都进了
@@ -230,6 +245,7 @@ SETTINGS
 echo "[warmup] pass 1/2: repository as-is (app/build.gradle.kts + app/libs)"
 prepare_runtime_layout
 disable_buildsrc_plugin
+rewrite_root_script
 if cold_build > /tmp/cnb-warmup.log 2>&1; then
   echo "[warmup] pass 1 OK: repository as-is"
 else
