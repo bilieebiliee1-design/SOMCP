@@ -105,6 +105,7 @@ main:
               - build.gradle.kts
               - settings.gradle.kts
               - gradle.properties
+              - app/build.gradle.kts
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
             # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
             # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
@@ -121,6 +122,7 @@ main:
               - build.gradle.kts
               - settings.gradle.kts
               - gradle.properties
+              - app/build.gradle.kts
             sync: true
           exports:
             name: BUILD_ENV_IMAGE

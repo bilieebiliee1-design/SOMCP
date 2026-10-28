@@ -262,35 +262,50 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 - `scripts/cnb/gradle-cache-only.gradle` —— 「只看缓存」复核用的 Groovy init
   script，`COPY` 到 `$GRADLE_USER_HOME/cnb-cache-only.gradle`，由上面那份
   Kotlin init script 在 `-PcnbCacheOnlyCheck` 时 `apply(from:)`
-- `scripts/cnb/warmup-project.sh` —— 把下面三个文件改写成最小工程
+- `scripts/cnb/warmup-project.sh` —— 把下面几个文件改写成最小工程
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
   插件版本、仓库声明与重试参数
+- `app/build.gradle.kts` —— 预热工程声明了 `include(":app")`，解析 `:app` 的依赖图
+  要读它（缺了它配置子项目直接失败）
 
 在 `by` 里声明只解决「进上下文」，不解决「进镜像」：Dockerfile 里必须再 `COPY`
 一次，否则 `RUN` 阶段根本看不到它们（曾因此失败在
 `sed: can't read /build.gradle.kts: No such file or directory`）。
 `COPY` 的源是上下文根、按仓库相对路径写，不能带 `../`；目标用绝对路径，
-不依赖当时的工作目录。三个文件被拷到 `/tmp/cnb-warmup/` 后由
-`scripts/cnb/warmup-project.sh` 就地改写成最小工程：
+不依赖当时的工作目录。这些文件被拷到 `/tmp/cnb-warmup/`（`app/build.gradle.kts`
+落到 `/tmp/cnb-warmup/app/`）后，由 `scripts/cnb/warmup-project.sh` 就地改写成最小工程：
 
 - `build.gradle.kts` 只留 `plugins {}`；
 - `settings.gradle.kts` 只留 `pluginManagement { repositories { ... } }`，
-  再补一段本工程自己的 `dependencyResolutionManagement { google(); mavenCentral() }`
+  再把仓库自己的 `dependencyResolutionManagement { ... }` **原样**接在后面
   —— 插件 buildscript classpath 的解析走后者，缺了它只剩隐式 `MavenRepo`；
+  末尾再加 `include(":app")`，让预热把子项目也配置起来；
+  这一段必须照抄而不是手写一份 `google() + mavenCentral()`：本仓库还依赖 JitPack 的
+  `com.github.<owner>:<repo>` 坐标，手写的列表里没有 `jitpack.io`，预热会在
+  `:app:dependencies` 处把它解析成 `FAILED`（实测日志里是
+  `com.github.rikkahub:markdown:d79a97cc8e FAILED`，`jitpack.io` 一次都没被请求），
+  而运行期是有的 —— 两份仓库列表不一致，等于给运行期留了一份没预热到的依赖；
   **仓库声明必须保留**——早先的做法是清空成一行 `rootProject.name`，Gradle 于是
   只剩缺省的 `gradlePluginPortal`，而 AGP 的 marker 在 Google，预热解析
   `com.android.application:9.2.1` 永远拿不到；运行期则相反，只剩 Google/MavenCentral、
   缺 aliyun 镜像（`gradle-init.gradle` 追加的那条）。两边任何一种都会表现为
   `Plugin ... was not found`，所以改写脚本用 `grep` 断言「插件块在」+「仓库声明在」，
   取不到就失败，不生成残缺工程；
+- 预热跑的是 `help :app:dependencies --configuration releaseRuntimeClasspath`，
+  不只是 `help`。`help` 只做配置阶段，`:app` 的运行时依赖（androidx / compose /
+  ktor / okhttp…）一个都不会被解析，于是预热「成功」得只做了一半，运行期照样
+  现场冲网。实测同一份用户目录：只跑 `help` 时 `androidx` 目录根本不存在，
+  加上这条之后 `androidx.core` / `androidx.compose.ui` / `io.ktor` /
+  `com.squareup.okhttp3` 都在，用户目录从 612 MB 到 619 MB —— 代价很小。
 - 预热命令与运行期同一条路：`CNB_BUILD_ID`（`gradle-init.gradle` 走同一分支）+
   两个 init script + 同一个 shim。区别只有两点：不给 `--offline`（预热的活就是联网），
   以及 `GRADLE_USER_HOME` 显式指到 `/tmp/cnb-warmup-home` 再 `cp -a` 回
   `/opt/gradle-user-home`——镜像 `ENV` 里是 `/root/.gradle`，不显式给的话预热结果
   会被收尾的 `rm -rf /root/.gradle` 一起删掉，等于白预热。
 
-预热整段加了 `timeout 600`：CI 的代理变量在无网环境下会变成「连上去不说话」的
+预热整段加了 `timeout 900`：CI 的代理变量在无网环境下会变成「连上去不说话」的
 黑洞，而 Gradle 的仓库超时是无限的，一次挂起就足以让镜像构建被平台杀掉。
+（只跑 `help` 时 600 秒够用；多解析一张完整的运行时依赖图后放宽到 15 分钟。）
 
 还有一条容易踩的：**`RUN` 的续行里不能夹注释**。行尾 `\` 会把下一行的 `# 注释`
 拼进同一条命令，而 `#` 只在行首才是注释，于是被拼到 `sed -n '...'` 后面就成了
@@ -303,8 +318,10 @@ sed: can't read /build.gradle.kts: No such file or directory
 报错看着像路径问题，其实是上一行的注释被当成了参数。预热段的所有注解都写在
 `RUN` 之前，命令体内保持纯净。
 
-`versionBy` 仍只写 Dockerfile。被 `by` 额外带进上下文的文件只解决「可见性」，
-不该让缓存版本跟着漂移；预热本身吃 `RUN` 层缓存，构建脚本变了 Gradle 会自己重解析。
+`versionBy` 必须与 `by` 逐项对齐：`docker:cache` 的缓存键就是 `versionBy` 的文件内容，
+只写 Dockerfile 时改预热脚本不会让缓存失效，流水线继续复用那张「预热从未成功过」
+的旧镜像，然后在运行期复核里报 `warmup cache is incomplete` —— 改了半天脚本，
+跑的还是老镜像。
 
 第二个坑在调用方式上：**预热脚本必须用 `bash` 跑，不能用 `sh`**。`scripts/cnb/*.sh`
 一律是 `#!/usr/bin/env bash` 且开头 `set -euo pipefail`，而 Docker 的 `RUN` 默认
@@ -358,8 +375,11 @@ Dockerfile 走，Dockerfile 一改 `docker:cache` 的 key 就变，overlay 从�
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
 | `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
 | `Plugin [id: '...', version: '...'] was not found`，`Searched in` 里没有 Google | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
-| `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven 镜像的 200 空壳挡住 AGP marker | 插件侧只挂 Google 镜像，见「插件解析与依赖解析不能用同一个镜像」 |
+| `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven 镜像的 200 空壳挡住 AGP marker | 插件侧改挂 `repository/gradle-plugin`（对 AGP marker 返 404），见「插件解析与依赖解析不能用同一个镜像」 |
+| `Plugin [id: 'org.jetbrains.kotlin.plugin.compose' ...] was not found`，`Searched in` 里有 google 镜像 | `repository/google` 里没有 Kotlin 插件 marker | 同上 |
 | 镜像层预热 warning 里出现 `fus-statistics-gradle-plugin:2.4.0` 的 429 | 预热工程缺 `dependencyResolutionManagement`，插件 buildscript classpath 只剩隐式 `MavenRepo` | `scripts/cnb/warmup-project.sh` 补上该段，已修 |
+| 预热与你都「成功」，但运行期仍在冲网（首次 `Android Lint` / `Debug 构建` 慢） | 预热只跑 `help`，`:app` 的运行时依赖从未被解析 | 预热改为 `help :app:dependencies --configuration releaseRuntimeClasspath`，并 `include(":app")` |
+| 预热日志里 `com.github.<owner>:<repo> FAILED`，`jitpack.io` 一次都没被请求 | 预热工程的 `dependencyResolutionManagement` 是手写的，漏了 `maven("https://jitpack.io")` | `warmup-project.sh` 改为原样接上仓库自己的那一段 |
 | 运行期复核报 `warmup cache is incomplete`，但 `Searched in` 里仓库地址指向外网 | 光靠 `--offline` 分不开「缓存空」和「网不通」 | 复核改用 `-PcnbCacheOnlyCheck`，仓库列表换成空文件仓库（`Searched in` 只剩 `cnb-cache-only`），已修 |
 | 预热全绿但运行期 `--offline` 复核失败 | 预热用的 `GRADLE_USER_HOME` 与运行期不是同一个 / 预热缺 init script | 见上一节，已修 |
 | 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
