@@ -89,14 +89,24 @@ warm_build() {
 #     dependencies {} 全写在 plugins {} 之后 —— 脚本编译不过，androidx / compose /
 #     ktor / okhttp 一行都求值不到，预热等于只做了一半。
 #
-# 所以两边一起断：预热目录里没有 buildSrc/，app 脚本里那行 id(...) 注释掉。
+# 所以两边一起断：预热目录里没有 buildSrc/，app 脚本里那行 id(...) 行尾注释掉。
 # 这个插件干的是「把 app/libs 下的 jar 顶掉上游同坐标模块」，而预热工程里那些
 # 上游坐标本来就不出现，去掉它不影响依赖图的完整性。
 disable_buildsrc_plugin() {
   rm -rf buildSrc
   if grep -q 'somcp\.patched-local-jars' app/build.gradle.kts; then
-    sed -i 's|^\([[:space:]]*\)id("somcp\.patched-local-jars".*$|\1// [cnb-warmup] disabled: somcp.patched-local-jars|' app/build.gradle.kts
-    if grep -q '^[[:space:]]*id("somcp.patched-local-jars")' app/build.gradle.kts; then
+    # 注释加在**行尾**，不是整行替换：行号不能动。app 脚本里 :app 的签名配置用
+    # `releaseKeystoreProperties.getProperty(...)` 读 release/keystore.properties，
+    # 而那个文件在 Dockerfile 里是先 `mkdir -p release` 写好、再跑本脚本的 ——
+    # 文件在、内容在，写的却是一次性的 CI 临时 keystore（第一个下标的 jar 也正
+    # 躺在 app/libs 里），:app 的脚本本来就能完整求值。整行替换成一个空格加注释，
+    # 缩进、列位、行号全变，Kotlin DSL 里行号/列位是有意义的（报错定位、行内
+    # 语义），没有任何理由为了行尾一句话去改它们。
+    sed -i 's|^\([[:space:]]*\)id("somcp\.patched-local-jars".*$|\1// [cnb-warmup] disabled: &|' app/build.gradle.kts
+    # 判据从「那行 id(...) 没了」改成「它被注释掉了」：行尾追加意味着原文还在，
+    # 只按 `^[[:space:]]*id("somcp.patched-local-jars")` 去找会永远命中，把
+    # 「sed 什么都没改」放过去 —— 断言必须看行首有没有被注释符挡住。
+    if grep -qE '^[[:space:]]*id\("somcp\.patched-local-jars"' app/build.gradle.kts; then
       echo "[warmup] ERROR: could not disable somcp.patched-local-jars in the app script" >&2
       exit 1
     fi
