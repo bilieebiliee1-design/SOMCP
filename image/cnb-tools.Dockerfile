@@ -125,9 +125,9 @@ COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
 COPY app/build.gradle.kts /tmp/cnb-warmup/app/build.gradle.kts
 COPY app/libs/ /tmp/cnb-warmup/app/libs/
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
-# 构建上下文里带进来的 buildSrc/ 一律不要：预热工程用不到它（:app 脚本由
-# warmup-project.sh 生成），而 Gradle 只要看见 buildSrc/ 就会先编译它一遍 ——
-# 那属于运行期的事，不该由预热来判。删的是 /tmp/cnb-warmup 里的副本。
+# 构建上下文里不该有 buildSrc/（.cnb.yml 的 by 已不声明它）。这一句是兜底：
+# 万一有人又声明回去，Gradle 会先把它编译一遍 —— 那属于运行期的事，不该由预热
+# 来判。删的是 /tmp/cnb-warmup 里的副本，仓库自己的 buildSrc/ 不动。
 # 单独一层：预热段是镜像里最贵的一层，补丁不应让它整体重建。
 RUN rm -rf /tmp/cnb-warmup/buildSrc
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
@@ -174,14 +174,18 @@ RUN rm -rf /tmp/cnb-warmup/buildSrc
 #     报 `set: Illegal option -o pipefail` 以退出码 2 结束整层构建 —— 这一步
 #     在 if 之外，会让整层直接以退出码 2 结束。脚本自己的 shebang 是 bash，
 #     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
-#   * **预热工程里不能有 buildSrc**：Gradle 只要在 settings 所在目录看到
-#     buildSrc/，就会在配置任何工程之前先把它当 included build 编译一遍。而这次
-#     预热的**全部目的**就是「把插件下进用户目录」—— 插件还没下就要求它先在本地
-#     可用，标准鸡生蛋。预热工程里也没有 libs/、没有插件源码，编译它毫无收益。
-#     所以 COPY 之后立刻删掉 —— 删的是 /tmp/cnb-warmup 里的副本，仓库自己的
-#     buildSrc/ 不动（运行期每个 stage 都会真的编译它）。
-#     scripts/cnb/warmup-project.sh 里有同一道（幂等），两边都留是为了
-#     「容器里那份是上次留下的」这种情况也不会漏。
+#   * **预热工程里既没有 buildSrc/，也不能留下它的插件声明**。Gradle 只要在
+#     settings 所在目录看到 buildSrc/，就会在配置任何工程之前先把它当 included
+#     build 编译一遍；而这次预热的**全部目的**就是「把插件下进用户目录」——
+#     插件还没下就要求它先在本地可用，标准鸡生蛋。
+#     反过来，删掉 buildSrc/ 却让 app 脚本继续 `id("somcp.patched-local-jars")`
+#     更糟：那句话在 plugins {} 里找不到实现，整个 app 脚本编译不过，而 :app 的
+#     dependencies {} 全写在 plugins {} 之后 —— androidx / compose / ktor / okhttp
+#     一行都求值不到，预热白跑（cnb-hkj-1k624u580 就是这么红的）。
+#     所以两件事一起做：COPY 之后立刻删掉 buildSrc/（删的是 /tmp/cnb-warmup 里的
+#     副本，仓库自己的 buildSrc/ 不动，运行期每个 stage 都会真的编译它），
+#     scripts/cnb/warmup-project.sh 再把 app 脚本里那行 id(...) 注释掉。
+#     buildSrc/ 因此不再需要进构建上下文 —— 没有谁去编译它，也没有谁去删它。
 #     注意别把这一条读成「buildSrc 不需要预热」：它需要，也确实被预热了，走的是
 #     运行期那条完整仓库（每个 stage 都联网/走镜像）。因此 buildSrc 的插件选择
 #     必须照顾到 `--offline` 复核 —— 复核读的是镜像预热出来的用户目录，那里
