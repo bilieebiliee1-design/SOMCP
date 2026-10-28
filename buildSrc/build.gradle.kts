@@ -10,8 +10,9 @@
  * the Free Software Foundation.
  */
 
-// 只为了让 buildSrc/src/main/kotlin/somcp.patched-local-jar.gradle.kts 那个预编译
-// 脚本插件能被加载：`kotlin-dsl` 会带上 Kotlin 编译器与 stdlib。
+// 只为了让 buildSrc/src/main/kotlin/SomcpPatchedLocalJarsPlugin.kt 能被编译：
+// `kotlin-dsl` 会带上 Kotlin 编译器与 stdlib（插件本身是普通的 Plugin<Project>
+// 实现，不是预编译脚本插件 —— 脚本插件那份写法在这里拿不到 apply 主体）。
 //
 // 版本必须**写死**，不能让它跟着 Gradle 的缺省值走：`kotlin-dsl` 的 marker
 // 版本是 gradle-kotlin-dsl-<Gradle 版本>-<发布时间戳>，形如 6.6.4-20260114.081327-6，
