@@ -139,14 +139,9 @@ main:
         # GitHub step: Clone Rizin source (v0.9.1)
         - name: 克隆 Rizin v0.9.1 源码
           image: $BUILD_ENV_IMAGE
-          script: |
-            set -euo pipefail
-            cd "${CNB_BUILD_WORKSPACE}"
-            if [ ! -d third_party/rizin-src/librz/include ]; then
-              git clone --depth 1 --branch v0.9.1 https://github.com/rizinorg/rizin.git third_party/rizin-src
-            else
-              echo "third_party/rizin-src already populated, skipping clone"
-            fi
+          # 需要真正的 bash：CNB 的多行 script 走 /bin/sh（dash），
+          # `set -o pipefail` 在那里是非法选项，会以退出码 2 直接判死。
+          script: bash -euo pipefail -c 'bash scripts/cnb/clone-rizin.sh'
 
         # GitHub step: Cache native backends (Rizin + LIEF)
         #   actions/cache 在这里没有等价物：缓存 key 派生自
@@ -170,10 +165,7 @@ main:
           image: $BUILD_ENV_IMAGE
           allowFailure: true
           timeout: 6h
-          script: |
-            set -euo pipefail
-            cd "${CNB_BUILD_WORKSPACE}"
-            bash tools/blutter-matrix/build-blutter-runners.sh
+          script: bash -euo pipefail -c 'cd "${CNB_BUILD_WORKSPACE}" && bash tools/blutter-matrix/build-blutter-runners.sh'
 
         # GitHub step: Debug build
         - name: Debug 构建
