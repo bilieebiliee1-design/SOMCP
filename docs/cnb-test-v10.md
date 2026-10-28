@@ -110,13 +110,44 @@ Gradle 读的是同名但不带前缀的 Gradle 属性（`org.gradle.internal.re
 它只在 `CNB_BUILD_ID` 存在时生效，本地开发完全不介入。
 
 - **不删不改原仓库**：`google()`、`gradlePluginPortal()`、原 `mavenCentral()` 全在，
-  所以 AGP 的 marker 仍走 Google，解析顺序和失败语义不变；
+  解析顺序和失败语义不变；
 - **版本与产物不变**：镜像里是同一份构件（`group:artifact:version` 一致，字节相同），
   实测 `gradle-9.2.1.jar` 与 `kotlin-gradle-plugin-2.4.0-gradle813.jar` 都按声明解析到位；
 - **判据不变**：Gradle 只在 404 时才试下一个仓库，真不存在的版本照样失败。
 
 实测对比（同一台机器、空用户目录、冷启动）：不挂镜像 4 次里 1 次成功，
 挂上镜像 4 次全成功。
+
+### 插件解析与依赖解析不能用同一个镜像
+
+这条是踩出来的，写在这里免得下次「统一一下」：
+
+`maven.aliyun.com/repository/public`（Maven Central 镜像）对**不存在的构件**不返回
+404，而是 `200` + 一张「该资源不存在」的 HTML 页。Gradle 只看状态码，见到 200 就
+认定该仓库命中、不再往下试，于是 Google 上真实存在的 marker 永远取不到：
+
+```
+Plugin [id: 'com.android.application', version: '9.2.1', apply: false] was not found
+  Searched in the following repositories:
+    cnb-mirror-0(https://maven.aliyun.com/repository/public)
+    Google
+    MavenRepo
+    Gradle Central Plugin Repository
+```
+
+「搜过 Google 还是没有」是假象 —— 它没走到 Google。AGP 9 从未发布到 Maven Central，
+`com.android.application` 的 marker 只在 Google 仓库里，所以在插件仓库列表里插一个
+Maven Central 镜像，等于把它遮死。
+
+现在的分工（两边都仍走 `all {}` 追加，见上一节）：
+
+| 用途 | 追加的镜像 | 说明 |
+| --- | --- | --- |
+| 依赖解析 `dependencyResolutionManagement` | `.../repository/public` | Maven Central 镜像，Kotlin / AndroidX 等普通依赖在这 |
+| 插件解析 `pluginManagement` | `.../repository/google` | 代理 `dl.google.com/dl/android/maven2`，命中的是同一份构件 |
+
+插件侧不挂 Maven Central 镜像：Kotlin 插件 marker 本身在 Maven Central 也在
+Gradle Plugin Portal，原仓库列表够用，不需要镜像。
 
 ## 无法逐字等价的项
 
@@ -295,7 +326,8 @@ warning、镜像照常产出」的兜底都进不去 —— 一段本该降级�
 | --- | --- | --- |
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
 | `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
-| `Plugin [id: '...', version: '...'] was not found` | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
+| `Plugin [id: '...', version: '...'] was not found`，`Searched in` 里没有 Google | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
+| `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven 镜像的 200 空壳挡住 AGP marker | 插件侧只挂 Google 镜像，见「插件解析与依赖解析不能用同一个镜像」 |
 | 预热全绿但运行期 `--offline` 复核失败 | 预热用的 `GRADLE_USER_HOME` 与运行期不是同一个 / 预热缺 init script | 见上一节，已修 |
 | 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
 
