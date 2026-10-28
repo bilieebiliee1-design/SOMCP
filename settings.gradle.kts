@@ -16,11 +16,12 @@ dependencyResolutionManagement {
         // 各撞一次 404（冷启动撞的是 Maven Central 的 429，那会直接判死整次解析）。
         // 上游坐标 `x.y.z` 也的确在这里没有，照样落到后面的真仓库。
         //
-        // 目录在 `:app` 的 build 目录下，首次配置前可能还不存在；Gradle 对不存在的
-        // 本地仓库只会跳过（真要解析 `.1` 时插件已经把它生成好了）。
+        // 目录在 `:app` 的源码区（`app/libs/build/`），不在 buildDir 下 —— buildDir
+        // 中途被清空会让 `.1` 变成「找不到依赖」，理由见插件里 somcpPatchedRepo 那段。
+        // 首次配置前可能还不存在（插件还没跑）；Gradle 对不存在的本地仓库只会跳过。
         maven {
             name = "somcpPatchedLocal"
-            url = uri(rootDir.resolve("app/build/patched-jars-repo"))
+            url = uri(rootDir.resolve("app/libs/build/patched-jars-repo"))
         }
         google()
         mavenCentral()
