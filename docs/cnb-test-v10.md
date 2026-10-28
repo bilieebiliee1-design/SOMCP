@@ -595,15 +595,54 @@ buildSrc 是 **included build**：不继承 `settings.gradle.kts` 的 `pluginMan
 
 ### 现在的做法
 
-判据从「让冲突解析替我们选」改成「上游那份直接别上 classpath」：
+判据从「让冲突解析替我们选」改成「上游那份根本不进图」：
 `buildSrc/src/main/groovy/somcp.patched-local-jars.gradle`（预编译脚本插件，Gradle 自带的
-`groovy-gradle-plugin`，零外部插件依赖）在 `incoming.afterResolve` 里把同 `group:module`
-的上游 artifact 剔掉，只留 patched jar。解析完成之后、三个合并 task（
-`checkDebugDuplicateClasses` / `mergeDebugJavaResource` / `mergeDebugNativeLibs`）
-之前，刚好卡在点上。
+`groovy-gradle-plugin`，零外部插件依赖）在 `configuration.incoming.beforeResolve { }` 里
+把上游坐标从待解析的 selector 集合里 `removeAll` 掉。上游那份因此**根本不会被解析**，
+也就不会被任何消费者合并进 classpath，重复类无从发生。
 
-判据是「解析结果里有没有同名 patched jar」，与「谁把它带进来的」无关 —— 逐个 `exclude`
-堵来路已经试过一次：带上游 jar 进来的路径不止一条，排掉一条，换条路径又漏回来。
+判据是「这个配置里有没有同名 patched jar」（看 `allDependencies` 的构件名，不触发解析），
+与「谁把上游 jar 带进来的」无关 —— 逐个 `exclude` 堵来路已经试过一次：带上游 jar 进来的
+路径不止一条，排掉一条，换条路径又漏回来。
+
+**为什么不是「解析完再删」** —— 这条坑踩了三回，全死在 configuration cache 上，
+`gradle.properties` 里 `org.gradle.configuration-cache=true`，所以别再试。核心区别只有
+一句：**解析结果只能在解析前用「待解析的 selector」表达，不能反过来在解析后用「已解析
+的产物」去删** —— 后者一定会在存缓存那一步被重新求值。
+
+1. `incoming.afterResolve { resolvedArtifacts }` + 从 `configuration.artifacts` 删：
+   解析能过，但存缓存时会重放闭包、重新求值那个惰性属性，那时解析已结束
+   （`cnb-d7c-1k623dl4d` 的 Android Lint）：
+
+   ```
+   Configuration cache state could not be cached: field `importDirs` of task
+   `:app:compileDebugAidl` of type `com.android.build.gradle.tasks.AidlCompile`:
+   error writing value of type
+   'org.gradle.api.internal.artifacts.configurations.ResolutionBackedFileCollection'
+   > Could not get unknown property 'resolvedArtifacts' for dependencies
+     ':app:debugCompileClasspath'
+   ```
+
+2. 改成具名参数 `afterResolve { it.resolvedArtifacts }`：报错文字变了，病理没变，
+   同一个地方照样红（`cnb-5qa-1k623v3ir`）。**闭包里读解析结果这件事本身**就不能放在
+   `afterResolve` 里，换写法只是换报错。
+
+3. `incoming.artifactView { beforeResolve { ... } }`：`ArtifactView.ViewConfiguration`
+   上根本没有 `beforeResolve`（`cnb-o45-1k6242bj7`）：
+
+   ```
+   Could not find method beforeResolve() ... on object of type
+   DefaultResolutionOutputs$DefaultArtifactViewConfiguration
+   ```
+
+   `beforeResolve` 长在 `ResolvableDependencies` 上，属于 configuration 层；
+   artifact view 层只有 `componentFilter` / `lenient` / `withVariantReselection`，
+   过滤出来的是「视图」，替不掉 `configuration.incoming.files` 本身。
+
+`componentSelection.reject()` 也能达到同样效果（图解析阶段拒掉候选，同样不碰已解析
+产物），但 `beforeResolve` 更直白：拿到的是 `ResolvableDependencies.dependencies`，
+就是即将被解析的那张 selector 集合，`removeAll` 即可，顺手还能把被摘掉的坐标打进日志
+（`[patched-jars] <configuration>: drop upstream <坐标>`）。
 
 三条不变量写在插件头部注释里，改之前先读：
 
@@ -611,7 +650,8 @@ buildSrc 是 **included build**：不继承 `settings.gradle.kts` 的 `pluginMan
    jar 不是重复品而是**替代品**（`unicorn:1.0.15` 是 `unicorn.*` 唯一的来源），剔了会在
    `session_open` 时 `ClassNotFoundException`。
 2. 同一配置里必须同时看到 patched jar 才动，否则说明该配置压根不需要它。
-3. 副作用打一行 `[patched-jars] ...` lifecycle 日志 —— 依赖图被动过，日志里得看得见。
+3. 副作用看得见：拒绝理由写进 `ComponentSelection.reject(...)`，`dependencyInsight` 里
+   显示为 `rejected by rule` —— 依赖图被动过，日志里得看得见。
 
 **buildSrc 的插件选择因此被限制住了**：只能用 `groovy-gradle-plugin`，不能用 `kotlin-dsl`。
 后者要从 Portal 拿 marker，而 `--offline` 复核读的是预热出来的用户目录，那里没有它。
