@@ -184,10 +184,17 @@ stage_buildsrc_placeholder() {
 publish_patched_local_repo() {
   local app_script=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
   local target_dir=app/build/patched-jars-repo
-  if [ ! -f "$app_script" ]; then
-    echo "[warmup] WARNING: buildSrc plugin not in the context; patched x.y.z.1 stays unresolved in pass 2" >&2
-    return 0
-  fi
+  # 找不到口径表就**判失败**，不降级成 WARNING。这一条是踩出来的：上一版把
+  # buildSrc/ 的 COPY 目的地写在这棵树里，而 Dockerfile 下一层还有一句
+  # `rm -rf /tmp/cnb-warmup/buildSrc` —— 刚拷贝进来就被删掉，于是这里只打了一句
+  # `WARNING: buildSrc plugin not in the context` 就 return 0，`x.y.z.1` 一次都没
+  # 发布过（cnb-tau-1k627283e）。而那一轮的 pass 2 照样"通过"，因为
+  # simplify_app_script 已经把 :app 换成了没有 dependencies 的最小脚本 —— 空的依赖
+  # 图当然解析得开，判据其实一直是空的。
+  # 口径表缺席 = `.1` 解析不到 = patched jar 顶替上游模块的整套机制失效，把红点留给
+  # 运行期的「找不到依赖」，比在这里报错贵得多。
+  [ -f "$app_script" ] \
+    || { echo "[warmup] ERROR: $app_script not in the context; the patched x.y.z.1 coordinates cannot be published" >&2; exit 1; }
   rm -rf "$target_dir"
   local published=0
   while IFS=$'\t' read -r jar_name coordinates; do
