@@ -79,10 +79,11 @@ RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
 # 从 /opt/gradle-user-home 搬进去；镜像层保留原件，卷随流水线销毁。
 COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
 COPY scripts/cnb/gradle-proxy.init.gradle.kts /opt/cnb/gradle-proxy.init.gradle.kts
-# 「只看缓存」复核脚本：运行期 setup-build-env.sh 传 -PcnbCacheOnlyCheck 时由
-# gradle-proxy.init.gradle.kts 从 $GRADLE_USER_HOME 里 apply 它（见该文件注释）。
-COPY scripts/cnb/gradle-cache-only.gradle /opt/gradle-user-home/cnb-cache-only.gradle
 COPY scripts/cnb/gradle-init.gradle /opt/cnb/gradle-init.gradle
+# 「只看缓存」复核脚本：运行期 setup-build-env.sh 传 -PcnbCacheOnlyCheck 时由
+# gradle-proxy.init.gradle.kts apply 它，预热期由下面那条 RUN 显式
+# -Dcnb.cacheOnlyScript 指过去。
+COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 
 # 预热用的最小工程：插件版本与仓库声明都从仓库自己的构建脚本里读，不另抄一份
 # （settings 里手写 google() / mavenCentral() 就等于绕开 settings.gradle.kts，
@@ -158,14 +159,15 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     mkdir -p /tmp/cnb-warmup-home; \
+    cp /opt/cnb/gradle-cache-only.gradle /tmp/cnb-warmup-home/cnb-cache-only.gradle; \
     cd /tmp/cnb-warmup; \
     bash -x /opt/cnb/warmup-project.sh; \
     printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
-    cp /opt/gradle-user-home/cnb-cache-only.gradle /tmp/cnb-warmup-home/; \
     if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 600 \
          /opt/gradle/bin/gradle --no-daemon --console=plain --info \
          --init-script /opt/cnb/gradle-init.gradle \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
+         -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
          help > /tmp/cnb-warmup.log 2>&1; then \
       echo "[warmup] gradle help OK"; \
     else \
@@ -180,6 +182,7 @@ RUN set -eu; \
          -PcnbCacheOnlyCheck \
          --init-script /opt/cnb/gradle-init.gradle \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
+         -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
          help > /tmp/cnb-warmup-offline.log 2>&1; then \
       echo "[warmup] cache-only recheck OK: the cache is self-sufficient"; \
       cp -a /tmp/cnb-warmup-home/. /opt/gradle-user-home/; \
