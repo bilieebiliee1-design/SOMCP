@@ -1,8 +1,44 @@
-# CNB 流水线：main 分支 push 后，把代码同步到 GitHub 镜像仓库。
-# 同步方向以 CNB 为准，分叉时强制覆盖（force: true）。
-# 同步所需凭据由流水线运行期注入，本文件不保存任何密钥。
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# SOMCP - .cnb.yml
+# Copyright (C) 2026 SOMCP authors
+# Upstream: https://github.com/bilieebiliee1-design/SOMCP
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License version 3 as published by
+# the Free Software Foundation.
+#
+# CNB 流水线配置。
+#
+# 本文件目前有两条互不影响的流水线：
+#   1. `同步到 GitHub 镜像仓库`：main push 后 force push 到 GitHub 镜像仓库，
+#      凭据来自私密仓库 SOMCP/key 的 github.yml。
+#   2. `Test v10`：.github/workflows/test-v10.yml 的 CNB 版，
+#      push main / 面向 main 的 PR / 手动触发（web_trigger）三种入口。
+#
+# 两条流水线的触发事件不冲突：同步只挂在 push 上，Test v10 是独立的一条
+# pipeline，两者并行执行、互不依赖。
+
+# ---------------------------------------------------------------------------
+# Test v10 —— .github/workflows/test-v10.yml 的等价迁移
+# ---------------------------------------------------------------------------
+# 迁移原则：每个 GitHub step 对应一个 stage（名字保持中文/英文一致），
+# 判据、命令、pin 住的版本原样保留，只替换平台相关部分：
+#   github.event_name              → CNB_EVENT
+#   secrets.*                      → 私密仓库 SOMCP/key 的 imports
+#   GITHUB_WORKSPACE               → CNB_BUILD_WORKSPACE (/workspace)
+#   GITHUB_OUTPUT / id 步骤输出      → ##[set-output] + job exports
+#   RUNNER_TEMP                    → .ci-tmp/（工作区内临时目录）
+#   ::error:: / ::warning::        → stderr + 退出码 / 普通日志
+#   actions/cache                  → CNB data volume（data 类型，仅供本流水线内共享，
+#                                    与 actions/cache 的「跨运行缓存」语义不同，见 PR 说明）
+#   gradle/actions/setup-gradle    → image/cnb-tools.Dockerfile 内的 Gradle 9.6.1
+#   android-actions/setup-android  → 同上镜像内的 cmdline-tools + SDK/NDK
+#   continue-on-error: true        → job allowFailure: true
+#   timeout-minutes                → job timeout
 main:
   push:
+    # --- 1. 同步到 GitHub 镜像仓库（保持原样，勿改）--------------------------
     - imports:
         - https://cnb.cool/SOMCP/key/-/blob/main/github.yml
       services:
@@ -17,3 +53,213 @@ main:
             password: ${GIT_ACCESS_TOKEN}
             branch: main
             force: true
+
+    # --- 2. Test v10 ------------------------------------------------------
+    - name: Test v10
+      # 动作对应关系见 docs/cnb-test-v10.md。
+      # submodule 显式声明：缺 third_party/* 会让原生后端静默降级。
+      git:
+        enable: true
+        submodules:
+          enable: true
+          remote: false
+      # 未声明 docker.image 时走缺省镜像，再由第一个 stage 用 docker:cache
+      # 产出带 JDK 17 / Android SDK / Gradle 9.6.1 的镜像供后续 stage 复用。
+      docker:
+        volumes:
+          # 跨 stage 共享的原生构建产物与 Gradle 用户目录（CNB 只跨 stage 共享
+          # CNB_BUILD_WORKSPACE 与文件顶层声明的 volumes）。data 卷随流水线销毁，
+          # 因此不会在两次构建之间复用 —— 与原动作 cache-disabled: true 一致。
+          # 注意：不能声明 CNB_BUILD_WORKSPACE 内部路径（卷路径不允许互相包含）。
+          - native-build:/native-build:data
+          - gradle-user-home:/gradle-home:data
+      stages: &cnb-test-v10-stages
+        # checkout 的 submodules: recursive + fetch-depth: 0 在 CNB 属于代码
+        # 准备阶段，这里把它连同 JDK / Gradle / SDK 的可用性一并断言下来。
+        - name: 基础镜像与工具链（JDK 17 + Gradle 9.6.1 + Android SDK/NDK）
+          type: docker:cache
+          options:
+            dockerfile: image/cnb-tools.Dockerfile
+            # 镜像自身钉住了全部版本；只有 Dockerfile 变了才重建。
+            by:
+              - image/cnb-tools.Dockerfile
+            versionBy:
+              - image/cnb-tools.Dockerfile
+            sync: true
+          exports:
+            name: BUILD_ENV_IMAGE
+
+        - name: 校验代码准备（submodule / JDK / Gradle / SDK）
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/setup-build-env.sh
+
+        # GitHub step: Determine base revision（id: base-rev）
+        - name: 判定 base revision
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/base-rev.sh
+          exports:
+            base: BASE_REV
+
+        # GitHub step: Check for empty PR
+        - name: 空 PR 拦截
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/check-empty-diff.sh "$BASE_REV"
+
+        # GitHub step: Profanity check（PATTERNS 词表与匹配方式原样迁移）
+        - name: 脏话检查
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/check-profanity.sh "$BASE_REV"
+
+        # GitHub step: AGPL-3.0-only license compliance check
+        - name: AGPL-3.0-only 合规检查
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/check-license.sh "$BASE_REV"
+
+        # GitHub step: PR size check（warning 不阻断）
+        - name: PR 规模检查
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/check-pr-size.sh "$BASE_REV"
+
+        # GitHub step: ktlint — Kotlin code style check（钉 1.5.0，勿升级）
+        - name: ktlint 代码风格检查
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/check-ktlint.sh
+
+        # GitHub step: Lint check
+        - name: Android Lint
+          image: $BUILD_ENV_IMAGE
+          script: gradle :app:lintDebug --stacktrace
+
+        # GitHub step: Install native build tools
+        #   apt 安装部分已在镜像内完成，这里只做可用性断言（等价且不依赖 root）。
+        - name: 原生构建工具检查
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/check-native-tools.sh
+
+        # GitHub step: Clone Rizin source (v0.9.1)
+        - name: 克隆 Rizin v0.9.1 源码
+          image: $BUILD_ENV_IMAGE
+          script: |
+            set -euo pipefail
+            cd "${CNB_BUILD_WORKSPACE}"
+            if [ ! -d third_party/rizin-src/librz/include ]; then
+              git clone --depth 1 --branch v0.9.1 https://github.com/rizinorg/rizin.git third_party/rizin-src
+            else
+              echo "third_party/rizin-src already populated, skipping clone"
+            fi
+
+        # GitHub step: Cache native backends (Rizin + LIEF)
+        #   actions/cache 在这里没有等价物：缓存 key 派生自
+        #   build-native-android.sh / rizin-cross-*.ini / rizin-native.ini /
+        #   CMakeLists.txt，任何一处改动都会让旧缓存失效；而 CNB 的节点缓存
+        #   不按 key 失效。为了让「改了脚本就必须重编」这件事不依赖缓存实现，
+        #   这里改为：key 有变化时清空产物目录（空目录 = 重新编译）。
+        - name: 原生后端缓存的失效判定
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/native-cache-key.sh
+
+        # GitHub step: Build native backends (Rizin + LIEF)
+        - name: 编译原生后端（Rizin + LIEF）
+          image: $BUILD_ENV_IMAGE
+          timeout: 4h
+          script: bash build-native-android.sh
+
+        # GitHub step: Build Blutter runners (best-effort)
+        #   continue-on-error: true → allowFailure: true
+        - name: 构建 Blutter runners（尽力而为）
+          image: $BUILD_ENV_IMAGE
+          allowFailure: true
+          timeout: 6h
+          script: |
+            set -euo pipefail
+            cd "${CNB_BUILD_WORKSPACE}"
+            bash tools/blutter-matrix/build-blutter-runners.sh
+
+        # GitHub step: Debug build
+        - name: Debug 构建
+          image: $BUILD_ENV_IMAGE
+          timeout: 3h
+          script: gradle :app:assembleDebug --stacktrace
+
+        # GitHub step: Restore release signing keystore (or CI fallback)
+        #   secrets 全部缺失时走 CI-only 临时 keystore 分支，不阻断。
+        - name: 恢复签名 keystore
+          image: $BUILD_ENV_IMAGE
+          # push 事件可信，可以引用密钥仓库；pull_request 属于不可信事件，
+          # 需要密钥文件声明 allow_events 才可能被引用，因此只在 push 上写 imports。
+          # 缺失时 prepare-keystore.sh 退回 CI-only 临时 keystore，不阻断。
+          imports:
+            - https://cnb.cool/SOMCP/key/-/blob/main/android-signing.yml
+          script: bash scripts/cnb/prepare-keystore.sh
+          exports:
+            store_file: STORE_FILE
+            store_password: STORE_PASSWORD
+            key_alias: KEY_ALIAS
+            key_password: KEY_PASSWORD
+
+        # GitHub step: Release build（签名凭据由 gradle 从同名环境变量读取）
+        - name: Release 构建
+          image: $BUILD_ENV_IMAGE
+          timeout: 3h
+          script: gradle :app:assembleRelease --stacktrace
+
+        # GitHub step: Harden release APKs with Dex2C (dcc) —— timeout 90m
+        - name: Dex2C 加固（dcc）
+          image: $BUILD_ENV_IMAGE
+          timeout: 90m
+          script: bash scripts/cnb/harden-dex2c.sh
+
+        # GitHub step: Harden release APKs with VMP (shell) —— timeout 120m
+        - name: VMP 加固（壳）
+          image: $BUILD_ENV_IMAGE
+          timeout: 120m
+          script: bash scripts/cnb/harden-vmp.sh
+
+        # GitHub step: Verify and ensure v2/v3 APK signing
+        - name: v2/v3 签名校验
+          image: $BUILD_ENV_IMAGE
+          script: bash scripts/cnb/verify-apk-signing.sh
+
+        # GitHub step: Unit tests
+        - name: 单元测试
+          image: $BUILD_ENV_IMAGE
+          timeout: 2h
+          script: gradle :app:testDebugUnitTest --stacktrace
+
+  # 面向 main 的 PR：同一套检查。
+  pull_request:
+    - name: Test v10
+      git:
+        enable: true
+        submodules:
+          enable: true
+          remote: false
+      docker:
+        volumes:
+          - native-build:/native-build:data
+          - gradle-user-home:/gradle-home:data
+  pull_request:
+    - name: Test v10
+      git:
+        enable: true
+        submodules:
+          enable: true
+          remote: false
+      docker:
+        volumes:
+          - native-build:/native-build:data
+          - gradle-user-home:/gradle-home:data
+      stages: *cnb-test-v10-stages
+
+  web_trigger.test-v10:
+    - name: Test v10
+      git:
+        enable: true
+        submodules:
+          enable: true
+          remote: false
+      docker:
+        volumes:
+          - native-build:/native-build:data
+          - gradle-user-home:/gradle-home:data
+      stages: *cnb-test-v10-stages
