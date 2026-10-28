@@ -400,10 +400,10 @@ Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found in a
 androidx / compose / ktor / okhttp 全没进缓存，而日志只看得到一句插件找不到。
 
 所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把两边一起断：删目录 +
-把 `:app` 里那行 `id("somcp.patched-local-jars")` 注释掉（随后 grep 断言它真的
-不在了，改了仓库写法而失效时报错退出，不静默放行）。这个插件干的是「用
-`app/libs` 下的 jar 顶掉上游同坐标模块」，而预热工程里那些上游坐标本来就不出现，
-去掉它不影响依赖图的完整性。
+把那行 `id("somcp.patched-local-jars")` **行尾注释掉**（`// [cnb-warmup] disabled: …`，
+行首、缩进、行号一律不动），随后 grep 断言行首已经不是 `id(...)`；改了仓库写法让
+sed 失配时报错退出，不静默放行。这个插件干的是「用 `app/libs` 下的 jar 顶掉上游
+同坐标模块」，而预热工程里那些上游坐标本来就不出现，去掉它不影响依赖图的完整性。
 
 ## 预热分两遍：第一遍按仓库原样跑
 
@@ -470,7 +470,7 @@ Dockerfile 走，Dockerfile 一改 `docker:cache` 的 key 就变，overlay 从�
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
 | `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
 | `Plugin [id: '...', version: '...'] was not found`，`Searched in` 里没有 Google | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
-| `Plugin [id: 'somcp.patched-local-jars'] was not found ... (plugin dependency must include a version number for this source)`，落在 `app/build.gradle.kts` 的 `plugins {}` 上（`cnb-hkj-1k624u580`） | 预热工程删了 `buildSrc/` 却留下 `:app` 那行 `id(...)`，整段脚本编译不过 | `warmup-project.sh` 的 `disable_buildsrc_plugin()` 注释掉该行并 grep 断言，已修 |
+| `Plugin [id: 'somcp.patched-local-jars'] was not found ... (plugin dependency must include a version number for this source)`，落在 `app/build.gradle.kts` 的 `plugins {}` 上（`cnb-hkj-1k624u580`） | 预热工程删了 `buildSrc/` 却留下 `:app` 那行 `id(...)`，整段脚本编译不过 | `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把该行行尾注释掉（不动缩进与行号）并 grep 断言，已修 |
 | `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven 镜像的 200 空壳挡住 AGP marker | 插件侧改挂 `repository/gradle-plugin`（对 AGP marker 返 404），见「插件解析与依赖解析不能用同一个镜像」 |
 | `Plugin [id: 'org.jetbrains.kotlin.plugin.compose' ...] was not found`，`Searched in` 里有 google 镜像 | `repository/google` 里没有 Kotlin 插件 marker | 同上 |
 | 镜像层预热 warning 里出现 `fus-statistics-gradle-plugin:2.4.0` 的 429 | 预热工程缺 `dependencyResolutionManagement`，插件 buildscript classpath 只剩隐式 `MavenRepo` | `scripts/cnb/warmup-project.sh` 补上该段，已修 |
