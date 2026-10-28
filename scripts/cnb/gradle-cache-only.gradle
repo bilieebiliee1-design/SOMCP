@@ -45,6 +45,7 @@
 // 生成在别处（判据本身不受影响，但位置对不上，排查时容易往错的方向找）。
 def gradleUserHome = new File(System.getenv('GRADLE_USER_HOME') ?: System.getProperty('user.home') + '/.gradle')
 
+def mirrorLayers = []
 def restrict = { repositories, layer ->
     def originals = repositories.collect { repo -> [repo.name, repo.url.toString()] }
     repositories.clear()
@@ -67,9 +68,21 @@ def restrict = { repositories, layer ->
         //
         // 只写 url 与 type，不写 name：url 就是算 hash 的输入，名字留给 Gradle 自己填，
         // 少一个可能过期的字段。url 用 JsonOutput 转义，省得手拼引号。
+        //
+        // 索引对不上时的报错长这样（这一条专门为了别让人白找）：
+        //   Plugin [id: ...] was not found / Could not resolve ...
+        //     Searched in the following locations: .../cnb-cache-only/plugins/0/...
+        // 出现它意味着「这份构件在别的仓库索引里」。最典型的是镜像（cnb-mirror-*）：
+        // 联网预热时它排在前面，Google 上没有的坐标（jetbrains / slack 之类）会被
+        // 它接走，于是缓存是按镜像的 url 建索引的，而复核用的空仓库按**仓库顺序**
+        // 跟原列表逐位对齐 —— 顺序里 mirror 排在 google 后面，对不上。判据「偏严」
+        // 那一侧，不会误放行，所以只在下面打一句解释，不去猜。
         def infoDir = new File(repoDir, '.gradle')
         infoDir.mkdirs()
         new File(infoDir, 'repo-info.json').text = "{\"url\": ${groovy.json.JsonOutput.toJson(url)}, \"type\": \"maven\"}\n"
+        if (name.startsWith('cnb-') && name.contains('mirror')) {
+            mirrorLayers << "${layer}[${i}] ${name}"
+        }
         println "[cnb-cache-only] ${layer}[${i}] ${name} (${url}) -> local cache index"
     }
 }
@@ -78,4 +91,10 @@ beforeSettings { settings ->
     restrict(settings.pluginManagement.repositories, 'plugins')
     restrict(settings.dependencyResolutionManagement.repositories, 'deps')
     println '[cnb-cache-only] repositories restricted to the local Gradle cache'
+    if (!mirrorLayers.isEmpty()) {
+        println "[cnb-cache-only] note: ${mirrorLayers.size()} mirror repositories are part of the list " +
+            "(${mirrorLayers.join(', ')}). If a coordinate was downloaded through a mirror during the " +
+            "online warmup, its cache index belongs to that mirror and this recheck still rejects it " +
+            "(stricter by design, never a false pass)."
+    }
 }

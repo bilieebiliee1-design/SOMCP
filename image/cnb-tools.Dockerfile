@@ -94,8 +94,14 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 # 自动出现在镜像里。COPY 的源是上下文根、按仓库相对路径写，不能带 `../`。
 #
 # 改写的判据（下面那条 RUN 逐条对应）：
-#   * build.gradle.kts 只留 `plugins {}` —— 原文件的其余内容（仓库声明、
-#     allprojects 等）在只有插件块的最小工程里求值会失败；
+#   * **根与 app 两份 build.gradle.kts 都只留 `plugins {}`** —— 原文件的其余内容
+#     （dependencies / configurations / 自定义 task / allprojects）在最小工程里
+#     求值会失败。app 那份尤其致命：`implementation(files("libs/*-patched.jar"))`
+#     指向的文件不在构建上下文（by 只带构建脚本），`module("g:a:v")` 这类写法在
+#     Kotlin DSL 里连编译都过不了 —— 一旦脚本编译失败，整次预热以 BUILD FAILED
+#     收场，镜像里一个依赖都没落下，改仓库源码里的写法也救不回来（那本就是
+#     运行期的语法问题，不该由预热来判）。改写后由 warmup-project.sh 从原文件
+#     读 namespace / compileSdk / minSdk 补一个最小 android {} 块给 :app；
 #   * settings.gradle.kts 去掉 `rootProject.name` / `include`，只留
 #     `pluginManagement { repositories { ... } }` —— **仓库声明必须保留**：
 #     早先的做法是把 settings 清空成一行 rootProject.name，Gradle 于是只剩
@@ -111,8 +117,12 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 #     （org.gradle.internal.repository.max.tentatives / initial.backoff）与
 #     network.retries 都从这份属性文件读，而冷启动最吃重试的正是预热这一次解析；
 #     少设一次就是「预热下的东西运行期用不上」，白跑。
+# app/build.gradle.kts 刻意**不** COPY：预热工程的 :app 脚本由 warmup-project.sh
+# 生成（只含 plugins {} + 最小 android {}），见上面的改写判据。
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
-COPY app/build.gradle.kts /tmp/cnb-warmup/app/
+# app/ 只是个空目录：:app 的脚本由 warmup-project.sh 生成，仓库那份不 COPY 也不
+# 出现在构建上下文里，所以这里得先把目录建出来。
+RUN mkdir -p /tmp/cnb-warmup/app
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
 # 曾因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
@@ -199,8 +209,17 @@ RUN set -eu; \
       echo "[warmup] ERROR: cache-only recheck failed. The online warmup only looked" >&2; \
       echo "[warmup] ERROR: successful because the network was reachable; the cache is" >&2; \
       echo "[warmup] ERROR: NOT self-sufficient, and later stages resolve offline." >&2; \
-      grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup-offline.log | tail -n 40 >&2 || true; \
+      grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out|Searched in the following locations" /tmp/cnb-warmup-offline.log | tail -n 40 >&2 || true; \
       tail -n 60 /tmp/cnb-warmup-offline.log >&2 || true; \
+      if grep -qE "cnb-(plugin-)?(central-)?mirror-" /tmp/cnb-warmup-offline.log; then \
+        echo "[warmup] HINT: a cnb-mirror-* repository is in the rejection list. Load-bearing" >&2; \
+        echo "[warmup] HINT: downloads during the ONLINE warmup can go through the Maven Central" >&2; \
+        echo "[warmup] HINT: mirror (maven.aliyun.com) while no jitpack/studio mirror serves that" >&2; \
+        echo "[warmup] HINT: coordinate; those land in the cache under the mirror's index, so the" >&2; \
+        echo "[warmup] HINT: cache-only recheck (empty local repos, ordered like the mirror list)" >&2; \
+        echo "[warmup] HINT: rejects them. Add a google mirror far enough down the list, or stop" >&2; \
+        echo "[warmup] HINT: warming up with the network reachable (see gradle-init.gradle)." >&2; \
+      fi; \
       exit 1; \
     fi; \
     rm -f /tmp/cnb-warmup.log /tmp/cnb-warmup-offline.log; \
