@@ -219,5 +219,16 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 再用裸 `gradle help` 预热 —— 不用 `--build-file` / `--settings-file`，
 Gradle 9 已经把这两个参数删掉了。
 
+还有一条容易踩的：**`RUN` 的续行里不能夹注释**。行尾 `\` 会把下一行的 `# 注释`
+拼进同一条命令，而 `#` 只在行首才是注释，于是被拼到 `sed -n '...'` 后面就成了
+文件参数：
+
+```
+sed: can't read /build.gradle.kts: No such file or directory
+```
+
+报错看着像路径问题，其实是上一行的注释被当成了参数。预热段的所有注解都写在
+`RUN` 之前，命令体内保持纯净。
+
 `versionBy` 仍只写 Dockerfile。被 `by` 额外带进上下文的文件只解决「可见性」，
 不该让缓存版本跟着漂移；预热本身吃 `RUN` 层缓存，构建脚本变了 Gradle 会自己重解析。

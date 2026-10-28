@@ -82,20 +82,17 @@ COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
 # 文件），因此这三个文件必须显式 COPY 进来 —— 光在 `by` 里声明不会让它们
 # 自动出现在镜像里。COPY 的源是上下文根、按仓库相对路径写，不能带 `../`。
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
+# 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
+# 上一轮就是因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
-    # 只留插件声明给 warmup 工程（原文件另有其他内容，求值会失败），
-    # 插件版本仍从仓库自己的构建脚本里读，不另抄一份。
     sed -n '/^plugins {/,/^}/p' build.gradle.kts > warmup.gradle.kts.tmp; \
     mv warmup.gradle.kts.tmp build.gradle.kts; \
     grep -q 'org.jetbrains.kotlin.android' build.gradle.kts; \
     sed -n '/^pluginManagement {/,/^}/p' settings.gradle.kts > warmup-settings.tmp; \
     printf 'rootProject.name = "cnb-warmup"\n' >> warmup-settings.tmp; \
     mv warmup-settings.tmp settings.gradle.kts; \
-    # gradle-init.gradle 只在 CNB_BUILD_ID 存在时才追加镜像，这里补一个，
-    # 让镜像层里的预热走和运行期完全一样的仓库列表。
-    # 不用 --build-file / --settings-file：Gradle 9 已删除这两个参数。
     CNB_BUILD_ID=warmup gradle --no-daemon --console=plain help; \
     cd /; rm -rf /tmp/cnb-warmup /root/.gradle/daemon /root/.gradle/.tmp; \
     rm -rf /root/.gradle; \
