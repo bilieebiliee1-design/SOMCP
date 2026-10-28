@@ -357,10 +357,14 @@ dependencies {
     implementation("com.alibaba:fastjson:1.2.83")
     implementation("com.github.zhkl0228:demumble:1.0.4")
     implementation("net.dongliu:apk-parser:2.6.10")
-    // unidbg-* 上游坐标的排除统一写在文件末尾的 configurations.configureEach，
+    // unidbg-* 上游坐标的排除写在文件末尾的 configurations.configureEach，
     // 这里刻意不写 exclude：依赖块里的 exclude 只作用于本依赖这一条传递路径，
     // 漏一条上游坐标就又会撞成重复类。
-    implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9")
+    //
+    // 写成 module(...) 而不是裸字符串：同一段依赖声明，字符串形式在「配置上后设的
+    // exclude」面前不保证被排除，而 module() 是已解析好的依赖对象，行为确定。
+    // 真正不看时序的判据是文件末尾的 withDependencies。
+    implementation(module("com.github.zhkl0228:unidbg-unicorn2:0.9.9"))
     // unicorn2 后端（Unicorn2Backend → 反射注册的 Unicorn2Factory）来自上面这个
     // 坐标，两个 patched jar 里都没有它 —— 删掉这条，应用再也注册不到后端工厂，
     // 只剩 BackendFactory.createBackend 兜底的 UnicornBackend。
@@ -393,9 +397,28 @@ dependencies {
 //
 // 写在 configuration 上而不是某个依赖块里：同一坐标可能有多条传递路径，
 // 逐块写 exclude 只能挡住自己那一条，漏掉的那条照样把重复类带回来。
+//
+// 但这段代码前两版都没生效，报错一模一样（332 条 Duplicate class 加 tzdata 同名
+// 文件）：exclude 是在 dependencies {} **之后**才设到配置上的，而此时依赖已经解析
+// 成 Dependency 对象，是否吃到这条 exclude 取决于它是以什么形式绑上去的 ——
+// 写在 dependencies 里的字符串依赖不吃，所以上面那条 unidbg-unicorn2 改成了
+// module(...)。真正不看时序的判据是下面那段 withDependencies。
 configurations.configureEach {
     exclude(group = "com.github.zhkl0228", module = "unidbg-android")
     exclude(group = "com.github.zhkl0228", module = "unidbg-api")
     exclude(group = "com.github.zhkl0228", module = "capstone")
     exclude(group = "com.github.zhkl0228", module = "keystone")
+}
+
+// 真正不看时序的判据：在依赖解析那一刻直接删掉上游坐标，与 exclude 何时设置、
+// 依赖以什么顺序加入都无关。
+// unidbg-api / unidbg-android 的上游 POM 还会把 capstone 3.1.8 / keystone 0.9.7 /
+// unicorn 1.0.15 / demumble 1.0.4 带进来（capstone / keystone 的 patched jar 走
+// files()，unicorn 同时是 unicorn2 后端的 JNI 类来源，两条都已有显式声明），
+// 所以四个模块一起删。
+val upstreamUnidbgModules = listOf("unidbg-api", "unidbg-android", "capstone", "keystone")
+configurations.configureEach {
+    withDependencies {
+        removeAll { it.group == "com.github.zhkl0228" && it.name in upstreamUnidbgModules }
+    }
 }
