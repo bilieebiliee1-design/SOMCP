@@ -23,12 +23,27 @@
  *     - unidbg-android-0.9.9-android-patched.jar
  *     - com.github.zhkl0228.unidbg:unidbg-android:0.9.9
  *
- * 做法：在依赖解析完成之后（`incoming.afterResolve`，早于
- * checkDebugDuplicateClasses / mergeDebugJavaResource / mergeDebugNativeLibs
- * 这些合并任务），把同 group:module 的上游 artifact 剔掉，只留 patched jar。
- * 判据是「解析出来的构件里有没有同名 patched jar」，与「谁把它带进来的」无关 ——
+ * 做法：在解析**之前**把上游那份从 selector 列表里摘掉 ——
+ * `incoming.artifactView { beforeResolve { ... } }`，`beforeResolve` 回调拿到的是
+ * `ComponentSelector` 集合，`removeAll` 之后 Gradle 根本不会解析上游那个模块，
+ * 冲突也就无从发生。判据是「这个配置里有没有同名 patched jar」（看
+ * `allDependencies` 的构件名，不触发解析），与「谁把它带进来的」无关 ——
  * 逐个 exclude 堵来路这条路已经试过：带上游 jar 进来的路径不止一个，排掉一条，
  * 换条路径又漏回来。
+ *
+ * 为什么不是「解析完再把 artifact 从 `configuration.artifacts` 里删掉」：那样要
+ * 在 `incoming.afterResolve` 里读 `resolvedArtifacts`，而这个惰性属性在 Gradle 9 的
+ * configuration cache 序列化阶段会被重新求值一次 —— 那时解析早已结束，于是整次
+ * 构建死在缓存写入上（`cnb-d7c-1k623dl4d` 的 Android Lint）：
+ *
+ *   Configuration cache state could not be cached: field `importDirs` of
+ *   task `:app:compileDebugAidl` ...: error writing value of type
+ *   'ResolutionBackedFileCollection'
+ *   > Could not get unknown property 'resolvedArtifacts' for dependencies
+ *     ':app:debugCompileClasspath'
+ *
+ * 同一条坑对任何「解析后再读惰性属性」的写法都成立：见到
+ * `Could not get unknown property` 先怀疑这里，别急着怀疑依赖坐标。
  *
  * 三条不变量，改之前先读：
  *   1. **只对 unidbg-api / unidbg-android 生效**。unicorn / capstone / keystone 的
@@ -41,39 +56,52 @@
  *      得看得见，否则下次查重复类会先怀疑仓库。
  */
 
-import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ModuleComponentSelector
 
+def somcpPatchedGroups = [
+    'com.github.zhkl0228',
+] as Set
+
+// 上游要摘掉的 module（group 见上）。只有这条白名单生效 —— 见不变量 1。
 def somcpPatchedModules = [
-    'com.github.zhkl0228:unidbg-api',
-    'com.github.zhkl0228:unidbg-android',
+    'unidbg-api',
+    'unidbg-android',
 ] as Set
 
 configurations.configureEach { configuration ->
-    configuration.incoming.afterResolve { resolvableDependencies ->
-        // 具名参数而不是裸 `resolvedArtifacts`：后者在 afterResolve 的 Action 里
-        // 不是自动可用的，Gradle 9 的 configuration cache 序列化阶段会以
-        //   groovy.lang.MissingPropertyException: Could not get unknown property
-        //   'resolvedArtifacts' for dependencies ':app:debugCompileClasspath'
-        // 直接在「存缓存」那一步把构建判死（Android Lint 就是撞在这上面）。
-        def resolved = resolvableDependencies.resolvedArtifacts.toList()
-        def patchedNames = resolved.findAll { it.file.name.contains('-patched') }*.file*.name as Set
+    configuration.incoming.artifactView { view ->
+        view.beforeResolve { resolvableDependencies ->
+            // 先判「这个配置里有没有 patched jar」（不变量 2）：只看构件名，
+            // 不触发解析。files() 依赖在配置期就已经在 allDependencies 里了。
+            Set<String> patchedNames = configuration.allDependencies
+                .collect { it.name }
+                .findAll { it != null && it.contains('-patched') }
 
-        def dropped = resolved.findAll { artifact ->
-            def id = artifact.id.componentIdentifier
-            def key = id instanceof ModuleComponentIdentifier ?
-                "${id.group}:${id.module}" : null
-            key != null &&
-                key in somcpPatchedModules &&
-                !artifact.file.name.contains('-patched') &&
-                patchedNames.any { it.startsWith("${id.module}-") }
-        }
+            if (patchedNames.isEmpty()) {
+                return
+            }
 
-        dropped.each { configuration.artifacts.remove(it) }
-        if (!dropped.isEmpty()) {
-            logger.lifecycle(
-                "[patched-jars] ${configuration.name}: dropped upstream " +
-                    dropped.collect { it.file.name }.join(', ')
-            )
+            Set<String> shadowed = somcpPatchedModules
+                .findAll { module -> patchedNames.any { it.startsWith("${module}-") } } as Set
+            if (shadowed.isEmpty()) {
+                return
+            }
+
+            def dropped = resolvableDependencies.dependencies.findAll { dependency ->
+                def selector = dependency as ModuleComponentSelector
+                selector.group in somcpPatchedGroups && shadowed.contains(selector.module)
+            }*.toString()
+
+            if (dropped.isEmpty()) {
+                return
+            }
+
+            // 不变量 3：依赖图被动过，日志里看得见。
+            logger.lifecycle("[patched-jars] ${configuration.name}: drop upstream ${dropped.join(', ')}")
+            resolvableDependencies.dependencies.removeAll { dependency ->
+                def selector = dependency as ModuleComponentSelector
+                selector.group in somcpPatchedGroups && shadowed.contains(selector.module)
+            }
         }
     }
 }
