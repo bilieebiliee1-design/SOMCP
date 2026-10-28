@@ -237,7 +237,10 @@ if (System.getenv('CNB_BUILD_ID') != null) {
 // 幂等（按长度判断要不要重写），预热、复核、每个 stage 各跑一次也没关系。
 // 失败只打 warning：真正的判据是复核那一步，缺了它会当场报出来，不在这里重复判死。
 def deployCacheOnlyScript = {
-    def source = new File('/opt/gradle-user-home/cnb-cache-only.gradle')
+    // 镜像把它放在 /opt/cnb：放 /opt/gradle-user-home 里的话，它会被
+    // setup-build-env.sh 的 `cp -a /opt/gradle-user-home/. $GRADLE_USER_HOME/`
+    // 一起搬进用户目录（Gradle 自己的目录布局），这里投放的判据也搅在一起。
+    def source = new File('/opt/cnb/gradle-cache-only.gradle')
     if (!source.isFile()) {
         return
     }
