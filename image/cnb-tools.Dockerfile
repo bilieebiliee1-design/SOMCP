@@ -84,6 +84,12 @@ COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
 # 上一轮就是因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
+#
+# 预热失败必须看得见，但不能让镜像作废：镜像里除了这份缓存还有 JDK / Gradle /
+# SDK/NDK（光 sdkmanager 就 3 分钟），为了一次网络抖动重建整个镜像不划算。
+# 所以 —— 失败时把日志尾部打到 stderr（Gradle 从 stdout 走，不打出来就只剩一行
+# "BUILD FAILED"），然后退出码归零；运行期由 scripts/cnb/setup-build-env.sh
+# 以 `gradle --offline` 复核预热结果，缓存不完整就在 stage 里明确失败并指向这里。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
@@ -93,7 +99,14 @@ RUN set -eu; \
     sed -n '/^pluginManagement {/,/^}/p' settings.gradle.kts > warmup-settings.tmp; \
     printf 'rootProject.name = "cnb-warmup"\n' >> warmup-settings.tmp; \
     mv warmup-settings.tmp settings.gradle.kts; \
-    CNB_BUILD_ID=warmup gradle --no-daemon --console=plain help; \
+    if CNB_BUILD_ID=warmup gradle --no-daemon --console=plain help > /tmp/cnb-warmup.log 2>&1; then \
+      echo "[warmup] gradle help OK"; \
+    else \
+      echo "[warmup] WARNING: gradle help failed, image keeps the toolchain but the" >&2; \
+      echo "[warmup] WARNING: dependency cache is incomplete; see tail below." >&2; \
+      tail -n 60 /tmp/cnb-warmup.log >&2 || true; \
+    fi; \
+    rm -f /tmp/cnb-warmup.log; \
     cd /; rm -rf /tmp/cnb-warmup /root/.gradle/daemon /root/.gradle/.tmp; \
     rm -rf /root/.gradle; \
     du -sh /opt/gradle-user-home
