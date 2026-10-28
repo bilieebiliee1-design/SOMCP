@@ -238,17 +238,6 @@ main:
         volumes:
           - native-build:/native-build:data
           - gradle-user-home:/gradle-home:data
-  pull_request:
-    - name: Test v10
-      git:
-        enable: true
-        submodules:
-          enable: true
-          remote: false
-      docker:
-        volumes:
-          - native-build:/native-build:data
-          - gradle-user-home:/gradle-home:data
       stages: *cnb-test-v10-stages
 
   web_trigger.test-v10:
