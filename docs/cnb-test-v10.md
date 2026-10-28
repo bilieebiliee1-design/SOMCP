@@ -265,14 +265,16 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 - `scripts/cnb/warmup-project.sh` —— 把下面几个文件改写成最小工程
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
   插件版本、仓库声明与重试参数
-- `buildSrc/build.gradle.kts` 与 `buildSrc/src/main/kotlin` —— **带进来是为了删掉**，
-  见下面「`buildSrc` 的 `kotlin-dsl`」一段。带全是因为 Dockerfile 里那句
+- `buildSrc/build.gradle.kts` 与 `buildSrc/src/main/groovy` —— **带进来是为了删掉**，
+  见下面「预热分两遍」一段。带全是因为 Dockerfile 里那句
   `rm -rf /tmp/cnb-warmup/buildSrc` 得先看得见东西；不带的话它是空操作，
   同一个坑会无声无息地回来
-- `app/build.gradle.kts` **不在** `by` 里：预热工程的 `:app` 脚本由
-  `warmup-project.sh` 生成（只含 `plugins {}` + 最小 `android {}`），仓库那份的
-  `dependencies {}` 里有 `files("libs/*-patched.jar")` 与 `module("g:a:v")`，
-  两者都会让预热以「脚本编译失败」收场，而报错点离真因很远
+- `app/build.gradle.kts` 与 `app/libs/` —— 预热**第一遍按仓库原样跑**，`:app` 的真实
+  脚本要求值一次，才能把 androidx / compose / ktor / okhttp 与
+  `files("libs/*-patched.jar")` 解析掉。第二遍才换成生成的
+  `plugins {}` + 最小 `android {}`，那时它们已不影响结果。早先版本怕「脚本编译不过
+  就闷杀整层预热」而干脆不带 `:app` 脚本，代价是 `:app` 的运行时依赖一个都没预热，
+  运行期照样现场冲网
 
 在 `by` 里声明只解决「进上下文」，不解决「进镜像」：Dockerfile 里必须再 `COPY`
 一次，否则 `RUN` 阶段根本看不到它们（曾因此失败在
@@ -380,22 +382,45 @@ Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found in a
 
 **预热工程里则必须没有 `buildSrc/`**：预热的目的就是把插件下进用户目录，
 预热工程里没有源码也没有 `libs/`，编译 `buildSrc` 毫无意义，只会把「插件还没下」
-变成「插件必须先可用」。两处幂等的 `rm -rf`：`warmup-project.sh` 一进目录就删，
-Dockerfile 在 `COPY` 之后紧接着删一条。删的都是 `/tmp/cnb-warmup` 里的副本，
-仓库自己的 `buildSrc/` 一个字节不碰。
+变成「插件必须先可用」。`warmup-project.sh` 一进目录就删，Dockerfile 在 `COPY`
+之后紧接着删一条（幂等）。删的都是 `/tmp/cnb-warmup` 里的副本，仓库自己的
+`buildSrc/` 一个字节不碰。
 
-剔除之后 `settings.gradle.kts` 里那条 `somcpPatchedLocalJars` 仓库仍然保留（它指向的
-目录不存在，Gradle 视为「什么都找不到」），依赖图照样解析。
+## 预热分两遍：第一遍按仓库原样跑
+
+只跑一遍「最小工程」有个隐藏代价：`:app` 的脚本被砍到只剩 `plugins {}` 之后，
+`dependencies {}` 里那些 androidx / compose / ktor / okhttp **一条都不会进缓存**，
+运行期照样现场冲网 —— 预热等于只做了一半。而直接照抄真实脚本又不行：脚本里任何
+一句编译不过的写法（历史例子：`implementation(module("g:a:v"))`，
+`Dependencies.module` 只收三个参数）都会让整层预热以 `BUILD FAILED` 收场，
+报错点还跟依赖图毫无关系。
+
+所以拆成两遍（`scripts/cnb/warmup-project.sh`）：
+
+1. **第一遍，仓库原样**（联网）：`buildSrc/` 在、`app/build.gradle.kts` 在、
+   `app/libs/` 在。这一遍把插件 marker、AGP、lint 以及 `:app` 的整张运行时依赖图
+   下进 `GRADLE_USER_HOME`。**失败即整层失败** —— 缓存没建起来就不该出镜像。
+2. **第二遍，最小工程**（联网）：删 `buildSrc/`、`:app` 换成生成的最小脚本、
+   `settings` 只留 `pluginManagement` + 照抄的 `dependencyResolutionManagement`。
+   这一遍失败**只打 WARNING**：依赖在第一遍已经下来了，缺的只是改写后那份工程的边角。
+
+镜像层的 `RUN` 只管两件事：跑这个脚本，然后用 `--offline` + `-PcnbCacheOnlyCheck`
+做一次「只看缓存」的复核。
+
+第二遍里 `settings.gradle.kts` 那条 `somcpPatchedLocalJars` 仓库仍然照抄保留（它指向的
+目录此时已不存在，Gradle 视为「什么都找不到」），依赖图照样解析。
 
 ## 预热失败与工具链失败的分界
 
-镜像里的预热段（`gradle help`）与工具链（JDK / Gradle / SDK / NDK）共用同一个
-`RUN` 之前的若干层。如果预热失败就让镜像构建整体失败，一次 Maven Central 抖动
-就要连 sdkmanager 一起重来（实测整层 4 分 38 秒，其中 SDK 安装 171 秒）。
-所以两件事分开判：
+镜像里的预热段（`warmup-project.sh` + `--offline` 复核）与工具链（JDK / Gradle /
+SDK / NDK）在同一个 Dockerfile 里，但预热在**独立的 RUN 层**：前面几层照样命中
+`docker:cache`，预热重来一次只是几十秒到几分钟，不是「整个镜像重来」。两层判据：
 
-- **镜像层**：预热失败只打 warning（把 Gradle 日志尾部打到 stderr，否则只剩一行
-  `BUILD FAILED`），镜像照常产出。这意味着镜像可能带着不完整的依赖缓存。
+- **镜像层**：预热失败**即整层失败**（把网络层证据与 Gradle 日志尾部打到 stderr，
+  否则只剩一行 `BUILD FAILED`）。这是有意改的：早期版本「warning + 退出码归零」，
+  留下一个带残缺缓存的镜像，被 `docker:cache` 按版本名记住，之后每次流水线都栽在
+  同一个 `Plugin ... was not found` 上，除了清缓存重建镜像没有别的解法。
+  一次网络抖动赔一次重建，比每次流水线都红划算。
 - **运行期**：`scripts/cnb/setup-build-env.sh` 在第一个 stage 用
   `bash scripts/cnb/gradle.sh --offline -q -PcnbCacheOnlyCheck help` 复核 ——
   走的是与后续每个 stage 完全相同的入口（同一个 proxy init script、同一份用户目录）；
