@@ -86,11 +86,20 @@ Gradle 缓存保持关闭语义：`/root/.gradle` 只是 data 卷，不设跨流
   但 Gradle 的 JVM 不读这些环境变量。所有 gradle 调用因此走 `scripts/cnb/gradle.sh`，
   它带上 `scripts/cnb/gradle-proxy.init.gradle.kts`，在 daemon 启动、插件解析之前
   把它们桥接成 JVM 属性。没有（或 host 为空）的代理变量时不做任何事，本地开发不加这个参数即可。
-- 限流：`repo1.maven.org` 对同一出口 IP 有共享的请求上限，CI 冷启动要拉几十个 POM，撞上 HTTP 429
-  是常态。Gradle 默认把 429 当成不可重试，报出来的却是
-  「Plugin [id: '...', version: '...'] was not found」——版本明明存在。`gradle.properties` 里
-  `org.gradle.internal.repository.max.retries=8` + `initial.backoff=1000` 让 429/5xx 变成可重试。
-  这一条不是平台差异，本地同样生效。
+- 限流：`repo1.maven.apache.org` / `repo1.maven.org` 对同一出口 IP 有共享的请求上限，
+  CI 冷启动要拉几十个 POM，撞上 HTTP 429 是常态。Gradle 默认把 429 当成不可重试，
+  报出来的却是「Plugin [id: '...', version: '...'] was not found」——版本明明存在
+  （同一个 POM 单独 `curl` 就是 200，连打几次才见 429）。三层兜底，判据都不放松：
+  1. `gradle.properties` 的 `org.gradle.internal.repository.max.retries=8` +
+     `initial.backoff=1000`（**不带 `systemProp.` 前缀**：这是 Gradle 自己的仓库级设置，
+     加了 `systemProp.` 会被当成 JVM 属性，Gradle 读不到，等于没配）；
+     同时 `org.gradle.parallel=false`，并发拉包越少越不容易被连续限流。
+  2. `scripts/cnb/gradle.sh` 外层重试：失败 → 退避 → 原命令重跑，最多 3 次。
+     冷启动代价集中在第一次拉取，重跑只重新解析；真失败重跑仍然失败。
+  3. `setup-build-env.sh` 的探测改成打**制品路径**并带 `--retry`：仓库首页常年 200，
+     429 只打在制品上，探首页永远看不出限流。
+
+  这一条不是平台差异（限流是网络条件），本地同样生效。
 
 ## 无法逐字等价的项
 
