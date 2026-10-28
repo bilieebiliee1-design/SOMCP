@@ -78,7 +78,14 @@ CNB 这份流水线的定位是「同一套构建与静态检查，在 CNB 上�
 Gradle 缓存保持关闭语义：`/gradle-home` 只是 data 卷，不设跨流水线缓存。
 
 **任务间产物共享**：CNB 只跨 job 共享 `CNB_BUILD_WORKSPACE` 与文件顶层声明的 `volumes`，
-所以 `native-build`（原生归档）与 `gradle-home`（Gradle 用户目录）都用 `data` 类型卷声明。
+所以 `native-build`（原生归档）与 `gradle-home`（`/root/.gradle`）都用 `data` 类型卷声明。
+
+**代理**：CNB 会把 Runner 宿主机的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 同步进容器，
+但 Gradle 的 JVM 不读这些环境变量，依赖解析会绕过代理直连外网（表现为插件
+「not found in any of the following sources」）。因此所有 gradle 调用改走
+`scripts/cnb/gradle.sh`，它带上 `scripts/cnb/gradle-proxy.init.gradle.kts`，
+在 daemon 启动、插件解析之前把代理桥接成 JVM 属性。没有代理变量时该脚本不做任何事，
+本地开发不加这个参数即可。
 
 ## 无法逐字等价的项
 

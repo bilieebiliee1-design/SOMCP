@@ -72,7 +72,7 @@ main:
           # 因此不会在两次构建之间复用 —— 与原动作 cache-disabled: true 一致。
           # 注意：不能声明 CNB_BUILD_WORKSPACE 内部路径（卷路径不允许互相包含）。
           - native-build:/native-build:data
-          - gradle-user-home:/gradle-home:data
+          - gradle-user-home:/root/.gradle:data
       stages: &cnb-test-v10-stages
         # checkout 的 submodules: recursive + fetch-depth: 0 在 CNB 属于代码
         # 准备阶段，这里把它连同 JDK / Gradle / SDK 的可用性一并断言下来。
@@ -128,7 +128,7 @@ main:
         # GitHub step: Lint check
         - name: Android Lint
           image: $BUILD_ENV_IMAGE
-          script: gradle :app:lintDebug --stacktrace
+          script: bash scripts/cnb/gradle.sh :app:lintDebug --stacktrace
 
         # GitHub step: Install native build tools
         #   apt 安装部分已在镜像内完成，这里只做可用性断言（等价且不依赖 root）。
@@ -179,7 +179,7 @@ main:
         - name: Debug 构建
           image: $BUILD_ENV_IMAGE
           timeout: 3h
-          script: gradle :app:assembleDebug --stacktrace
+          script: bash scripts/cnb/gradle.sh :app:assembleDebug --stacktrace
 
         # GitHub step: Restore release signing keystore (or CI fallback)
         #   secrets 全部缺失时走 CI-only 临时 keystore 分支，不阻断。
@@ -201,7 +201,7 @@ main:
         - name: Release 构建
           image: $BUILD_ENV_IMAGE
           timeout: 3h
-          script: gradle :app:assembleRelease --stacktrace
+          script: bash scripts/cnb/gradle.sh :app:assembleRelease --stacktrace
 
         # GitHub step: Harden release APKs with Dex2C (dcc) —— timeout 90m
         - name: Dex2C 加固（dcc）
@@ -224,7 +224,7 @@ main:
         - name: 单元测试
           image: $BUILD_ENV_IMAGE
           timeout: 2h
-          script: gradle :app:testDebugUnitTest --stacktrace
+          script: bash scripts/cnb/gradle.sh :app:testDebugUnitTest --stacktrace
 
   # 面向 main 的 PR：同一套检查。
   pull_request:
@@ -237,7 +237,7 @@ main:
       docker:
         volumes:
           - native-build:/native-build:data
-          - gradle-user-home:/gradle-home:data
+          - gradle-user-home:/root/.gradle:data
       stages: *cnb-test-v10-stages
 
   web_trigger.test-v10:
@@ -250,5 +250,5 @@ main:
       docker:
         volumes:
           - native-build:/native-build:data
-          - gradle-user-home:/gradle-home:data
+          - gradle-user-home:/root/.gradle:data
       stages: *cnb-test-v10-stages
