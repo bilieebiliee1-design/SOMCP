@@ -361,10 +361,10 @@ dependencies {
     // 这里刻意不写 exclude：依赖块里的 exclude 只作用于本依赖这一条传递路径，
     // 漏一条上游坐标就又会撞成重复类。
     //
-    // 写成 module(...) 而不是裸字符串：同一段依赖声明，字符串形式在「配置上后设的
-    // exclude」面前不保证被排除，而 module() 是已解析好的依赖对象，行为确定。
-    // 真正不看时序的判据是文件末尾的 withDependencies。
-    implementation(module("com.github.zhkl0228:unidbg-unicorn2:0.9.9"))
+    // 用字符串记法，不要写 module("g:a:v")：Kotlin DSL 里 Dependencies.module 只接受
+    // 三个参数，传单串会以「receiver type mismatch」直接编译失败（脚本都跑不起来，
+    // 与依赖图无关）。排除时序问题由文件末尾的 withDependencies 负责，与这里的写法无关。
+    implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9")
     // unicorn2 后端（Unicorn2Backend → 反射注册的 Unicorn2Factory）来自上面这个
     // 坐标，两个 patched jar 里都没有它 —— 删掉这条，应用再也注册不到后端工厂，
     // 只剩 BackendFactory.createBackend 兜底的 UnicornBackend。
