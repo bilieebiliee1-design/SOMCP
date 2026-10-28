@@ -173,20 +173,19 @@ RUN rm -rf /tmp/cnb-warmup/buildSrc
 #     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
 #   * **预热工程里不能有 buildSrc**：Gradle 只要在 settings 所在目录看到
 #     buildSrc/，就会在配置任何工程之前先把它当 included build 编译一遍，用的是
-#     buildSrc/build.gradle.kts 自己那份 `kotlin-dsl` 插件声明。而这次预热的
-#     目的正是「把插件下进用户目录」—— 插件还没下就要求它先在本地可用，鸡生蛋。
-#     报错长这样（cnb-fhv-1k621k7qm，卡在运行期的「只看缓存」复核上）：
-#       Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
-#       - Searched in the following repositories:
-#           Gradle Central Plugin Repository
-#     两个原因叠在一起：这份插件本地没有（冷启动），而 buildSrc 既不继承
-#     settings 的 pluginManagement / dependencyResolutionManagement，镜像那两条
-#     --init-script 也管不到它，列表里只剩缺省的 gradlePluginPortal。
-#     预热不需要它：buildSrc 只在**运行期**把 app/libs/*-patched.jar 复制成带
-#     元数据的本地仓库，而 libs/ 本来就不在 docker:cache 的构建上下文里。
+#     buildSrc/build.gradle.kts 自己那份 `kotlin-dsl` 插件声明与仓库声明。而这次
+#     预热的**全部目的**就是「把插件下进用户目录」—— 插件还没下就要求它先在本地
+#     可用，标准鸡生蛋。预热工程里也没有 libs/、没有插件源码，编译它毫无收益：
+#     它只在**运行期**把 app/libs/*-patched.jar 复制成带元数据的本地仓库。
 #     所以 COPY 之后立刻删掉 —— 删的是 /tmp/cnb-warmup 里的副本，仓库自己的
-#     buildSrc/ 不动。scripts/cnb/warmup-project.sh 里有同一道（幂等），
-#     两边都留是为了「容器里那份是上次留下的」这种情况也不会漏。
+#     buildSrc/ 不动（运行期每个 stage 都会真的编译它）。
+#     scripts/cnb/warmup-project.sh 里有同一道（幂等），两边都留是为了
+#     「容器里那份是上次留下的」这种情况也不会漏。
+#     注意别把这一条读成「buildSrc 不需要预热」：它需要，也确实被预热了，走的是
+#     运行期那条完整仓库。真正要修的是 buildSrc 自己的脚本 —— 版本必须钉住
+#     （不带版本的 kotlin-dsl marker 里嵌着时间戳），仓库必须自带
+#     gradlePluginPortal()（那两条 --init-script 管不到 included build 的
+#     pluginManagement）。详见 buildSrc/build.gradle.kts 与 docs/cnb-test-v10.md。
 #   * **预热命令关掉 configuration-cache**：运行期的 gradle.properties 开着它，
 #     预热工程每次只有一次执行机会，存下来的配置缓存毫无收益，却在
 #     「读:app 的依赖图」这类一次性工程上多一个可能失败的点。
