@@ -23,19 +23,12 @@
 // 用法（仅在流水线里显式传参，本地不加这个参数就完全不受影响）：
 //   gradle --init-script scripts/cnb/gradle-proxy.init.gradle.kts <task>
 //
-// 另外两件事，都只影响「网络条件」，不放松任何判据：
+// 另外断言 429 的重试配置真的生效（gradle.properties 里的 systemProp.*）：
+// 缺了就直接报出修复方法 —— 否则 429 会再被翻译成
+// 「Plugin [id: 'org.jetbrains.kotlin.android', version: '2.4.0'] was not found」，
+// 看起来像版本号写错，实际是重试用尽。
 //
-//   1. 插件仓库顺序调成 Central 优先。settings.gradle.kts 里 `google()` 排在
-//      `mavenCentral()` 前面，而 Google Maven 上没有
-//      `org.jetbrains.kotlin.android.gradle.plugin` 这类标记 artifact：每个插件都要
-//      先在 Google 吃一次 404 再回落。CI 冷启动几十个请求并发，正是这轮 404 把
-//      Central 的出口限流（429）撞了出来。只挪顺序，不增删仓库。
-//   2. 断言 429 的重试配置真的生效（gradle.properties 里的 systemProp.*）。
-//      缺了就直接报出修复方法 —— 否则 429 会再被翻译成
-//      「Plugin [id: 'org.jetbrains.kotlin.android', version: '2.4.0'] was not found」，
-//      看起来像版本号写错，实际是重试用尽。
-//
-// 没有（有效的）代理变量时，只有代理那一段不做任何事。
+// 没有（有效的）代理变量时，代理部分什么都不做；离线复核模式见下面 cnbCacheOnlyCheck。
 
 fun proxyParts(raw: String?): Pair<String, Int>? {
     // `:8080` 这类只有端口的值没有 host，转成 URI 后 host 为 null，直接放弃。
@@ -63,6 +56,32 @@ System.getenv("NO_PROXY")?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
     System.setProperty("https.nonProxyHosts", list)
 }
 
+// 「只看缓存」复核模式：--offline 只禁止联网，不禁止 Gradle 按仓库名去
+// $GRADLE_USER_HOME 里查缓存索引，于是「镜像预热没做完」和「仓库此刻不可达」
+// 分不开 —— 曾出现预热成功、运行期 --offline 复核却报
+//   was not found in any of the following sources: Google, cnb-plugin-mirror-0(...), ...
+// 把网络问题误判成缓存不完整。做法是把插件仓库与依赖仓库都换成同一个空的本地
+// 文件仓库（于是只剩已预热进 $GRADLE_USER_HOME 的构件可用），实现在
+// scripts/cnb/gradle-cache-only.gradle，由镜像放到
+// $GRADLE_USER_HOME/cnb-cache-only.gradle。
+// 只由 scripts/cnb/setup-build-env.sh 用 -PcnbCacheOnlyCheck 打开，其余场景不受影响。
+fun cnbHasProjectProperty(name: String): Boolean =
+    runCatching { gradle.startParameter.projectProperties.containsKey(name) }.getOrDefault(false)
+
+if (System.getenv("CNB_BUILD_ID") != null && cnbHasProjectProperty("cnbCacheOnlyCheck")) {
+    // 拆成独立脚本的理由：本文件是 .kts，`beforeSettings` 收的是 bridged 的
+    // org.gradle.api.Action，Kotlin 侧要额外的 SAM 适配才好写；那半段逻辑一次成型、
+    // 不值得把整个 init script 改成 Groovy（代理那段已经稳定）。
+    val cacheOnlyScript = File(System.getProperty("user.home"), ".gradle/cnb-cache-only.gradle")
+    if (!cacheOnlyScript.isFile) {
+        throw IllegalStateException(
+            "cnbCacheOnlyCheck requested but ${cacheOnlyScript} is missing; " +
+                "the image must COPY scripts/cnb/gradle-cache-only.gradle to \$GRADLE_USER_HOME/cnb-cache-only.gradle",
+        )
+    }
+    apply(from = cacheOnlyScript)
+}
+
 // 让日志能自证代理是否真的生效（不打印账号密码）。
 gradle.beforeProject {
     if (System.getProperty("https.proxyHost") != null) {
@@ -73,55 +92,30 @@ gradle.beforeProject {
     }
 }
 
-// --- 插件仓库顺序 -----------------------------------------------------------
-// 把 Maven Central 挪到 pluginManagement 的第一位。为什么在这里挪、而不改
-// settings.gradle.kts：Google 优先只在 CI 冷启动的并发下才会把 Central 的出口
-// 限流撞出来，本地开发不受影响，不该为 CI 去动本地构建的配置。
-//
-// 为什么是「remove + addFirst」（实测 Gradle 8.10.2）：
-//   - `RepositoryHandler.move` 在 Gradle 8 里不存在（9 才有），直接 Unresolved reference；
-//   - `clear()` 后重建会丢掉原有仓库的凭据与 content filters，还会把
-//     scripts/cnb/gradle-init.gradle 追加的镜像一起清掉；
-//   - `addFirst(已在列表中的实例)` 会被同名检查挡住；
-//   - `remove()` 是 `NamedDomainObjectList` 的标准能力，移出再插回首位可行，
-//     且不动仓库实例本身，配置全部保留。
-//
-// 为什么顺序仍然敏感：pluginManagement 里 `google()` 在 `mavenCentral()` 前面，
-// 而 Google Maven 上没有 `org.jetbrains.kotlin.android.gradle.plugin` 这类标记
-// artifact。每个插件（以及它引出的 BOM）都要先在 Google 吃一次 404 再回落 Central；
-// 冷启动时这一轮 404 会和真正要拉的 POM 一起把 429 打出来。前置 Central 不改
-// 「谁能提供什么」，只是把无谓的 404 省掉，镜像仍留在列表末尾做兜底。
-fun RepositoryHandler.centralFirst() {
-    val central = findByName("MavenRepo") ?: return
-    if (indexOf(central) == 0) return
-    remove(central)
-    addFirst(central)
-}
-
+// --- 429 重试配置自证 -------------------------------------------------------
 // 这两个键是 Gradle 自己的仓库级重试设置（源码：
 // ErrorHandlingModuleComponentRepository，`Integer.getInteger(...)` 读 JVM 属性），
 // 只能靠 gradle.properties 的 systemProp.* 或命令行 -D 注入。
 // 注意是 max.tentatives 而不是 max.retries —— 后者在 Gradle 8 里不存在，写了静默无效。
-val REQUIRED_SYSTEM_PROPERTIES =
+// 前缀也不能省：不带 systemProp. 的那几行看着更像「Gradle 属性」，实际 Gradle 不读
+// （A/B 实测：不带前缀 BUILD FAILED，带前缀 12 次 BUILD SUCCESSFUL）。
+val cnbRequiredSystemProperties =
     listOf(
         "org.gradle.internal.repository.max.tentatives",
         "org.gradle.internal.repository.initial.backoff",
     )
 
 gradle.settingsEvaluated {
-    // 重试/退避属性只认 gradle.properties 的 systemProp.* 与命令行 -D，
-    // 在 init script 里改 System 属性已经太晚（仓库传输组件早已初始化），
-    // 所以这里只做自证：缺了直接报出修复方法，而不是让 429 又一次
-    // 伪装成「Plugin ... was not found」。
-    val missing = REQUIRED_SYSTEM_PROPERTIES.filter { System.getProperty(it) == null }
-    require(missing.isEmpty()) {
-        "缺少 Gradle 仓库重试配置 $missing（Maven Central 429 会伪装成插件解析失败）；" +
-            "确认 gradle.properties 里有对应的 systemProp.*，或命令行传 -D<key>=<value>"
+    // 离线复核（cnbCacheOnlyCheck）本来就不联网，缺这两个属性不算问题。
+    if (System.getenv("CNB_BUILD_ID") != null && !cnbHasProjectProperty("cnbCacheOnlyCheck")) {
+        val missing = cnbRequiredSystemProperties.filter { System.getProperty(it) == null }
+        require(missing.isEmpty()) {
+            "缺少 Gradle 仓库重试配置 $missing（Maven Central 429 会伪装成插件解析失败）；" +
+                "确认 gradle.properties 里有对应的 systemProp.*，或命令行传 -D<key>=<value>"
+        }
+        logger.lifecycle(
+            "[cnb-repos] tentatives=${System.getProperty("org.gradle.internal.repository.max.tentatives")} " +
+                "backoff=${System.getProperty("org.gradle.internal.repository.initial.backoff")}ms",
+        )
     }
-    logger.lifecycle(
-        "[cnb-repos] tentatives=${System.getProperty("org.gradle.internal.repository.max.tentatives")} " +
-            "backoff=${System.getProperty("org.gradle.internal.repository.initial.backoff")}ms",
-    )
-    pluginManagement.repositories.centralFirst()
-    logger.lifecycle("[cnb-repos] plugin 仓库顺序: ${pluginManagement.repositories.map { it.name }}")
 }

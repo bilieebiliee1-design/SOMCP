@@ -62,6 +62,10 @@ if [ -d "$GRADLE_IMAGE_HOME" ] && [ ! -e "$GRADLE_USER_HOME/init.d/cnb-init.grad
 fi
 [ -f "$GRADLE_USER_HOME/init.d/cnb-init.gradle" ] \
   || fail "missing $GRADLE_USER_HOME/init.d/cnb-init.gradle (image warmup did not run)"
+# 复核脚本跟 init script 一起搬过来；缺了它 -PcnbCacheOnlyCheck 会在求值 init
+# script 时就抛错，报错点比「缓存不完整」更难读。
+[ -f "$GRADLE_USER_HOME/cnb-cache-only.gradle" ] \
+  || fail "missing $GRADLE_USER_HOME/cnb-cache-only.gradle (image must COPY scripts/cnb/gradle-cache-only.gradle)"
 
 # 复核镜像里的预热结果：镜像构建时预热失败不判死镜像（否则一次网络抖动就要
 # 连 SDK/NDK 一起重建），改为在这里用 --offline 复跑一次 `gradle help` ——
@@ -73,14 +77,35 @@ fi
 # 既不给 proxy init script 也不给 api-version 对齐，于是预热带代理、复核不带，
 # 两边根本不是同一个判据；而镜像里 GRADLE_USER_HOME 也不是 bash 的 export，
 # 裸 gradle 读不到。改为直接复用 shim：shim 里已经 cd 到工作区并透传参数。
+#
+# 判据是「缓存里有没有」，不是「网通不通」：`--offline` 只是禁止联网，Gradle 仍然
+# 会按各仓库的名字去 $GRADLE_USER_HOME 里找缓存，网络不可达时同样报
+#   Plugin [id: ...] was not found in any of the following sources: Google, cnb-plugin-mirror-0(...)
+# —— 「缓存里的插件索引在、但远端此刻连不上」会被误报成「镜像预热没做完」。
+# 所以额外传 -PcnbCacheOnlyCheck，由 gradle-proxy.init.gradle.kts 把仓库列表原样
+# 换成本地空目录（顺序、数量都不变，靠 repo-info.json 把缓存索引指回原 url）：
+# 命中缓存 = 通过，没命中 = 真的没预热到（overlay 与缓存 key 绑定，镜像重建后
+# 第一次运行必然是空缓存，这时才该指向 Dockerfile 的预热段）。
+# 代价是「缓存里有这份构件、但索引对不上」时也要判失败 —— 这是想要的严格：
+# 运行期用的正是同一份索引。
 WARMUP_CHECK="${GRADLE_WARMUP_CHECK:-1}"
 if [ "$WARMUP_CHECK" = "1" ]; then
   if ( cd "$WS" && GRADLE_USER_HOME="$GRADLE_USER_HOME" \
-       bash scripts/cnb/gradle.sh --offline -q help > /tmp/cnb-warmup-check.log 2>&1 ); then
-    log "gradle user home: warmup cache verified (offline help OK)"
+       bash scripts/cnb/gradle.sh --offline -q -PcnbCacheOnlyCheck help > /tmp/cnb-warmup-check.log 2>&1 ); then
+    log "gradle user home: warmup cache verified (cache-only help OK)"
   else
+    log "gradle user home: warmup cache is incomplete (see tail below)"
+    if grep -q 'cnb-cache-only' /tmp/cnb-warmup-check.log; then
+      log "hint: the base image was rebuilt with a new cache key, so docker:cache produced a"
+      log "hint: fresh overlay with an empty Gradle user home. A re-run of this same pipeline"
+      log "hint: (same key) reuses it, but the cache is only populated once the image is built"
+      log "hint: with network access to Google / Maven Central (image/cnb-tools.Dockerfile)."
+      log "hint: every repository listed in the rejection is normally the same list the image"
+      log "hint: warmed up; if this repeats with a populated cache, check the repo-info.json"
+      log "hint: trick in scripts/cnb/gradle-cache-only.gradle."
+    fi
     tail -n 40 /tmp/cnb-warmup-check.log >&2 || true
-    fail "gradle warmup cache is incomplete: \`gradle --offline help\` failed. The image warmup step (image/cnb-tools.Dockerfile) did not finish; rebuild the base image (docker:cache) rather than retrying the pipeline (set GRADLE_WARMUP_CHECK=0 to skip this check while debugging)"
+    fail "gradle warmup cache is incomplete: cache-only \`gradle help\` failed. Either the image warmup step (image/cnb-tools.Dockerfile) did not finish, or the docker:cache overlay was recreated with an empty user home; copy the tail above into the PR before re-running (set GRADLE_WARMUP_CHECK=0 to skip this check while debugging)"
   fi
   rm -f /tmp/cnb-warmup-check.log
 fi

@@ -33,7 +33,15 @@ grep -q 'com.android.application' build.gradle.kts.new \
   || { echo "[warmup] ERROR: no plugins {} block in build.gradle.kts" >&2; exit 1; }
 mv build.gradle.kts.new build.gradle.kts
 
-# --- settings.gradle.kts：只留 pluginManagement { repositories { ... } } ----
+# --- settings.gradle.kts：pluginManagement + 预热工程自己的依赖仓库 ----------
+# 上半段（pluginManagement）决定插件去哪解析，必须保留。下半段
+# dependencyResolutionManagement 必须**换成**本工程的仓库列表：插件的
+# buildscript classpath（AGP 9 / kotlin 插件自身的依赖，如
+# org.jetbrains.kotlin:fus-statistics-gradle-plugin）解析用的是它，而
+# RepositoriesMode.FAIL_ON_PROJECT_REPOS 下插件也不能自己声明仓库 —— 丢掉这半段，
+# 预热解析 classpath 时只剩隐式的 MavenRepo（repo.maven.apache.org），冷启动
+# 一口气几十个 POM 必然吃 429，预热整段直接失败（镜像层只打 warning，
+# 运行期复核再报「warmup cache is incomplete」）。
 awk '
   /^pluginManagement[[:space:]]*\{/ { inp = 1 }
   inp { print }
@@ -42,7 +50,18 @@ awk '
 grep -q 'mavenCentral\|google()' settings.gradle.kts.new \
   || { echo "[warmup] ERROR: pluginManagement repositories not found in settings.gradle.kts" >&2; exit 1; }
 # 预热工程不需要真正的项目名，但不能没有（Gradle 9 缺省用目录名，留着原文更明确）。
-printf 'rootProject.name = "cnb-warmup"\n' >> settings.gradle.kts.new
+cat >> settings.gradle.kts.new <<'SETTINGS'
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "cnb-warmup"
+SETTINGS
 mv settings.gradle.kts.new settings.gradle.kts
 
 echo "[warmup] project rewritten in $DIR:"
