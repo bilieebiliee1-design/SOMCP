@@ -339,7 +339,8 @@ dependencies {
     implementation("org.jsoup:jsoup:1.22.2")
     // 这四个是上游同名模块的重打包版本。files() 本身不参与冲突检测，上游那份
     // （经 unidbg-api 的 POM 传递依赖自动进来）会与它们并存；由
-    // somcp.patched-local-jars 在依赖解析完成之后把上游 artifact 剔掉，
+    // somcp.patched-local-jars 在依赖解析之前把上游的 unidbg-api / unidbg-android
+    // 从 selector 集合里摘掉（capstone / keystone 上游是替代品，不动）。
     // 见 buildSrc 里那份脚本插件的注释。
     implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
     implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
