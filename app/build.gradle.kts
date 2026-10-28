@@ -188,6 +188,13 @@ android {
         }
         resources {
             excludes += setOf(
+                // unidbg-android 的上游 jar 与 patched jar 各带一份同样的 tzdata，
+                // :app:mergeDebugJavaResource 以
+                //   「2 files found with path 'android/sdk23/system/usr/share/zoneinfo/tzdata'」
+                // 直接失败。两份内容一致（patched jar 只改过 Java 类），排掉不影响产物。
+                // 与 class 重复是两回事：上面那些 exclude 管的是依赖图，这一条管的是
+                // java 资源合并，依赖排干净了它在某些路径上仍可能被合并器看见。
+                "android/sdk23/system/usr/share/zoneinfo/tzdata",
                 "DebugProbesKt.bin",
                 "cc.c",
                 "r_styles.ini",

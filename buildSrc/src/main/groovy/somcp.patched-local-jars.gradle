@@ -212,6 +212,22 @@ def patchedCoordinatesFor = { Object dependency ->
     return hits.values().first()
 }
 
+// 上游还有**第二个 group**：JitPack 对同一个仓库给两种坐标布局，
+// `com.github.<user>` 与 `com.github.<user>.<repo>`，unidbg 两个都在用。版本冲突解析
+// 只发生在 `group:module` 完全相同的候选之间，所以 patched 的 `x.y.z.1` 够不着
+// `com.github.zhkl0228.unidbg:unidbg-api` —— 那是另一份模块。
+//
+// 于是在替换的同一个钩子里把它也排掉：`exclude` 是**声明层**的操作（不像
+// `artifacts.remove` 那样动解析结果），配置缓存与变体视图都不受影响。写在整个
+// configuration 上而不是某个依赖块里 —— 同一坐标有多条传递路径
+// （unicorn2 → unidbg-api → unidbg-android，demumble / unicorn 各自也会带），
+// 逐块写只管得住自己那一条。
+//
+// 只排这四个模块，不整组排：`unicorn:1.0.15` 是 `unicorn.*` 唯一的来源
+// （见 app/build.gradle.kts 里那段注释），整组排掉会在 session_open 时
+// ClassNotFoundException。
+def somcpUpstreamGroups = ['com.github.zhkl0228', 'com.github.zhkl0228.unidbg']
+
 // 只动 `files()` 这一种声明：普通坐标依赖、platform、project 依赖原样通过。
 // `configureEach` 保证后声明的 configuration（AGP 建的 debug*/release*/test* 等）
 // 也挂得上钩子。
@@ -229,6 +245,15 @@ project.configurations.configureEach { configuration ->
         configuration.dependencies.remove(dependency)
         configuration.dependencies.add(project.dependencies.create((String) coordinates))
         logger.info("[patched-jars] ${configuration.name}: file dependency -> ${coordinates}")
+    }
+    // 上游那两份 group 的坐标整块排掉（理由见上）。排在整个 configuration 上而不是
+    // 某个依赖块里：同一坐标有多条传递路径。`exclude` 的语义是集合，`configureEach`
+    // 重复执行也只是同一组规则被再说一遍，不叠加。
+    somcpPatchedJars.keySet().each { fileName ->
+        def module = parseCoordinates(somcpPatchedJars[fileName])[1]
+        somcpUpstreamGroups.each { upstreamGroup ->
+            configuration.exclude(group: upstreamGroup, module: module)
+        }
     }
 }
 
