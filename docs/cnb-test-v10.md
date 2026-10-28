@@ -265,10 +265,11 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 - `scripts/cnb/warmup-project.sh` —— 把下面几个文件改写成最小工程
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
   插件版本、仓库声明与重试参数
-- `buildSrc/build.gradle.kts` 与 `buildSrc/src/main/groovy` —— **带进来是为了删掉**，
-  见下面「预热分两遍」一段。带全是因为 Dockerfile 里那句
-  `rm -rf /tmp/cnb-warmup/buildSrc` 得先看得见东西；不带的话它是空操作，
-  同一个坑会无声无息地回来
+- `buildSrc/` —— **不在 `by` 里**。预热工程既不能有 `buildSrc/`（Gradle 看见它就会
+  先编译一遍，插件还没下就先要求它可用），也不能留下 `:app` 里那行
+  `id("somcp.patched-local-jars")`（找不到实现，整个 app 脚本编译不过，而它的
+  `dependencies {}` 全写在 `plugins {}` 之后）。两件事都由
+  `scripts/cnb/warmup-project.sh` 处理，容器里不需要看见这个目录
 - `app/build.gradle.kts` 与 `app/libs/` —— 预热**第一遍按仓库原样跑**，`:app` 的真实
   脚本要求值一次，才能把 androidx / compose / ktor / okhttp 与
   `files("libs/*-patched.jar")` 解析掉。第二遍才换成生成的
@@ -382,9 +383,27 @@ Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found in a
 
 **预热工程里则必须没有 `buildSrc/`**：预热的目的就是把插件下进用户目录，
 预热工程里没有源码也没有 `libs/`，编译 `buildSrc` 毫无意义，只会把「插件还没下」
-变成「插件必须先可用」。`warmup-project.sh` 一进目录就删，Dockerfile 在 `COPY`
-之后紧接着删一条（幂等）。删的都是 `/tmp/cnb-warmup` 里的副本，仓库自己的
-`buildSrc/` 一个字节不碰。
+变成「插件必须先可用」。`warmup-project.sh` 一进目录就删，Dockerfile 里还有一条
+`rm -rf` 兜底。删的都是 `/tmp/cnb-warmup` 里的副本，仓库自己的 `buildSrc/`
+一个字节不碰。
+
+删掉目录只断了一半。`buildSrc` 里那几个**只躺在 `src/` 里、不在 `plugins {}` 里
+带版本声明**的插件（本仓库的 `somcp.patched-local-jars`）还有另一半：
+
+| 预热工程里的状态 | 结果 |
+| --- | --- |
+| 有 `buildSrc/`，`:app` 没声明那个 id | `Plugin [id: '...'] was not found ... (plugin dependency must include a version number for this source)` |
+| 没 `buildSrc/`，`:app` 仍声明那个 id | 同一句报错，落在 `app/build.gradle.kts` 的 `plugins {}` 上（`cnb-hkj-1k624u580`） |
+
+第二种比第一种更贵：`plugins {}` 就有这一行，脚本编译失败之后 `dependencies {}`
+一行都求值不到（`val releaseKeystoreProperties` 就在 `plugins {}` 后面），
+androidx / compose / ktor / okhttp 全没进缓存，而日志只看得到一句插件找不到。
+
+所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把两边一起断：删目录 +
+把 `:app` 里那行 `id("somcp.patched-local-jars")` 注释掉（随后 grep 断言它真的
+不在了，改了仓库写法而失效时报错退出，不静默放行）。这个插件干的是「用
+`app/libs` 下的 jar 顶掉上游同坐标模块」，而预热工程里那些上游坐标本来就不出现，
+去掉它不影响依赖图的完整性。
 
 ## 预热分两遍：第一遍按仓库原样跑
 
@@ -397,10 +416,11 @@ Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found in a
 
 所以拆成两遍（`scripts/cnb/warmup-project.sh`）：
 
-1. **第一遍，仓库原样**（联网）：`buildSrc/` 在、`app/build.gradle.kts` 在、
-   `app/libs/` 在。这一遍把插件 marker、AGP、lint 以及 `:app` 的整张运行时依赖图
-   下进 `GRADLE_USER_HOME`。**失败即整层失败** —— 缓存没建起来就不该出镜像。
-2. **第二遍，最小工程**（联网）：删 `buildSrc/`、`:app` 换成生成的最小脚本、
+1. **第一遍，仓库原样**（联网）：`app/build.gradle.kts` 在、`app/libs/` 在
+   （只把 `buildSrc` 那个插件的 id 注释掉，见上一节）。这一遍把插件 marker、AGP、
+   lint 以及 `:app` 的整张运行时依赖图下进 `GRADLE_USER_HOME`。**失败即整层失败**
+   —— 缓存没建起来就不该出镜像。
+2. **第二遍，最小工程**（联网）：`:app` 换成生成的最小脚本、
    `settings` 只留 `pluginManagement` + 照抄的 `dependencyResolutionManagement`。
    这一遍失败**只打 WARNING**：依赖在第一遍已经下来了，缺的只是改写后那份工程的边角。
 
@@ -450,6 +470,7 @@ Dockerfile 走，Dockerfile 一改 `docker:cache` 的 key 就变，overlay 从�
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
 | `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
 | `Plugin [id: '...', version: '...'] was not found`，`Searched in` 里没有 Google | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
+| `Plugin [id: 'somcp.patched-local-jars'] was not found ... (plugin dependency must include a version number for this source)`，落在 `app/build.gradle.kts` 的 `plugins {}` 上（`cnb-hkj-1k624u580`） | 预热工程删了 `buildSrc/` 却留下 `:app` 那行 `id(...)`，整段脚本编译不过 | `warmup-project.sh` 的 `disable_buildsrc_plugin()` 注释掉该行并 grep 断言，已修 |
 | `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven 镜像的 200 空壳挡住 AGP marker | 插件侧改挂 `repository/gradle-plugin`（对 AGP marker 返 404），见「插件解析与依赖解析不能用同一个镜像」 |
 | `Plugin [id: 'org.jetbrains.kotlin.plugin.compose' ...] was not found`，`Searched in` 里有 google 镜像 | `repository/google` 里没有 Kotlin 插件 marker | 同上 |
 | 镜像层预热 warning 里出现 `fus-statistics-gradle-plugin:2.4.0` 的 429 | 预热工程缺 `dependencyResolutionManagement`，插件 buildscript classpath 只剩隐式 `MavenRepo` | `scripts/cnb/warmup-project.sh` 补上该段，已修 |
