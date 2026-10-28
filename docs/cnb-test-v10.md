@@ -430,6 +430,23 @@ sed 失配时报错退出，不静默放行。这个插件干的是「用 `app/l
 第二遍里 `settings.gradle.kts` 那条 `somcpPatchedLocalJars` 仓库仍然照抄保留（它指向的
 目录此时已不存在，Gradle 视为「什么都找不到」），依赖图照样解析。
 
+### 裁根脚本时要把 `extra["somcp*"]` 留下
+
+`rewrite_root_script` 把根 `build.gradle.kts` 剪到只剩 `plugins {}` —— 但**第一遍跑的是
+真实的 `app/build.gradle.kts`**，它第 40 行就写着 `rootProject.extra["somcpNamespace"] as String`。
+三行 `extra[...]` 一起被剪掉之后：
+
+```
+* Where:
+Build file '/tmp/cnb-warmup/app/build.gradle.kts' line: 40
+* What went wrong:
+Cannot get property 'somcpNamespace' on extra properties extension as it does not exist
+```
+
+报错点落在 app 脚本里，看起来像「app 脚本自己有问题」，实际是预热把上游的常量删了。
+所以 `rewrite_root_script` 在 `plugins {}` 之后无条件重贴 `^[[:space:]]*extra\["somcp` 三行，
+并逐个断言它们在改写结果里 —— 这几行是纯字面量赋值、不引用任何插件，留在预热工程里没有副作用。
+
 ## 预热失败与工具链失败的分界
 
 镜像里的预热段（`warmup-project.sh` + `--offline` 复核）与工具链（JDK / Gradle /
