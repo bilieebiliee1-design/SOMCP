@@ -691,6 +691,9 @@ implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zh
 为什么是「声明时」而不是「解析后」：见下一节三条死路。`whenObjectAdded` 在解析之前跑，
 读的是声明里那个文件，既不用翻解析结果，也不会在配置缓存序列化时被重新求值。
 
+另外还要排掉上游的第二个 group（`com.github.zhkl0228.unidbg`），理由与做法见下面
+「「高版本胜出」够不着第二个 group」一节。
+
 **B. 坐标能解析到 patched 内容。** 插件同时在 `app/build/patched-jars-repo` 生成一个最小
 Maven 仓库：
 
@@ -713,6 +716,34 @@ Maven 仓库：
 
 版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 分段比版本，`patched` 这种非数字段
 排在数字段**之前**，实测 `0.9.9.patched < 0.9.9`，上游反而胜出。
+
+### 「高版本胜出」够不着第二个 group
+
+JitPack 对同一个仓库给两种坐标布局：`com.github.<user>` 与 `com.github.<user>.<repo>`，
+unidbg 两个都在用。`x.y.z.1` 与 `x.y.z` 只有在 **group:module 完全相同**时才会进同一次
+冲突解析；两个 group 是两份互不相干的模块，高版本号对另一个一点作用都没有。
+`cnb-oti-1k625t5fv` 的 Debug 构建报了 333 条重复类，**全部**来自后者：
+
+```
+Duplicate class com.github.unidbg.AbstractEmulator found in modules
+  unidbg-api-0.9.9-android-patched.jar and
+  com.github.zhkl0228.unidbg:unidbg-api:0.9.9
+```
+
+所以那几条 `exclude` 挂在插件替换 file 依赖的**同一个** `configurations.configureEach`
+里（不在 `app/build.gradle.kts` 里另起一段）：两个 group × 四个模块逐条点名。
+写在整个 configuration 上而不是依赖块里 —— 同一坐标有多条传递路径
+（`unicorn2 → unidbg-api → unidbg-android`，`demumble` / `unicorn` 各自也会带），
+逐块写只挡得住自己那一条。
+
+放在插件里而不是应用脚本里，是因为这两件事本来就是一体：「patched jar 顶替上游模块」。
+分处两文件时，改了一边忘了另一边，报出来的还是那个 Duplicate class。
+
+只排这四个模块、不整组排 —— `unicorn:1.0.15` 是 `unicorn.*` 唯一的来源，整组排掉会在
+`session_open` 时 `ClassNotFoundException`。
+
+排查提示：报错里的 group 与 patched jar 的 group 不一致时，先查这条 exclude，
+别往「版本号不够高」上找 —— 那条路对两个 group 天然无效。
 
 ### 三条走不通的路（都实测过）
 
@@ -780,15 +811,25 @@ null cannot be cast to non-null type groovy.lang.Closure<*>
 
 **试过一次「换成同坐标字符串」：不行。** 那一版把工厂改成
 `{ _: String, coordinates: String -> coordinates }`，再由预热工程自己造一份
-`app/build/patched-jars-repo` 供第二遍解析。表面上「依赖图完整」，实则第一遍就在
-`x.y.z.1` 上失败 —— 那份本地仓库由插件生成，而插件在预热里必须摘掉，
-于是第二个仓库列表里一个仓库都不认 `.1`：
+`app/build/patched-jars-repo` 供第二遍解析（`neutralize_patched_factory()` +
+`publish_patched_local_repo()`，两个函数现在都已删除）。表面上「依赖图完整」，实则第一遍
+就在 `x.y.z.1` 上失败 —— 那份本地仓库由插件生成，而插件在预热里必须摘掉，于是
+`Searched in` 里一个仓库都不认 `.1`：
 
 ```
 Could not find com.github.zhkl0228:unidbg-api:0.9.9.1
 ```
 
 结论：`x.y.z.1` 只属于真构建，镜像缓存里不该有它。
+
+**口径表缺席不是警告，是失败**（这条判据留着，虽然读表的地方已经不在预热里了）。
+它踩出来的教训值得记：曾经的 `publish_patched_local_repo()` 找不到口径表时只打一句
+`WARNING: buildSrc plugin not in the context` 就 `return 0`，于是 `x.y.z.1` 一整轮
+（`cnb-tau-1k627283e`）都没发布过，而那一轮的 **pass 2 照样"通过"** ——
+`simplify_app_script` 已经把 `:app` 换成没有 `dependencies {}` 的最小脚本，空的依赖图
+当然解析得开，**判据其实一直是空的**。现在预热对「该在的东西不在」一律 `exit 1`：
+`disable_buildsrc_plugin()` 摘完三类痕迹要 grep 断言一遍、花括号要数一遍，
+少一样就当场失败，不把红点留给运行期。
 
 **顺带补的一处**：镜像预热工程会生成一个一次性 keystore
 （`release/keystore.properties` + `keytool -genkeypair`）。`:app` 的配置阶段要读
