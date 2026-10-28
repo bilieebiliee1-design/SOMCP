@@ -94,10 +94,14 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 # 自动出现在镜像里。COPY 的源是上下文根、按仓库相对路径写，不能带 `../`。
 #
 # 改写的判据（下面那条 RUN 逐条对应）：
-#   * **根与 app 两份 build.gradle.kts 都只留 `plugins {}`** —— 原文件的其余内容
-#     （dependencies / configurations / 自定义 task / allprojects）在最小工程里
-#     求值会失败。app 那份尤其致命：`implementation(files("libs/*-patched.jar"))`
-#     指向的文件不在构建上下文（by 只带构建脚本），`module("g:a:v")` 这类写法在
+#   * **根 build.gradle.kts 只留 `plugins {}` 与 `extra["somcp*"]` 那几行** ——
+#     其余内容（dependencies / configurations / 自定义 task / allprojects）在最小
+#     工程里求值会失败，根里那几行 extra 是唯一的例外：第一遍跑的是真实的 app
+#     脚本，它写着 `rootProject.extra["somcpNamespace"] as String`，剪掉就抛
+#     `Cannot get property 'somcpNamespace' on extra properties extension`
+#     （cnb-qno-1k625acuu）。app 那份第一遍按原样跑，第二遍才改写；改写的必要性
+#     在于 `implementation(files("libs/*-patched.jar"))` 指向的文件不在构建上下文
+#     （by 只带构建脚本），而 `module("g:a:v")` 这类写法在
 #     Kotlin DSL 里连编译都过不了 —— 一旦脚本编译失败，整次预热以 BUILD FAILED
 #     收场，镜像里一个依赖都没落下，改仓库源码里的写法也救不回来（那本就是
 #     运行期的语法问题，不该由预热来判）。改写后由 warmup-project.sh 从原文件
