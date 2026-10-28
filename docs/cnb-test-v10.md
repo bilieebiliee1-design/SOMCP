@@ -707,9 +707,34 @@ error writing value of type
 后者要从 Portal 拿 marker，而 `--offline` 复核读的是预热出来的用户目录，那里没有它。
 `scripts/cnb/setup-build-env.sh` 里那条复核的注释记着这件事。
 
-**预热工程不受影响**：它不 apply 这个插件、也不 COPY `app/libs/`，所以 `settings.gradle.kts`
-里那条 `somcpPatchedLocal` 仓库指向的目录不存在 —— Gradle 对不存在的本地仓库只会跳过，
-不会报错。
+### 预热工程怎么处理这个插件（`cnb-ooc-1k626h4rl`）
+
+预热工程不 apply 这个插件，但**光把 `plugins {}` 里那行注释掉不够**。`dependencies {}` 在
+Kotlin DSL 里是脚本编译完就执行的代码，四行 `implementation(patchedJar("x.jar", "g:a:v"))`
+照样求值，而工厂挂在 `project.ext` 上（只有插件 apply 时才挂）：
+
+```
+* Where:
+Build file '/tmp/cnb-warmup/app/build.gradle.kts' line: 328
+* What went wrong:
+null cannot be cast to non-null type groovy.lang.Closure<*>
+```
+
+所以 `warmup-project.sh` 做两件事：
+
+1. `neutralize_patched_factory()` —— 把工厂换成同坐标的普通字符串依赖
+   （`{ _: String, coordinates: String -> coordinates }`）。上游版本照旧从真仓库解析，
+   `:app` 的依赖图因此是完整的；`.1` 版本由第 2 步提供。
+2. `publish_patched_local_repo()` —— 预热工程自己造那份本地仓库。
+   口径表直接从 `buildSrc/src/main/groovy/somcp.patched-local-jars.gradle` 读
+   （`.cnb.yml` 的 `by` / `versionBy` 里显式声明了这一个文件，整个 `buildSrc/` 仍然不进
+   上下文、也不会被当 included build 编译），jar 从 `app/libs/` 复制，POM 写最小的。
+   顺序很要紧：**必须在 `disable_buildsrc_plugin` 之前**，那个函数第一步就是
+   `rm -rf buildSrc`，反过来就永远读不到口径表。
+
+第二遍（最小工程）里 `settings.gradle.kts` 那条 `somcpPatchedLocal` 因此指向一个
+**真的有内容**的目录，`x.y.z.1` 能解析；第一遍则连这两个改动都不需要 —— 它跑的就是
+换过工厂的真实脚本。
 
 **顺带补的一处**：镜像预热工程会生成一个一次性 keystore
 （`release/keystore.properties` + `keytool -genkeypair`）。`:app` 的配置阶段要读

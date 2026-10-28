@@ -128,6 +128,12 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
 COPY app/build.gradle.kts /tmp/cnb-warmup/app/build.gradle.kts
 COPY app/libs/ /tmp/cnb-warmup/app/libs/
+# buildSrc **不参与编译**（上面那条 RUN 删的就是它），但它的口径表要读：
+# `somcpPatchedJars`（文件名 ↔ 上游坐标）是「patched jar 顶替哪个模块」的唯一来源，
+# 预热工程按它自己造一份本地仓库，第二遍的小工程才解析得到 `x.y.z.1`。
+# 只拷这一个文件，别把整个 buildSrc/ 拖进上下文 —— 只要目录里有 src/，
+# Gradle 就会先把它当 included build 编一遍，那是运行期的事。
+COPY buildSrc/src/main/groovy/somcp.patched-local-jars.gradle /tmp/cnb-warmup/buildSrc/src/main/groovy/
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # 构建上下文里不该有 buildSrc/（.cnb.yml 的 by 已不声明它）。这一句是兜底：
 # 万一有人又声明回去，Gradle 会先把它编译一遍 —— 那属于运行期的事，不该由预热
