@@ -56,6 +56,19 @@ def PLUGIN_MIRROR_URLS = [
     'https://maven.aliyun.com/repository/gradle-plugin',
 ]
 
+// 插件侧还需要一个 Maven Central 镜像，而它必须排在**最后**。
+// marker（`*.gradle.plugin`）只是入口，插件自身的传递依赖 —— asm、jaxb-runtime、
+// javapoet、kotlin-build-statistics 等 —— 都从 MavenRepo 取，同样会吃 429。
+// 实测预热就倒在
+//   Could not download asm-util-9.9.jar (org.ow2.asm:asm-util:9.9)
+//     > ... Received status code 429 from server: Too Many Requests
+// 放最后是因为 marker 那一步不能被它抢走：marker 在 /public 下是 404（已核实），
+// 会老实让位给前面的 google()/gradle-plugin 镜像；而它一旦排前面，
+// 历史上的假 200 就会把 Google 上的 AGP marker 遮住。
+def PLUGIN_CENTRAL_MIRROR_URLS = [
+    'https://maven.aliyun.com/repository/public',
+]
+
 // 追加镜像。`all {}` 会在每次往仓库列表里新增仓库后被回调，所以这个闭包会被
 // 重复调用：用 findByName 挡住重复添加。
 def addMirrors = { repositories, urls, prefix ->
@@ -78,7 +91,10 @@ if (System.getenv('CNB_BUILD_ID') != null) {
     beforeSettings { settings ->
         def pluginRepos = settings.pluginManagement.repositories
         def depRepos = settings.dependencyResolutionManagement.repositories
-        pluginRepos.all { addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-') }
+        pluginRepos.all {
+            addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-')
+            addMirrors(pluginRepos, PLUGIN_CENTRAL_MIRROR_URLS, 'cnb-plugin-central-mirror-')
+        }
         depRepos.all { addMirrors(depRepos, MIRROR_URLS, 'cnb-mirror-') }
     }
 }
