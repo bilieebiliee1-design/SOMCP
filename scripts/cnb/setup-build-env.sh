@@ -107,4 +107,23 @@ done
   || fail "third_party submodules not checked out (native backends would silently degrade): ${missing[*]}"
 log "submodules: ${#SUBMODULES[@]} present"
 
+# --- 出网可达性 ------------------------------------------------------------
+# Gradle 的插件解析如果连不上 Google / Maven Central，报的是
+# 「Plugin [id: ...] was not found in any of the following sources」——看起来像
+# 版本号写错，实际是网络。先把真实原因摆出来，省得下次又按版本问题去查。
+# 代理变量由 CNB 从 Runner 宿主机同步（文档「代理环境变量自动同步」），
+# 这里只用于日志，不做判断。
+log "proxy: HTTP_PROXY=${HTTP_PROXY:-<unset>} HTTPS_PROXY=${HTTPS_PROXY:-<unset>} NO_PROXY=${NO_PROXY:-<unset>}"
+for url in \
+    "https://repo.maven.apache.org/maven2/" \
+    "https://plugins.gradle.org/m2/" \
+    "https://dl.google.com/dl/android/maven2/"; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url" 2> /dev/null || echo 000)"
+  if [ "$code" = "000" ]; then
+    log "WARNING: cannot reach $url (Gradle dependency resolution will fail)"
+  else
+    log "reachable: $url (HTTP $code)"
+  fi
+done
+
 echo "[setup] toolchain OK"
