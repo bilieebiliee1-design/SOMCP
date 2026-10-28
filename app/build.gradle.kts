@@ -347,6 +347,12 @@ dependencies {
     implementation("com.github.zhkl0228:demumble:1.0.4")
     implementation("net.dongliu:apk-parser:2.6.10")
     implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9") {
+        // unidbg-android 必须一起排：unicorn2 把它当传递依赖带进来，于是
+        // unidbg-android-0.9.9.jar 和我们的 -android-patched.jar 同时在
+        // classpath 上。上游那份既是重复类（checkDebugDuplicateClasses 里的
+        // com.github.unidbg.*），又在 mergeDebugJavaResource 上撞
+        // android/sdk23/system/usr/share/.../tzdata 同名文件。
+        exclude(group = "com.github.zhkl0228", module = "unidbg-android")
         exclude(group = "com.github.zhkl0228", module = "unidbg-api")
         exclude(group = "com.github.zhkl0228", module = "capstone")
         exclude(group = "com.github.zhkl0228", module = "keystone")
@@ -363,6 +369,8 @@ dependencies {
     // during session_open on every architecture. Pulling the original unicorn
     // artifact in explicitly restores the unicorn.* classes without re-introducing
     // unidbg-api (which would conflict with our patched jar).
+    // 同为 unidbg-android 的传递依赖，所以上面把 unidbg-android 也排掉之后，
+    // 这条显式声明反而更要留着 —— 它是 unicorn.* 唯一的来源。
     implementation("com.github.zhkl0228:unicorn:1.0.15")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
