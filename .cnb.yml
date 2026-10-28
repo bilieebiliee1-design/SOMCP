@@ -102,16 +102,17 @@ main:
             #     而它与根脚本是同一份声明 —— 多带一个文件只会多一个能让预热失败的点。
             #   * buildSrc/ **整目录带上**（build.gradle.kts 与 src/ 下的插件源码）：
             #     预热工程要把它**删掉**再跑（Gradle 一旦看见 buildSrc/ 就会先编译它，
-            #     用它自己的 `kotlin-dsl` 声明去解析插件 —— 而预热的目的正是把这些插件
-            #     下进用户目录，插件还没下就先要求它可用）。删除是 Dockerfile 里那条
+            #     而 buildSrc 是 included build —— 不继承 settings.gradle.kts 的
+            #     pluginManagement，`--init-script` 传的仓库对它也不生效，只能靠自己
+            #     那份仓库列表去拿插件。预热的目的正是把这些插件下进用户目录，
+            #     插件还没下就先要求它可用，必然失败）。删除是 Dockerfile 里那条
             #     `rm -rf` 干的，它得先看得见东西；不带的话那句 rm 是空操作，同一个
             #     坑会无声无息地回来。
             #
-            #     **别把它理解成「buildSrc 需要预热」**：它需要，也确实被预热了 ——
-            #     但走的是运行期那条路（每个 stage 都用完整的仓库），预热工程里既没有
-            #     源码也没有 libs/，编译它毫无意义。早先版本只带 build.gradle.kts，
-            #     于是「删掉」这件事成立而「为什么删」被误解成「预热不需要 buildSrc」，
-            #     绕了一圈才在运行期复核上撞到同一个 kotlin-dsl 报错。
+            #     buildSrc 自己那份 `groovy-gradle-plugin` 是 Gradle 自带的，零外部
+            #     插件依赖 —— 这就是它能出现在这条流水线上的原因：任何要从 Portal
+            #     拿 marker 的插件（`kotlin-dsl` 就是）都会让 `--offline` 复核先倒，
+            #     而复核读的是镜像预热出来的用户目录，那里没有 buildSrc 的插件。
             by:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -122,7 +123,7 @@ main:
               - settings.gradle.kts
               - gradle.properties
               - buildSrc/build.gradle.kts
-              - buildSrc/src/main/kotlin
+              - buildSrc/src/main/groovy
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
             # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
             # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
@@ -131,9 +132,9 @@ main:
             # 跑的还是老镜像。代价是这些文件改动会触发一次完整重建，
             # 但它们本来就只在准备镜像时才改。
             # buildSrc/ 也要进 versionBy，尽管预热工程里它会被删掉：删掉只是
-            # 预热工程的决定，运行期每个 stage 都要真的编译它，而 `kotlin-dsl`
-            # 的 marker 版本正是从这里读的（钉住的 6.6.4）。改它必须让镜像重建，
-            # 否则沿用旧镜像、缓存里的 kotlin-dsl 与源码对不上。
+            # 预热工程的决定，运行期每个 stage 都要真的编译它。改它的插件写法
+            # 却沿用旧镜像，就会出现「镜像里的缓存与源码对不上」，而报错落在
+            # 校验代码准备那句含糊的 warmup cache is incomplete 上。
             versionBy:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -144,7 +145,7 @@ main:
               - settings.gradle.kts
               - gradle.properties
               - buildSrc/build.gradle.kts
-              - buildSrc/src/main/kotlin
+              - buildSrc/src/main/groovy
             sync: true
           exports:
             name: BUILD_ENV_IMAGE
