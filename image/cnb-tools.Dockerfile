@@ -31,10 +31,11 @@ RUN apt-get update \
       autoconf automake libtool libarchive-tools openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
-# python-is-python3：app/src/main/cpp/CMakeLists.txt 用 `COMMAND python` 调
-# generate_header.py，GitHub 的 runner 上 `python` 天然存在，裸镜像里只有
-# python3 —— 少了它 CMake 会在 key-gen 处 FATAL_ERROR，Release 构建直接失败。
-# 这条等价于宿主环境差异的补齐，不是新增依赖（脚本 shebang 本来就是 python3）。
+# python3 + pip 是 meson（Rizin 交叉编译）与 dcc 的依赖。
+# CMakeLists.txt 现在先 find_program 再调用（找不到就报清楚），所以不再依赖
+# `python` 这个名字是否存在 —— 但仍然装 python-is-python3：镜像里跑的非
+# CMake 脚本（dcc 的 shebang 是 /usr/bin/env python3，本地工具脚本有写
+# python 的）在 GitHub runner 上一直拿到的是 `python`，保持同一套环境。
 
 # Gradle 9.6.1：仓库故意不带 gradlew 启动器，版本必须由环境供给。
 # 版本与 gradle/wrapper/gradle-wrapper.properties 一致。
