@@ -89,6 +89,8 @@ main:
             #   * scripts/cnb/gradle-init.gradle —— COPY 进 /opt/gradle-user-home；
             #   * scripts/cnb/gradle-proxy.init.gradle.kts —— 预热期的代理桥接，
             #     与运行期 scripts/cnb/gradle.sh 传的是同一个文件；
+            #   * scripts/cnb/gradle-cache-only.gradle —— 运行期复核用的「只看缓存」
+            #     模式，COPY 进 Gradle 用户目录后由 init script apply；
             #   * scripts/cnb/warmup-project.sh —— 把下面三个文件改写成最小工程，
             #     改写判据不在 Dockerfile 的续行里写（那条路上写错一次就多一轮构建）；
             #   * build.gradle.kts / settings.gradle.kts / gradle.properties ——
@@ -98,6 +100,7 @@ main:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
               - scripts/cnb/gradle-proxy.init.gradle.kts
+              - scripts/cnb/gradle-cache-only.gradle
               - scripts/cnb/warmup-project.sh
               - build.gradle.kts
               - settings.gradle.kts

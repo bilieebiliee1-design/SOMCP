@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// SOMCP - scripts/cnb/gradle-cache-only.gradle
+// Copyright (C) 2026 SOMCP authors
+// Upstream: https://github.com/bilieebiliee1-design/SOMCP
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License version 3 as published by
+// the Free Software Foundation.
+//
+// 「只看缓存」模式：把插件仓库与依赖仓库全部换成同一个空的本地文件仓库。
+//
+// 为什么需要：`--offline` 只是「不许联网」，Gradle 仍然会拿仓库列表里的每个仓库
+// 去 $GRADLE_USER_HOME/caches/modules-2 里查缓存索引；索引是按仓库名存的，于是
+// 「缓存里的 google 索引在、但 dl.google.com 此刻连不上」会被报成
+//   Plugin [id: ...] was not found in any of the following sources: Google, cnb-plugin-mirror-0(...)
+// 和「镜像预热根本没做完」一模一样 —— 判据被网络状况污染。
+//
+// 换成空文件仓库之后，能不能解析到构件**只取决于用户目录里有什么**：
+//   * 命中 = 预热确实下过这份构件（文件仓库的索引与远端仓库名无关，Gradle 会用
+//     缓存里的那份构件）；
+//   * 未命中 = 确实没有，这时报「warmup cache is incomplete」才是真话。
+//
+// 由 scripts/cnb/setup-build-env.sh 传 -PcnbCacheOnlyCheck 触发，
+// scripts/cnb/gradle-proxy.init.gradle.kts 负责 apply 本文件。
+// 只在 CNB 里生效（init script 那侧的 CNB_BUILD_ID 判断），本地构建不受影响。
+
+def emptyMarketplace = new File(System.getProperty('user.home'), '.gradle/cnb-empty-marketplace').toURI()
+
+def restrict = { repositories ->
+    repositories.clear()
+    repositories.maven { repo ->
+        repo.name = 'cnb-cache-only'
+        repo.url = emptyMarketplace
+    }
+}
+
+beforeSettings { settings ->
+    restrict(settings.pluginManagement.repositories)
+    restrict(settings.dependencyResolutionManagement.repositories)
+    println '[cnb-cache-only] repositories restricted to the local Gradle cache'
+}

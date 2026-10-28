@@ -79,6 +79,9 @@ RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
 # 从 /opt/gradle-user-home 搬进去；镜像层保留原件，卷随流水线销毁。
 COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
 COPY scripts/cnb/gradle-proxy.init.gradle.kts /opt/cnb/gradle-proxy.init.gradle.kts
+# 「只看缓存」复核脚本：运行期 setup-build-env.sh 传 -PcnbCacheOnlyCheck 时由
+# gradle-proxy.init.gradle.kts 从 $GRADLE_USER_HOME 里 apply 它（见该文件注释）。
+COPY scripts/cnb/gradle-cache-only.gradle /opt/gradle-user-home/cnb-cache-only.gradle
 COPY scripts/cnb/gradle-init.gradle /opt/cnb/gradle-init.gradle
 
 # 预热用的最小工程：插件版本与仓库声明都从仓库自己的构建脚本里读，不另抄一份
@@ -97,7 +100,7 @@ COPY scripts/cnb/gradle-init.gradle /opt/cnb/gradle-init.gradle
 #     早先的做法是把 settings 清空成一行 rootProject.name，Gradle 于是只剩
 #     缺省的 gradlePluginPortal，而 AGP 的 marker 在 Google，预热解析
 #     `com.android.application:9.2.1` 永远拿不到（镜像层只留 warning，
-#     运行期的 --offline 复核随后报「warmup cache is incomplete」）；
+#     运行期的「只看缓存」复核随后报「warmup cache is incomplete」）；
 #   * gradle.properties 必须一起进预热工程 —— 仓库级重试参数
 #     （org.gradle.internal.repository.max.tentatives / initial.backoff）与
 #     network.retries 都从这份属性文件读，而冷启动最吃重试的正是预热这一次解析；
@@ -111,11 +114,16 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # SDK/NDK（光 sdkmanager 就 3 分钟），为了一次网络抖动重建整个镜像不划算。
 # 所以 —— 失败时把日志尾部打到 stderr（Gradle 从 stdout 走，不打出来就只剩一行
 # "BUILD FAILED"），然后退出码归零；运行期由 scripts/cnb/setup-build-env.sh
-# 以 `gradle --offline` 复核预热结果，缓存不完整就在 stage 里明确失败并指向这里。
+# 以「只看缓存」的方式（--offline + -PcnbCacheOnlyCheck）复核预热结果，缓存不完整
+# 就在 stage 里明确失败并指向这里。
 #
 # 预热必须替运行期把东西下全：两个 init script 都显式传（gradle-init.gradle
 # 追加 Maven 镜像，gradle-proxy.init.gradle.kts 桥接代理），CNB_BUILD_ID 走
-# 同一条分支。预热与运行期唯一允许的差异是「不给 --offline」（预热的整件工作
+# 同一条分支。预热工程由 scripts/cnb/warmup-project.sh 改写：`plugins {}` +
+# `pluginManagement` 保留，**并补上 dependencyResolutionManagement** —— 插件
+# buildscript classpath 的解析用的是后者，缺了它只剩隐式的 MavenRepo
+# （repo.maven.apache.org），冷启动几十个 POM 必吃 429，预热整段失败。
+# 预热与运行期唯一允许的差异是「不给 --offline」（预热的整件工作
 # 就是联网）与「用 /opt 下的副本而不是 $GRADLE_USER_HOME/init.d 里的那份」，
 # 后者是为了不让 init.d 里那份被重复应用 —— 内容取自同一个文件。
 #   * GRADLE_USER_HOME 必须显式给：镜像 ENV 里是 /root/.gradle，而下面 `cp -a`
