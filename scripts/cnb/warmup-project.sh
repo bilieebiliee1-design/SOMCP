@@ -9,9 +9,10 @@
 # the terms of the GNU Affero General Public License version 3 as published by
 # the Free Software Foundation.
 #
-# 把 /tmp/cnb-warmup/ 里拷进来的仓库构建脚本改写成「只解析插件」的最小工程。
+# 把 /tmp/cnb-warmup/ 里拷进来的仓库构建脚本跑成「能把依赖下全」的预热工程：
+# 先按仓库原样跑一遍，再改写成最小工程跑第二遍。
 # 由 image/cnb-tools.Dockerfile 的预热段调用（镜像构建期，工作目录必须已经在
-# /tmp/cnb-warmup），也可以本地对着任意目录跑一遍看改写结果。
+# /tmp/cnb-warmup）。
 #
 # 为什么不是几行 sed：改写要保证「插件声明」和「仓库声明」两半都在，而且
 # 后半段（仓库）恰恰是之前每个版本都丢掉的 —— settings.gradle.kts 一旦被
@@ -19,42 +20,63 @@
 # 预热去 Google 找不到 AGP 的 marker，运行期又反过来缺 aliyun 镜像。
 # 用 grep 取整块，取不到就失败（比静默生成一个残缺工程强）。
 #
-# 三件事一起做才成立：预热工程里不能有 buildSrc（见「buildSrc」那段），
-# 不能有仓库的 settings / 子项目脚本（上面两半），也不能留下仓库的 app 脚本。
+# 两遍：第一遍用**仓库原样**跑（:app 的真实脚本 + app/libs/ 都在，才解析得到
+# 那一整张依赖图），第二遍才把工程改写成最小形态、再跑一次。
 set -euo pipefail
 
 DIR="${1:-/tmp/cnb-warmup}"
 cd "$DIR"
 
-# --- buildSrc：预热工程里必须没有 -------------------------------------------
-# Gradle 只要看见 settings 所在目录有 buildSrc/，就会在**配置任何工程之前**
-# 先把它当成一个独立的 included build 编译一遍，用的是它自己那份
-# buildSrc/build.gradle.kts —— 那份里写的是 `kotlin-dsl` 插件，而这次预热的
-# 目的恰恰是「把插件下进用户目录」，判定成了鸡生蛋：
+# --- buildSrc / app：第一遍之前的准备 ---------------------------------------
+# 预热工程本身不用 buildSrc（下面第二遍会把它删掉），但**第一遍必须按仓库原样
+# 跑**：:app 的真实脚本里有 androidx / compose / ktor / okhttp 与
+# files("libs/*-patched.jar")，只有按真实脚本求值一次，那些依赖才进得了缓存。
+# 手写一份最小 :app 等于自己决定「预热覆盖哪些依赖」，漏掉的那些运行期照样冲网。
 #
-#   Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
-#   - Searched in the following repositories:
-#       Gradle Central Plugin Repository
-#
-# 两个问题叠在一起：本地没有这份插件（冷启动），仓库列表里又只有缺省的
-# gradlePluginPortal（buildSrc 不继承 settings 的 pluginManagement 与
-# dependencyResolutionManagement，镜像预热那两条 --init-script 也管不到它），
-# 于是镜像的预热层与运行期的「只看缓存」复核会双双失败。
-#
-# 预热不需要 buildSrc：它只在**运行期**配置期把 app/libs/*-patched.jar 复制成
-# 带元数据的本地仓库，而那份仓库与 libs/ 都不在 docker:cache 的构建上下文里。
-# 少了它，buildSrc 里定义的插件与 repo 都没了，但也不会有人用到 —— :app 的
-# 脚本由本文件生成，只有 plugins {} 与最小 android {}。
-#
-# 只删这里的副本：/tmp/cnb-warmup 是 Dockerfile 里 COPY 出来的临时目录，
-# 仓库自己的 buildSrc/ 一个字节都不动。
-#
-# 位置很关键：必须在第一次调用 gradle 之前，而且 Dockerfile 那边也要有一道
-# （补丁段是既有环境），否则只删这里会被「预热目录是上次留下的」这种状态绕过去。
-if [ -d buildSrc ]; then
-  rm -rf buildSrc
-  echo "[warmup] removed buildSrc/ from the warmup project (see the comment above)"
-fi
+# 所以两件都在改写之前做：确认 buildSrc/ 在场（构建上下文里有，预热不用它、
+# 但第二遍删它这件事得看得见东西），并把 app/libs/ 里的 jar 打印出来
+# （少了它们，files("libs/*-patched.jar") 那两条依赖解析不到）。
+prepare_runtime_layout() {
+  mkdir -p app
+  [ -f app/build.gradle.kts ] \
+    || { echo "[warmup] ERROR: app/build.gradle.kts missing in $DIR (must be in docker:cache.by)" >&2; exit 1; }
+  if [ -d app/libs ] && [ -n "$(ls -A app/libs 2> /dev/null)" ]; then
+    echo "[warmup] app/libs: $(ls app/libs | tr '\n' ' ')"
+  else
+    echo "[warmup] WARNING: app/libs is empty in the build context; the patched-jar file dependencies stay unresolved" >&2
+  fi
+}
+
+# 第一遍：仓库原样。报错就是运行期会遇到的报错，所以失败即整层失败。
+cold_build() {
+  CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 900 \
+    /opt/gradle/bin/gradle --no-daemon --console=plain --info \
+    --no-configuration-cache \
+    --init-script /opt/cnb/gradle-init.gradle \
+    --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
+    -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
+    help :app:dependencies --configuration releaseRuntimeClasspath
+}
+
+# 第二遍：改写后的最小工程。依赖在第一遍已经下来了，这一遍只为「最小工程自己也
+# 跑得通」，失败只打 WARNING —— 历史上这里反过来过：改写后的小工程跑不通就把
+# 整层预热判死，而真正需要的依赖其实早就下完了。
+warm_build() {
+  CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 600 \
+    /opt/gradle/bin/gradle --no-daemon --console=plain --info \
+    --no-configuration-cache \
+    --init-script /opt/cnb/gradle-init.gradle \
+    --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
+    -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
+    help :app:dependencies --configuration releaseRuntimeClasspath
+}
+
+remove_buildsrc() {
+  if [ -d buildSrc ]; then
+    rm -rf buildSrc
+    echo "[warmup] removed buildSrc/ from the warmup project (second pass only)"
+  fi
+}
 
 # --- 先把 SDK / namespace 读出来 --------------------------------------------
 # 见 MAGIC-WARMUP-READVAL
@@ -82,36 +104,38 @@ grep -q 'com.android.application' build.gradle.kts.new \
   || { echo "[warmup] ERROR: no plugins {} block in build.gradle.kts" >&2; exit 1; }
 mv build.gradle.kts.new build.gradle.kts
 
-# --- app/build.gradle.kts：生成一个只声明插件的模块脚本 ----------------------
-# **绝不能把仓库里 app 的脚本整份留下来**。预热工程的 app 模块只是为了触发
-# AGP 配置（拿插件 marker、AGP、lint、:app 的运行时依赖图），而 app 脚本里那些
-# 依赖与配置在最小工程里根本不成立：
-#   * `implementation(files("libs/*-patched.jar"))` 指向的文件不在预热上下文里
-#     （.cnb.yml 的 docker:cache.by 只带构建脚本，不带 libs/）；
+# --- app/build.gradle.kts：第二遍才改写成只声明插件的模块脚本 ---------------
+# **第一遍用仓库里真实的 app 脚本**（app/build.gradle.kts 与 app/libs/ 都进了
+# 构建上下文）：:app 的依赖图只有按真实脚本求值才解析得全，手写一份最小 :app
+# 等于自己决定「预热覆盖哪些依赖」，漏掉的那些运行期照样现场冲网。
+#
+# 第二遍才换成生成的 `plugins {}` + 最小 `android {}`，因为改写后的工程里那些
+# 配置不成立：
 #   * `configurations.configureEach { ... }` / 自定义 task 依赖仓库里其余源码；
 #   * 更要命的是任何一句 Kotlin DSL 编译不过的写法（历史例子：
 #     `implementation(module("g:a:v"))`，Dependencies.module 只收三个参数）——
-#     脚本一编译失败，整次预热就以 BUILD FAILED 收场，镜像里一个依赖都没落下，
-#     而报错点看起来跟依赖图毫无关系。
-# 所以这里干脆**不读**仓库的 app 脚本（它也不在构建上下文里），直接生成一份
-# 只剩 `plugins {}` 的模块脚本：:app 用了哪些插件，从根 build.gradle.kts 的
-# plugins 块里认（本仓库的 :app 用的就是根里 apply false 的那两个）。
-grep -q 'com.android.application' build.gradle.kts \
-  || { echo "[warmup] ERROR: root build.gradle.kts has no com.android.application plugin" >&2; exit 1; }
-{
-  echo 'plugins {'
-  echo '    id("com.android.application")'
-  grep -q 'org.jetbrains.kotlin.plugin.compose' build.gradle.kts \
-    && echo '    id("org.jetbrains.kotlin.plugin.compose")'
-  echo '}'
-} > app/build.gradle.kts
+#     脚本一编译失败，整次预热就以 BUILD FAILED 收场，而报错点看起来跟依赖图无关。
+# 拆成两遍之后，「脚本编译不过」只影响第二遍，而第二遍失败只打 WARNING。
+#
+# :app 用了哪些插件，从根 build.gradle.kts 的 plugins 块里认（本仓库的 :app 用的
+# 就是根里 apply false 的那两个）。
+simplify_app_script() {
+  grep -q 'com.android.application' build.gradle.kts \
+    || { echo "[warmup] ERROR: root build.gradle.kts has no com.android.application plugin" >&2; exit 1; }
+  {
+    echo 'plugins {'
+    echo '    id("com.android.application")'
+    grep -q 'org.jetbrains.kotlin.plugin.compose' build.gradle.kts \
+      && echo '    id("org.jetbrains.kotlin.plugin.compose")'
+    echo '}'
+  } > app/build.gradle.kts
 
-# app 脚本只剩 plugins {} 之后，AGP 建模块级模型还缺 namespace / compileSdk /
-# minSdk，缺了会在配置阶段就报 "Namespace not specified"。值从仓库自己的
-# 根 build.gradle.kts 里读（本仓库 app 的 compileSdk 36 / minSdk 26 与根里的
-# 插件版本同源，都随仓库走），读不到就判失败 —— 预热必须跟着仓库的 SDK 版本，
-# 否则镜像里预热的是 A、运行期用 B，缓存里就差一份 platform 的依赖。
-cat >> app/build.gradle.kts <<APPBLOCK
+  # app 脚本只剩 plugins {} 之后，AGP 建模块级模型还缺 namespace / compileSdk /
+  # minSdk，缺了会在配置阶段就报 "Namespace not specified"。值从仓库自己的
+  # 根 build.gradle.kts 里读（本仓库 app 的 compileSdk 36 / minSdk 26 与根里的
+  # 插件版本同源，都随仓库走），读不到就判失败 —— 预热必须跟着仓库的 SDK 版本，
+  # 否则镜像里预热的是 A、运行期用 B，缓存里就差一份 platform 的依赖。
+  cat >> app/build.gradle.kts <<APPBLOCK
 
 // 由 scripts/cnb/warmup-project.sh 生成；值取自仓库根 build.gradle.kts。
 android {
@@ -122,53 +146,76 @@ android {
     }
 }
 APPBLOCK
+}
 
 # --- settings.gradle.kts：pluginManagement + 预热工程自己的依赖仓库 ----------
-# 上半段（pluginManagement）决定插件去哪解析，必须保留。下半段
-# dependencyResolutionManagement 必须**换成**本工程的仓库列表：插件的
-# buildscript classpath（AGP 9 / kotlin 插件自身的依赖，如
-# org.jetbrains.kotlin:fus-statistics-gradle-plugin）解析用的是它，而
-# RepositoriesMode.FAIL_ON_PROJECT_REPOS 下插件也不能自己声明仓库 —— 丢掉这半段，
-# 预热解析 classpath 时只剩隐式的 MavenRepo（repo.maven.apache.org），冷启动
-# 一口气几十个 POM 必然吃 429，预热整段直接失败（镜像层只打 warning，
-# 运行期复核再报「warmup cache is incomplete」）。
-awk '
-  /^pluginManagement[[:space:]]*\{/ { inp = 1 }
-  inp { print }
-  inp && /^\}/ { exit }
-' settings.gradle.kts > settings.gradle.kts.new
-grep -q 'mavenCentral\|google()' settings.gradle.kts.new \
-  || { echo "[warmup] ERROR: pluginManagement repositories not found in settings.gradle.kts" >&2; exit 1; }
-# 子项目必须声明：只解析插件时，:app 的运行时依赖（androidx / compose / ktor /
-# okhttp…）一个都不会进缓存 —— 运行期照样现场冲网，预热等于只做了一半。
-# AGP 配置子项目时要查 SDK，因此这条只在镜像里成立（ANDROID_HOME 由 ENV 给出，
-# sdkmanager 装齐的 android-36 就在同一个镜像里）。
+# 由第二遍（simplify_settings_script）调用。第一遍用仓库原文件，所以这里的改写
+# 只影响第二遍。
 #
+# 上半段（pluginManagement）决定插件去哪解析，必须保留。下半段
 # dependencyResolutionManagement 必须**照抄仓库自己的那份**，不能手写一份
 # `google() + mavenCentral()`：本仓库还依赖 JitPack 的 com.github.<owner>:<repo>
-# 坐标，手写的列表里没有 jitpack.io，预热就会在 `:app:dependencies` 处把它解析成
-# FAILED（实测日志里出现 `com.github.rikkahub:markdown:d79a97cc8e FAILED`、
-# jitpack.io 一次都没被请求），而运行期是有的 —— 预热的仓库列表与运行期不一致，
-# 等于给运行期留了一份「预热没覆盖到」的依赖。
-awk '
-  /^dependencyResolutionManagement[[:space:]]*\{/ { indep = 1 }
-  indep { print }
-  indep && /^\}/ { exit }
-' settings.gradle.kts > dependency-resolution.tmp
-[ -s dependency-resolution.tmp ] \
-  || { echo "[warmup] ERROR: dependencyResolutionManagement not found in settings.gradle.kts" >&2; exit 1; }
-# 预热工程不需要真正的项目名，但不能没有（Gradle 9 缺省用目录名，留着原文更明确）。
-printf '\n' >> settings.gradle.kts.new
-cat dependency-resolution.tmp >> settings.gradle.kts.new
-cat >> settings.gradle.kts.new <<'SETTINGS'
+# 坐标，手写的列表里没有 jitpack.io，:app 的依赖解析就会 FAILED（实测日志里出现
+# `com.github.rikkahub:markdown:... FAILED`、jitpack.io 一次都没被请求），
+# 而运行期是有的 —— 预热与运行期两张不同的仓库列表，等于给运行期留了一份
+# 「预热没覆盖到」的依赖。
+simplify_settings_script() {
+  awk '
+    /^pluginManagement[[:space:]]*\{/ { inp = 1 }
+    inp { print }
+    inp && /^\}/ { exit }
+  ' settings.gradle.kts > settings.gradle.kts.new
+  grep -q 'mavenCentral\|google()' settings.gradle.kts.new \
+    || { echo "[warmup] ERROR: pluginManagement repositories not found in settings.gradle.kts" >&2; exit 1; }
+
+  awk '
+    /^dependencyResolutionManagement[[:space:]]*\{/ { indep = 1 }
+    indep { print }
+    indep && /^\}/ { exit }
+  ' settings.gradle.kts > dependency-resolution.tmp
+  [ -s dependency-resolution.tmp ] \
+    || { echo "[warmup] ERROR: dependencyResolutionManagement not found in settings.gradle.kts" >&2; exit 1; }
+  printf '\n' >> settings.gradle.kts.new
+  cat dependency-resolution.tmp >> settings.gradle.kts.new
+  cat >> settings.gradle.kts.new <<'SETTINGS'
 
 rootProject.name = "cnb-warmup"
 include(":app")
 SETTINGS
-rm -f dependency-resolution.tmp
-mv settings.gradle.kts.new settings.gradle.kts
+  rm -f dependency-resolution.tmp
+  mv settings.gradle.kts.new settings.gradle.kts
+}
+
+# --- 两遍执行 ---------------------------------------------------------------
+# 顺序不能换，理由见各自函数的注释：
+#   1. prepare_runtime_layout → cold_build（仓库原样，联网，失败即整层失败）
+#   2. remove_buildsrc → simplify_* → warm_build（最小工程，失败只打 WARNING）
+echo "[warmup] pass 1/2: repository as-is (app/build.gradle.kts + app/libs)"
+prepare_runtime_layout
+if cold_build > /tmp/cnb-warmup.log 2>&1; then
+  echo "[warmup] pass 1 OK: repository as-is"
+else
+  echo "[warmup] ERROR: pass 1 failed; the cache could not be populated." >&2
+  echo "[warmup] ERROR: network-layer evidence first, then the tail:" >&2
+  grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup.log | tail -n 40 >&2 || true
+  tail -n 80 /tmp/cnb-warmup.log >&2 || true
+  exit 1
+fi
+
+echo "[warmup] pass 2/2: minimal project (no buildSrc, generated :app script)"
+remove_buildsrc
+simplify_app_script
+simplify_settings_script
 
 echo "[warmup] project rewritten in $DIR:"
 sed 's/^/[warmup]   /' build.gradle.kts
 sed 's/^/[warmup]   /' app/build.gradle.kts
 sed 's/^/[warmup]   /' settings.gradle.kts
+
+if warm_build > /tmp/cnb-warmup-2.log 2>&1; then
+  echo "[warmup] pass 2 OK: minimal project"
+else
+  echo "[warmup] WARNING: pass 2 (minimal project) failed; the pass-1 cache is kept" >&2
+  grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup-2.log | tail -n 20 >&2 || true
+  tail -n 40 /tmp/cnb-warmup-2.log >&2 || true
+fi
