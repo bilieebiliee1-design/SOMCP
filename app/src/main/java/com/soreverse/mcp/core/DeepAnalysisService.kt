@@ -51,6 +51,7 @@ class DeepAnalysisService(private val appContext: Context) {
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
+            .withCompromisedCaBlocklist()
             .build()
         val customHeaders = AgentKernel.stringMap(settings.aiCustomHeadersJson)
         val models = linkedSetOf<String>()
