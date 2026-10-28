@@ -44,9 +44,9 @@ GRADLE_ACTUAL="$(gradle --version 2> /dev/null | sed -n 's/^Gradle //p' | head -
 [ "$GRADLE_ACTUAL" = "9.6.1" ] \
   || fail "Gradle 9.6.1 required (found '${GRADLE_ACTUAL:-none}'); keep it in step with gradle/wrapper/gradle-wrapper.properties"
 # 缓存语义与原工作流一致：gradle/actions/setup-gradle 的 cache-disabled: true
-# 表示「不复用、也不写远程缓存」。这里用的 /gradle-home 是 data 类型卷，
+# 表示「不复用、也不写远程缓存」。这里用的 /root/.gradle 是 data 类型卷，
 # 只在本次流水线内跨 stage 共享，流水线结束即销毁。
-export GRADLE_USER_HOME="${GRADLE_USER_HOME:-/gradle-home}"
+export GRADLE_USER_HOME="${GRADLE_USER_HOME:-/root/.gradle}"
 mkdir -p "$GRADLE_USER_HOME"
 log "gradle: ${GRADLE_ACTUAL} (GRADLE_USER_HOME=${GRADLE_USER_HOME}, data volume, no cross-build cache)"
 
