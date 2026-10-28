@@ -103,14 +103,11 @@ main:
             #     plugins {} + 最小 android {}），那时它们已不影响结果。
             #     历史教训：怕「脚本编译不过就闷杀整层预热」而干脆不带 app 脚本，
             #     结果就是 :app 的运行时依赖一个都没预热，运行期照样现场冲网。
-            #   * buildSrc/ **整目录带上**（build.gradle.kts 与 src/ 下的插件源码）：
-            #     预热工程要把它**删掉**再跑（Gradle 一旦看见 buildSrc/ 就会先编译它，
-            #     而 buildSrc 是 included build —— 不继承 settings.gradle.kts 的
-            #     pluginManagement，`--init-script` 传的仓库对它也不生效，只能靠自己
-            #     那份仓库列表去拿插件。预热的目的正是把这些插件下进用户目录，
-            #     插件还没下就先要求它可用，必然失败）。删除是 Dockerfile 里那条
-            #     `rm -rf` 干的，它得先看得见东西；不带的话那句 rm 是空操作，同一个
-            #     坑会无声无息地回来。
+            #   * buildSrc/ **不再进上下文**：预热工程既不能有 buildSrc/（Gradle
+            #     看见它就会先编译一遍，插件还没下就先要求它可用），也不能留下
+            #     :app 里那行 `id("somcp.patched-local-jars")`（找不到实现，整个
+            #     app 脚本编译不过，而 :app 的依赖全写在 plugins {} 之后）。两件事
+            #     都由 warmup-project.sh 负责，容器里根本不需要看见 buildSrc/。
             #
             #     buildSrc 自己那份 `groovy-gradle-plugin` 是 Gradle 自带的，零外部
             #     插件依赖 —— 这就是它能出现在这条流水线上的原因：任何要从 Portal
@@ -127,8 +124,6 @@ main:
               - gradle.properties
               - app/build.gradle.kts
               - app/libs
-              - buildSrc/build.gradle.kts
-              - buildSrc/src/main/groovy
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
             # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
             # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
@@ -136,10 +131,9 @@ main:
             # 校验代码准备里报 warmup cache is incomplete —— 改了半天脚本，
             # 跑的还是老镜像。代价是这些文件改动会触发一次完整重建，
             # 但它们本来就只在准备镜像时才改。
-            # app/ 与 buildSrc/ 也要进 versionBy：它们直接决定镜像里预热了哪些
-            # 依赖（:app 的运行时依赖图、buildSrc 编译要用的东西）。改了却沿用
-            # 旧镜像，就会「镜像里的缓存与源码对不上」，而报错落在校验代码准备
-            # 那句含糊的 warmup cache is incomplete 上。
+            # app/ 也要进 versionBy：:app 的脚本与 app/libs 直接决定镜像里预热了
+            # 哪些依赖。改了却沿用旧镜像，就会「镜像里的缓存与源码对不上」，而报错
+            # 落在校验代码准备那句含糊的 warmup cache is incomplete 上。
             versionBy:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -151,8 +145,6 @@ main:
               - gradle.properties
               - app/build.gradle.kts
               - app/libs
-              - buildSrc/build.gradle.kts
-              - buildSrc/src/main/groovy
             sync: true
           exports:
             name: BUILD_ENV_IMAGE

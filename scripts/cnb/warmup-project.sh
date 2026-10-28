@@ -20,6 +20,11 @@
 # 预热去 Google 找不到 AGP 的 marker，运行期又反过来缺 aliyun 镜像。
 # 用 grep 取整块，取不到就失败（比静默生成一个残缺工程强）。
 #
+# 构建上下文里不带 buildSrc/，:app 脚本里那行 `id("somcp.patched-local-jars")` 在
+# 两遍里都注释掉：插件的实现与声明一旦只剩一边，:app 的脚本就编译不过，而它的
+# dependencies {} 写在 plugins {} 之后 —— 编译不过就一行都求值不到。
+# 详见 disable_buildsrc_plugin() 的注释。
+#
 # 两遍：第一遍用**仓库原样**跑（:app 的真实脚本 + app/libs/ 都在，才解析得到
 # 那一整张依赖图），第二遍才把工程改写成最小形态、再跑一次。
 set -euo pipefail
@@ -27,15 +32,15 @@ set -euo pipefail
 DIR="${1:-/tmp/cnb-warmup}"
 cd "$DIR"
 
-# --- buildSrc / app：第一遍之前的准备 ---------------------------------------
-# 预热工程本身不用 buildSrc（下面第二遍会把它删掉），但**第一遍必须按仓库原样
-# 跑**：:app 的真实脚本里有 androidx / compose / ktor / okhttp 与
-# files("libs/*-patched.jar")，只有按真实脚本求值一次，那些依赖才进得了缓存。
-# 手写一份最小 :app 等于自己决定「预热覆盖哪些依赖」，漏掉的那些运行期照样冲网。
+# --- app：第一遍之前的准备 ---------------------------------------------------
+# **第一遍必须按仓库原样跑**：:app 的真实脚本里有 androidx / compose / ktor /
+# okhttp 与 files("libs/*-patched.jar")，只有按真实脚本求值一次，那些依赖才进得了
+# 缓存。手写一份最小 :app 等于自己决定「预热覆盖哪些依赖」，漏掉的那些运行期照样
+# 现场冲网。
 #
-# 所以两件都在改写之前做：确认 buildSrc/ 在场（构建上下文里有，预热不用它、
-# 但第二遍删它这件事得看得见东西），并把 app/libs/ 里的 jar 打印出来
-# （少了它们，files("libs/*-patched.jar") 那两条依赖解析不到）。
+# 所以改写之前做两件事：把 app/libs/ 里的 jar 打印出来（少了它们，
+# files("libs/*-patched.jar") 那两条依赖解析不到），以及停用 buildSrc 的插件
+# （见 disable_buildsrc_plugin）。
 prepare_runtime_layout() {
   mkdir -p app
   [ -f app/build.gradle.kts ] \
@@ -47,7 +52,8 @@ prepare_runtime_layout() {
   fi
 }
 
-# 第一遍：仓库原样。报错就是运行期会遇到的报错，所以失败即整层失败。
+# 第一遍：仓库原样（只停用 buildSrc 插件）。报错就是运行期会遇到的报错，
+# 所以失败即整层失败。
 cold_build() {
   CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 900 \
     /opt/gradle/bin/gradle --no-daemon --console=plain --info \
@@ -71,10 +77,30 @@ warm_build() {
     help :app:dependencies --configuration releaseRuntimeClasspath
 }
 
-remove_buildsrc() {
-  if [ -d buildSrc ]; then
-    rm -rf buildSrc
-    echo "[warmup] removed buildSrc/ from the warmup project (second pass only)"
+# --- buildSrc 的插件不进预热工程 ---------------------------------------------
+# 不在 plugins {} 里声明版本、只躺在 buildSrc/src 里的插件（本仓库的
+# `somcp.patched-local-jars`）在预热工程里两头堵：
+#
+#   * 留着 buildSrc 却不在 :app 声明它，Gradle 报
+#     `Plugin [id: '...'] was not found ... Plugin Repositories (plugin dependency
+#      must include a version number for this source)`；
+#   * 删掉 buildSrc 却保留那行 `id("...")`，报的是同一句，落在
+#     app/build.gradle.kts 的 plugins {} 上（cnb-hkj-1k624u580）。而 :app 的
+#     dependencies {} 全写在 plugins {} 之后 —— 脚本编译不过，androidx / compose /
+#     ktor / okhttp 一行都求值不到，预热等于只做了一半。
+#
+# 所以两边一起断：预热目录里没有 buildSrc/，app 脚本里那行 id(...) 注释掉。
+# 这个插件干的是「把 app/libs 下的 jar 顶掉上游同坐标模块」，而预热工程里那些
+# 上游坐标本来就不出现，去掉它不影响依赖图的完整性。
+disable_buildsrc_plugin() {
+  rm -rf buildSrc
+  if grep -q 'somcp\.patched-local-jars' app/build.gradle.kts; then
+    sed -i 's|^\([[:space:]]*\)id("somcp\.patched-local-jars".*$|\1// [cnb-warmup] disabled: somcp.patched-local-jars|' app/build.gradle.kts
+    if grep -q '^[[:space:]]*id("somcp.patched-local-jars")' app/build.gradle.kts; then
+      echo "[warmup] ERROR: could not disable somcp.patched-local-jars in the app script" >&2
+      exit 1
+    fi
+    echo "[warmup] disabled somcp.patched-local-jars in the warmup app script"
   fi
 }
 
@@ -188,10 +214,12 @@ SETTINGS
 
 # --- 两遍执行 ---------------------------------------------------------------
 # 顺序不能换，理由见各自函数的注释：
-#   1. prepare_runtime_layout → cold_build（仓库原样，联网，失败即整层失败）
-#   2. remove_buildsrc → simplify_* → warm_build（最小工程，失败只打 WARNING）
+#   1. prepare_runtime_layout → disable_buildsrc_plugin → cold_build
+#      （仓库原样，联网，失败即整层失败）
+#   2. simplify_* → warm_build（最小工程，失败只打 WARNING）
 echo "[warmup] pass 1/2: repository as-is (app/build.gradle.kts + app/libs)"
 prepare_runtime_layout
+disable_buildsrc_plugin
 if cold_build > /tmp/cnb-warmup.log 2>&1; then
   echo "[warmup] pass 1 OK: repository as-is"
 else
@@ -202,8 +230,7 @@ else
   exit 1
 fi
 
-echo "[warmup] pass 2/2: minimal project (no buildSrc, generated :app script)"
-remove_buildsrc
+echo "[warmup] pass 2/2: minimal project (generated :app script)"
 simplify_app_script
 simplify_settings_script
 
