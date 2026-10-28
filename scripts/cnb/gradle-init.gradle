@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// SOMCP - scripts/cnb/gradle-init.gradle
+// Copyright (C) 2026 SOMCP authors
+// Upstream: https://github.com/bilieebiliee1-design/SOMCP
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License version 3 as published by
+// the Free Software Foundation.
+//
+// Gradle 用户级初始化脚本，由 image/cnb-tools.Dockerfile 装到
+// $GRADLE_USER_HOME/init.d/cnb-init.gradle 并随目录搬进 data 卷，
+// 因此每个 stage 的 gradle 都会加载它。
+//
+// 职责只有一件：给仓库列表**追加** Maven Central 镜像。
+// 背景：repo1.maven.org / repo.maven.apache.org 对同一出口 IP 有共享请求上限
+// （实测连打同一个 POM 40 次，16 次 429），而 Gradle 默认把 429 判成不可重试，
+// 冷启动一口气拉几十个 POM 时，任何一个吃到限流都会让整次插件解析失败，报出来
+// 的却是「Plugin [id: ..., version: ...] was not found」—— 版本明明存在。
+//
+// 只追加、不删除、不替换原仓库：
+//   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，
+//     AGP 的 marker 仍从 Google 取，解析顺序与失败语义都不变；
+//   * 版本、依赖图、产物字节完全一致（镜像里是同一份构件）；
+//   * 真不存在的版本照样失败（Gradle 只在 404 时才继续试下一个仓库）。
+//
+// 只在 CI 里介入（本地没有 CNB_BUILD_ID 时什么都不做）。
+
+def MIRROR_URLS = [
+    'https://maven.aliyun.com/repository/public',
+]
+
+def addMirrors = { repositories ->
+    MIRROR_URLS.eachWithIndex { url, i ->
+        if (!repositories.findByName("cnb-mirror-${i}")) {
+            repositories.maven { repo ->
+                repo.name = "cnb-mirror-${i}"
+                repo.url = url
+            }
+        }
+    }
+}
+
+if (System.getenv('CNB_BUILD_ID') != null) {
+    beforeSettings { settings ->
+        addMirrors(settings.pluginManagement.repositories)
+        addMirrors(settings.dependencyResolutionManagement.repositories)
+    }
+}
