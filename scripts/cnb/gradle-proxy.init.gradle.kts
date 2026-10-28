@@ -10,25 +10,29 @@
 //
 // Gradle 初始化脚本：把 CI 环境下注入的 HTTP(S)_PROXY / NO_PROXY 桥接成 JVM 代理属性。
 //
-// 为什么必须放在 init script：CNB 会把 Runner 宿主机的代理变量同步进容器，
-// 但 Gradle 的 daemon JVM 不读它们，依赖解析会绕过代理直连外网，在需要代理的
-// 网络里表现为「Plugin [id: ...] was not found in any of the following sources」。
-// 构建脚本（build.gradle.kts）里设置时机太晚 —— 插件解析在脚本求值之前就发生了；
-// 写进 gradle.properties 的 systemProp.* 又会污染本地开发环境。init script 在
-// daemon 启动、构建配置之前执行，是唯一不侵入仓库其余部分的位置。
+// 为什么放在 init script：CNB 会把 Runner 宿主机的代理变量同步进容器，
+// 但 Gradle 的 daemon JVM 不读它们；而构建脚本（build.gradle.kts）里的设置
+// 时机又太晚 —— 插件解析在脚本求值之前就发生了。init script 在 daemon 启动、
+// 构建配置之前执行，是唯一不侵入仓库其余部分的位置。
+//
+// 为什么**不能**不加判断地设置：一个空 host 的代理值（例如 `HTTP_PROXY=:8080`）
+// 一旦被写成 https.proxyHost=""，所有依赖请求都会退化成连本机的那一类场景，
+// 表现同样是「Plugin [id: ...] was not found in any of the following sources」。
+// 代理只是网络条件，判据不能挂在它身上，所以这里只在 host 非空时设置。
 //
 // 用法（仅在流水线里显式传参，本地不加这个参数就完全不受影响）：
 //   gradle --init-script scripts/cnb/gradle-proxy.init.gradle.kts <task>
 //
-// 没有设置代理变量时，本脚本不做任何事。
+// 没有（有效的）代理变量时，本脚本不做任何事。
 
 fun proxyParts(raw: String?): Pair<String, Int>? {
-    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    // `:8080` 这类只有端口的值没有 host，转成 URI 后 host 为 null，直接放弃。
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() && it != ":" } ?: return null
     val uri =
         runCatching { java.net.URI(value) }.getOrNull()
             ?: runCatching { java.net.URI("http://$value") }.getOrNull()
             ?: return null
-    val host = uri.host ?: return null
+    val host = uri.host?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     return host to (uri.port.takeIf { it > 0 } ?: 80)
 }
 
