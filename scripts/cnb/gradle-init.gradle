@@ -12,29 +12,55 @@
 // $GRADLE_USER_HOME/init.d/cnb-init.gradle 并随目录搬进 data 卷，
 // 因此每个 stage 的 gradle 都会加载它。
 //
-// 职责只有一件：给仓库列表**追加** Maven Central 镜像。
+// 职责只有一件：给仓库列表**追加**镜像，把 Maven Central 的限流绕开。
 // 背景：repo1.maven.org / repo.maven.apache.org 对同一出口 IP 有共享请求上限
 // （实测连打同一个 POM 40 次，16 次 429），而 Gradle 默认把 429 判成不可重试，
-// 冷启动一口气拉几十个 POM 时，任何一个吃到限流都会让整次插件解析失败，报出来
+// 冷启动一口气拉几十个 POM 时，任何一个吃到限流都会让整次解析失败，报出来
 // 的却是「Plugin [id: ..., version: ...] was not found」—— 版本明明存在。
 //
+// **插件解析和依赖解析用的不是同一个镜像**，这不是对称的美感问题：
+// 见下面 PLUGIN_MIRROR_URLS 的注释 —— 把 Maven Central 的镜像放进插件仓库列表，
+// 会用一个假 200 挡住 Google 上真实存在的 AGP marker；而 google 镜像里又没有
+// Kotlin 的插件 marker。
+//
 // 只追加、不删除、不替换原仓库：
-//   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，
-//     AGP 的 marker 仍从 Google 取，解析顺序与失败语义都不变；
+//   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，解析顺序不变；
 //   * 版本、依赖图、产物字节完全一致（镜像里是同一份构件）；
 //   * 真不存在的版本照样失败（Gradle 只在 404 时才继续试下一个仓库）。
 //
 // 只在 CI 里介入（本地没有 CNB_BUILD_ID 时什么都不做）。
 
+// 依赖解析用：Maven Central 的镜像（Kotlin / AndroidX 等普通依赖都在这里）。
 def MIRROR_URLS = [
     'https://maven.aliyun.com/repository/public',
 ]
 
+// 插件解析用：Gradle Plugin Portal 的镜像。
+//
+// 不能直接复用上面那个：`repository/public` 是 Maven Central 的镜像，AGP 9 从未
+// 发布到 Maven Central，`com.android.application` 的 marker 只在 Google 仓库里；
+// 而且它对不存在的构件并不总返回 404（有时是 200 + 提示页），一个假 200 就能让
+// Gradle 认定该仓库命中、不再试后面的 Google，报出来是
+//   Plugin [id: 'com.android.application', version: '9.2.1'] was not found
+// 而 `Searched in` 列表里 Google 明明在。
+//
+// 也不能用 `repository/google`（代理 dl.google.com/dl/android/maven2）：AGP 的
+// marker 在那儿有，Kotlin 的插件 marker 没有 —— 实测
+// `org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.4.0` 在 google 镜像上是
+// 404，在 `repository/gradle-plugin` 上是 200。
+//
+// 所以插件侧用 `repository/gradle-plugin`（代理 plugins.gradle.org/m2）：
+// Kotlin 那些 marker 都在那儿，命中时是同一份 POM/JAR，缺失时返回 404，
+// 不会遮住原列表里的 google()。
+def PLUGIN_MIRROR_URLS = [
+    'https://maven.aliyun.com/repository/gradle-plugin',
+]
+
 // 追加镜像。`all {}` 会在每次往仓库列表里新增仓库后被回调，所以这个闭包会被
 // 重复调用：用 findByName 挡住重复添加。
-def addMirrors = { repositories ->
-    MIRROR_URLS.eachWithIndex { url, i ->
-        def name = "cnb-mirror-${i}"
+def addMirrors = { repositories, urls, prefix ->
+    urls.eachWithIndex { url, i ->
+        def name = prefix + i
         if (!repositories.findByName(name)) {
             repositories.maven { repo ->
                 repo.name = name
@@ -52,7 +78,7 @@ if (System.getenv('CNB_BUILD_ID') != null) {
     beforeSettings { settings ->
         def pluginRepos = settings.pluginManagement.repositories
         def depRepos = settings.dependencyResolutionManagement.repositories
-        pluginRepos.all { addMirrors(pluginRepos) }
-        depRepos.all { addMirrors(depRepos) }
+        pluginRepos.all { addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-') }
+        depRepos.all { addMirrors(depRepos, MIRROR_URLS, 'cnb-mirror-') }
     }
 }
