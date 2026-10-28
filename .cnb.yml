@@ -84,7 +84,8 @@ main:
             # 不声明就不会被复制进去（表现为 COPY 报 "not found"）。镜像里要用到：
             #   * scripts/cnb/gradle-init.gradle —— COPY 进 /opt/gradle-user-home；
             #   * build.gradle.kts / settings.gradle.kts / gradle.properties ——
-            #     warmup 从里面读插件版本与仓库声明，并让重试参数也生效。
+            #     warmup 从里面读插件版本与仓库声明，并让重试参数也生效；
+            #     这三个只进上下文，Dockerfile 里另有 COPY 才会进镜像。
             by:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
