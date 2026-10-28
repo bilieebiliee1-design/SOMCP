@@ -30,11 +30,14 @@ def MIRROR_URLS = [
     'https://maven.aliyun.com/repository/public',
 ]
 
+// 追加镜像。`all {}` 会在每次往仓库列表里新增仓库后被回调，所以这个闭包会被
+// 重复调用：用 findByName 挡住重复添加。
 def addMirrors = { repositories ->
     MIRROR_URLS.eachWithIndex { url, i ->
-        if (!repositories.findByName("cnb-mirror-${i}")) {
+        def name = "cnb-mirror-${i}"
+        if (!repositories.findByName(name)) {
             repositories.maven { repo ->
-                repo.name = "cnb-mirror-${i}"
+                repo.name = name
                 repo.url = url
             }
         }
@@ -42,8 +45,14 @@ def addMirrors = { repositories ->
 }
 
 if (System.getenv('CNB_BUILD_ID') != null) {
+    // 必须在 `all {}` 里追加，不能只在 beforeSettings 里加一次：settings 脚本
+    // 的 `repositories { ... }` 块是整体替换而不是追加，beforeSettings 阶段加进去的
+    // 仓库会被它覆盖掉，解析时只剩 google/mavenCentral/gradlePluginPortal，
+    // 镜像从头到尾没被用过（实测：debug 日志里 aliyun 出现 0 次）。
     beforeSettings { settings ->
-        addMirrors(settings.pluginManagement.repositories)
-        addMirrors(settings.dependencyResolutionManagement.repositories)
+        def pluginRepos = settings.pluginManagement.repositories
+        def depRepos = settings.dependencyResolutionManagement.repositories
+        pluginRepos.all { addMirrors(pluginRepos) }
+        depRepos.all { addMirrors(depRepos) }
     }
 }
