@@ -254,6 +254,20 @@ sed: can't read /build.gradle.kts: No such file or directory
 `versionBy` 仍只写 Dockerfile。被 `by` 额外带进上下文的文件只解决「可见性」，
 不该让缓存版本跟着漂移；预热本身吃 `RUN` 层缓存，构建脚本变了 Gradle 会自己重解析。
 
+第二个坑在调用方式上：**预热脚本必须用 `bash` 跑，不能用 `sh`**。`scripts/cnb/*.sh`
+一律是 `#!/usr/bin/env bash` 且开头 `set -euo pipefail`，而 Docker 的 `RUN` 默认
+shell 是 `/bin/sh` → dash，不认 `pipefail`：
+
+```
+/opt/cnb/warmup-project.sh: 21: set: Illegal option -o pipefail
+ERROR: process "/bin/sh -c ..." did not complete successfully: exit code: 2
+```
+
+这行 `sh -x .../warmup-project.sh` 当时写在 `if` 之外，所以连「预热失败只打
+warning、镜像照常产出」的兜底都进不去 —— 一段本该降级的逻辑把整层构建判死。
+运行期那边一直是 `bash scripts/cnb/...`，两边入口不一致才留下这个洞。现在改成
+`bash -x`，与脚本 shebang、与 `.cnb.yml` 里所有 stage 的调用方式对齐。
+
 ## 预热失败与工具链失败的分界
 
 镜像里的预热段（`gradle help`）与工具链（JDK / Gradle / SDK / NDK）共用同一个
@@ -280,6 +294,7 @@ sed: can't read /build.gradle.kts: No such file or directory
 | 现象 | 归属 | 处理 |
 | --- | --- | --- |
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
+| `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
 | `Plugin [id: '...', version: '...'] was not found` | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
 | 预热全绿但运行期 `--offline` 复核失败 | 预热用的 `GRADLE_USER_HOME` 与运行期不是同一个 / 预热缺 init script | 见上一节，已修 |
 | 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
