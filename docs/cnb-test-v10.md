@@ -795,31 +795,47 @@ error writing value of type
 后者要从 Portal 拿 marker，而 `--offline` 复核读的是预热出来的用户目录，那里没有它。
 `scripts/cnb/setup-build-env.sh` 里那条复核的注释记着这件事。
 
+**buildSrc 的 `repositories { }` 也要跟着复核开关切**。buildSrc 是 included build，
+既不继承 `settings.gradle.kts` 的 pluginManagement，`--init-script` 传进去的镜像也管不到它
+—— 它自己那五个仓库就是这个插件全部的世界。复核是离线的，那五个仓库一份构件都没预热过，
+`gradle help` 会在 buildSrc 里先炸，报出来的却是 `校验代码准备` 那句
+`warmup cache is incomplete`。所以 `buildSrc/build.gradle.kts` 里读到
+`-PcnbCacheOnlyCheck` 就把仓库换成主工程复核用的同一批空目录（`deps/0..4`，同一组、
+同一个 GRADLE_USER_HOME，索引只有一份）。
+
 ### 预热工程怎么处理这个插件（现在：第一遍带着它跑）
 
 `fce2fc8` 之后，patched jar 走的是「声明时换坐标」：`app/build.gradle.kts` 里那四条
 `implementation(patchedJar("x.jar", "x.y.z.1"))` 会被插件在**声明的那一刻**换成
-`x.y.z.1` 坐标依赖（`dependency.useTarget(...)`），jar 与 POM 由
-`app/libs/build/patched-jars-repo` 提供。
+`x.y.z.1` 坐标依赖（`dependency.useTarget(...)`），jar 与 POM 由插件写进
+`app/build/patched-jars-repo` —— 也就是 `settings.gradle.kts` 里 `somcpPatchedLocal`
+那个仓库的 url。**两边必须是同一个绝对路径**（见下面「路径」那一节）。
 
 预热必须跟着这条走：**第一遍按原样带着插件跑**，否则预热下的是上游 `x.y.z`、
 运行期用的是 `x.y.z.1`，两份缓存对不上。所以顺序是
 
-1. `publish_patched_local_repo()`：照口径表把四个 `.1` 的 jar + 最小 POM 铺进
-   `app/build/patched-jars-repo`（`settings.gradle.kts` 里那个仓库 url）；
+1. `publish_patched_local_repo()`：照口径表把四个 `.1` 的 jar + POM 铺进
+   `app/build/patched-jars-repo`（`settings.gradle.kts` 里那个仓库 url），
+   POM 的 `<dependencies>` 从插件里的 `somcpPatchedPomDependencies` 读，与运行期逐条一致；
 2. `rewrite_root_script()`；
 3. `cold_build` —— 这一遍里插件是真的 apply 的。
 
-两个坑都在这一条线上踩过，改之前先读：
+三个坑都在这一条线上踩过，改之前先读：
 
-- **本地仓库目录必须比 `files()` 声明更早存在**。Gradle 在 `places files()` 那一刻就把
-  路径记成任务输入，目录不在会当场抛
-  `Cannot fingerprint input property '...': file .../patched-jars-repo does not exist`，
-  而且报在**所有**被声明的 `files()` 上，看着跟插件毫无关系。仓库里因此提交了
-  `app/libs/build/patched-jars-repo/.ignore`（空文件，只为让目录进 git），插件自己也会
-  `mkdirs()` 兜一次。
-- **`patchedJar` 返回的 file 依赖在镜像里必须能找到那两个 jar**，否则同一个
-  `Cannot fingerprint input property` 会落到 `libs/xxx.jar` 上。
+- **路径只有一个**。插件用 `project.projectDir` 算（`:app` → `<root>/app/build/...`），
+  `settings.gradle.kts` 用 `rootDir.resolve(...)` 算（根目录下）。**必须得到同一个绝对
+  路径**：`cnb-stn-1k629u1nl` 的 Android Lint 就是这里分叉的 —— 插件把 `.1` 铺在
+  `app/build`，解析却去根目录那个空仓库找，Kotlin 编译报
+  `Unresolved reference 'capstone' / 'keystone'`（版本号、POM 全对，报的是「类不存在」）。
+  别换回 `project.layout.buildDirectory`：它按**项目**算，而 settings 那边是**根**。
+- **POM 必须带 `dependencies`**。预热早先写过空壳 POM（理由是「传递依赖由上游 POM
+  提供」），这条理由在「上游坐标已被 `exclude` 掉」之后就失效了：`capstone` / `keystone`
+  在上游那边唯一的声明方就是 `unidbg-api` 的 POM，而它已被换成 `.1`。空壳 POM 等于把
+  这两个模块从图上摘掉，编译期就报 Unresolved reference。现在两边都从同一张表读，
+  `publish_patched_local_repo()` 末尾还会断言每条 POM 都带 `<dependencies>`。
+- **`patchedJar` 返回的 file 依赖在镜像里必须能找到那两个 jar**，否则
+  `Cannot fingerprint input property` 会落到 `libs/xxx.jar` 上。那四个 jar 随仓库提交，
+  checkout 就位，这条约束对它们天然成立；本地仓库目录由插件 `mkdirs()` 兜，不需要占位文件。
 
 `disable_buildsrc_plugin()` 还在（摘声明 / 工厂 / 调用点三处，附 grep 与花括号断言），
 但现在**第一遍不调它**，只在真要回到「预热不带插件」的形态时才用。历史教训仍然有效：
