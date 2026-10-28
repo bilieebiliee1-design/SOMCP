@@ -19,8 +19,9 @@
 // 的却是「Plugin [id: ..., version: ...] was not found」—— 版本明明存在。
 //
 // **插件解析和依赖解析用的不是同一个镜像**，这不是对称的美感问题：
-// 见下面 GOOGLE_MIRROR_URLS 的注释 —— 把 Maven Central 的镜像放进插件仓库列表，
-// 会用一个 200 的空壳响应挡住 Google 上真实存在的 AGP marker。
+// 见下面 PLUGIN_MIRROR_URLS 的注释 —— 把 Maven Central 的镜像放进插件仓库列表，
+// 会用一个假 200 挡住 Google 上真实存在的 AGP marker；而 google 镜像里又没有
+// Kotlin 的插件 marker。
 //
 // 只追加、不删除、不替换原仓库：
 //   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，解析顺序不变；
@@ -34,17 +35,25 @@ def MIRROR_URLS = [
     'https://maven.aliyun.com/repository/public',
 ]
 
-// AGP 9 从未发布到 Maven Central，`com.android.application` 的 marker 只在
-// Google 仓库里。而 maven.aliyun.com/repository/public 对不存在的构件**不是
-// 404，而是 200 + 一张 HTML 提示页**。Gradle 只看状态码，见到 200 就认定该仓库
-// 命中、不再往下试，于是排在后面的 Google 根本没被访问，报出来的是
+// 插件解析用：Gradle Plugin Portal 的镜像。
+//
+// 不能直接复用上面那个：`repository/public` 是 Maven Central 的镜像，AGP 9 从未
+// 发布到 Maven Central，`com.android.application` 的 marker 只在 Google 仓库里；
+// 而且它对不存在的构件并不总返回 404（有时是 200 + 提示页），一个假 200 就能让
+// Gradle 认定该仓库命中、不再试后面的 Google，报出来是
 //   Plugin [id: 'com.android.application', version: '9.2.1'] was not found
-//   Searched in: cnb-mirror-0(.../public), Google, MavenRepo, ...
-// ——「搜过 Google 还是没有」是假象。所以 Maven Central 的镜像只加在依赖解析上；
-// 插件解析只补 Google 镜像：它原样代理 dl.google.com/dl/android/maven2，
-// 命中时字节与 Google 一致，缺失时老实返回 404，失败语义不变。
-def GOOGLE_MIRROR_URLS = [
-    'https://maven.aliyun.com/repository/google',
+// 而 `Searched in` 列表里 Google 明明在。
+//
+// 也不能用 `repository/google`（代理 dl.google.com/dl/android/maven2）：AGP 的
+// marker 在那儿有，Kotlin 的插件 marker 没有 —— 实测
+// `org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.4.0` 在 google 镜像上是
+// 404，在 `repository/gradle-plugin` 上是 200。
+//
+// 所以插件侧用 `repository/gradle-plugin`（代理 plugins.gradle.org/m2）：
+// Kotlin 那些 marker 都在那儿，命中时是同一份 POM/JAR，缺失时返回 404，
+// 不会遮住原列表里的 google()。
+def PLUGIN_MIRROR_URLS = [
+    'https://maven.aliyun.com/repository/gradle-plugin',
 ]
 
 // 追加镜像。`all {}` 会在每次往仓库列表里新增仓库后被回调，所以这个闭包会被
@@ -69,7 +78,7 @@ if (System.getenv('CNB_BUILD_ID') != null) {
     beforeSettings { settings ->
         def pluginRepos = settings.pluginManagement.repositories
         def depRepos = settings.dependencyResolutionManagement.repositories
-        pluginRepos.all { addMirrors(pluginRepos, GOOGLE_MIRROR_URLS, 'cnb-plugin-mirror-') }
+        pluginRepos.all { addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-') }
         depRepos.all { addMirrors(depRepos, MIRROR_URLS, 'cnb-mirror-') }
     }
 }
