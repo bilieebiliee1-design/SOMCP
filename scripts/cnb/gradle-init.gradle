@@ -240,8 +240,49 @@ if (System.getenv('CNB_BUILD_ID') != null) {
             repositories.addFirst(jitpack)
         }
     }
+    // 同一件事的另一面：**patched jar 的本地仓库（file:）必须排在所有远端之前。**
+    //
+    // `settings.gradle.kts` 里它本来就声明在第一位，但上面的 `jitpackFirst` 会在
+    // `settingsEvaluated` 里把 JitPack 提到首位，于是本地仓库被挤到第二位：
+    //   declared            : somcpPatchedLocal -> Google -> MavenRepo -> jitpack
+    //   after jitpackFirst  : jitpack -> somcpPatchedLocal -> Google -> MavenRepo
+    // 光看顺序不致命（声明层排第一时也不会有人去别的仓库找 `.1`），但「本地仓库排第一」
+    // 这条不变量如果只靠两个回调的先后维持，就是下次一改就悄悄失效的那种安排 —— 这里
+    // 再提一次，判据落在**最终顺序**上，不落在谁先谁后执行。
+    //
+    // 它提供的版本是 `<上游>.1`（0.9.9.1 / 3.1.8.1 / 0.9.7.1），这些坐标在任何远端
+    // 仓库里都不存在。排在远端后面时会先发一批注定失败的请求
+    // （`cnb-qim-1k629pgdh` 的预热 pass 1 就是这么撞在 900s 上限上的）：
+    //
+    //   Failed to get resource: GET. [HTTP 429:
+    //     https://repo.maven.apache.org/maven2/com/github/zhkl0228/capstone/3.1.8.1/...]
+    //   Failed to get resource: GET. [HTTP 429: .../unidbg-android/0.9.9.1/...]
+    //   Failed to get resource: GET. [HTTP 429: .../keystone/0.9.7.1/...]
+    //
+    // 429 是 transient，Gradle 会重试到用尽 —— 每次都白烧几十秒，最后还可能整个解析
+    // 失败（`cnb-qim-1k629pgdh` 的预热 pass 1 就是这么超时在 900s 上限上的）。
+    // 而命中本仓库只需要读一个本地文件。
+    //
+    // 判据落在 URL 上而不是名字：MavenArtifactRepository.url 是 `file:` 开头、
+    // 且路径里带 `patched-jars-repo`（buildSrc 插件与 warmup-project.sh 都往这个
+    // 目录产出）。`noMirror` 本来就放过 `file:`，所以镜像不会替它做决定；这里只挪顺序。
+    // 排在 jitpack 之前：本地仓库是**独占**的（`.1` 只有它有），命中即停最划算。
+    def patchedLocalFirst = { repositories ->
+        def local = repositories.find { repo ->
+            repo instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository &&
+                repo.url.toString().startsWith('file:') &&
+                repo.url.toString().contains('patched-jars-repo')
+        }
+        if (local != null && repositories.indexOf(local) != 0) {
+            repositories.remove(local)
+            repositories.addFirst(local)
+        }
+    }
     settingsEvaluated { settings ->
-        jitpackFirst(settings.dependencyResolutionManagement.repositories)
+        def repositories = settings.dependencyResolutionManagement.repositories
+        jitpackFirst(repositories)
+        // 再提一次本地仓库：jitpackFirst 刚把 jitpack 放到首位，本地这份要压过它。
+        patchedLocalFirst(repositories)
     }
 }
 
