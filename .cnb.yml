@@ -1,6 +1,6 @@
 # CNB 流水线：main 分支 push 后，把代码同步到 GitHub 镜像仓库。
 # 同步方向以 CNB 为准，分叉时强制覆盖（force: true）。
-# GIT_USERNAME / GIT_ACCESS_TOKEN 来自密钥仓库 SOMCP/key 的 github.yml。
+# 同步所需凭据由流水线运行期注入，本文件不保存任何密钥。
 main:
   push:
     - imports:
