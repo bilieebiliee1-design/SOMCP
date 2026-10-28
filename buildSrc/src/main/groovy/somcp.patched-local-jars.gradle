@@ -250,30 +250,38 @@ def patchedCoordinatesFor = { Object dependency ->
 // 只发生在 `group:module` 完全相同的候选之间，所以 patched 的 `x.y.z.1` 够不着
 // `com.github.zhkl0228.unidbg:unidbg-api` —— 那是另一份模块。
 //
-// 于是在替换的同一个钩子里把它也排掉：`exclude` 是**声明层**的操作（不像
-// `artifacts.remove` 那样动解析结果），配置缓存与变体视图都不受影响。
+// 这里曾经按 group/module 把它整块 exclude 掉，那条路是错的：`exclude(group:, module:)`
+// 不认版本，`.1` 与上游同 group 同 module，一起被删干净（看着不报重复类，APK 里却没有
+// unidbg 的类）。现在只靠「两个候选同坐标、高版本胜出」，不额外 exclude —— 详见下面
+// `configureEach` 后面那段注释。
+
+// 上游那份若是从 `com.github.zhkl0228.unidbg:<module>` 的 POM 传递进来的，`.1` 够不着
+// 它 —— 所以 `somcpPatchedPomDependencies` 里也不再列 capstone / keystone（`:app` 自己
+// 声明了这两条 `.1`），免得自己给自己造一条把上游吊回图的路径。
 
 // 只动 `files()` 这一种声明：普通坐标依赖、platform、project 依赖原样通过。
 // `configureEach` 保证后声明的 configuration（AGP 建的 debug*/release*/test* 等）
 // 也挂得上钩子。
 //
-// 换的方式是 `remove` + `add`，**不是 `useTarget`**：
-//   * `useTarget` 只存在于 `ModuleDependency` 上。`files(...)` 造出来的是
-//     `DefaultFileCollectionDependency`，调它直接抛
-//       No signature of method: ...DefaultFileCollectionDependency.useTarget()
-//       is applicable for argument types: (DefaultExternalModuleDependency_Decorated)
-//     —— 而且是在配置期，整个工程连配置都过不去（本地实测，Gradle 9.6.1）。
-//   * `remove` + `add` 在本场景下是安全的：`whenObjectAdded` 的回调在依赖被加入
-//     集合**之后**触发，此时迭代已经结束，不是「边迭代边删」。本地实测无
-//     ConcurrentModificationException。add 进去的是坐标依赖，再回到本回调时
-//     `patchedCoordinatesFor()` 返回 null（判据落在类型上），重入不会自己咬自己。
-//   * `whenObjectAdded` 的契约要求回调是**非惰性**的（DependencySet.addLater 会直接
-//     抛 "Cannot mutate the dependency set in a lazy manner"）。声明层替换必须在这一
-//     刻完成 —— file 依赖一旦进了图，就没有「解析后再摘」的干净时机（见文件开头
-//     三条死路）。
+// 换的方式是 `remove` + `add`（**不是** `useTarget`）：`useTarget()` 属于
+// `DependencySubstitution`，只有 `ModuleDependency` / `ProjectDependency` 才有，
+// file 依赖是 `FileCollectionDependency`，调用直接抛
+//   No signature of method: ...DefaultFileCollectionDependency.useTarget()
+// —— 预热第一遍就是这个红点（cnb-l5r-1k62ama57）。
 //
-// 顺序要紧：先 `add` 坐标依赖、再 `remove` file 依赖。反过来的话，中间那一刻配置里
+// `remove` 的坑在「边迭代边改集合」：`whenObjectAdded` 的回调运行时，`DependencySet`
+// 并不在迭代中（Gradle 先加完再回调），所以这里删自己这一条是安全的；新加的坐标依赖
+// 会再触发一次回调，此时 `patchedCoordinatesFor()` 返回 null（判据落在类型上，不靠状态位），
+// 不会自己咬自己。顺序也保住了：`add` 追加在末尾，同一条依赖块里后面的声明照旧排在它后面。
+//
+// **顺序要紧：先 `add` 坐标依赖、再 `remove` file 依赖。** 反过来的话，中间那一刻配置里
 // 一条依赖都不剩，AGP 随后读声明时可能看到空集合；先 add 则集合始终非空。
+//
+// 别换成 `addLater` —— 它正是下面那条「惰性」限制要挡的写法。
+//
+// `whenObjectAdded` 的契约要求回调是**非惰性**的（DependencySet.addLater 会直接抛
+// "Cannot mutate the dependency set in a lazy manner"）。声明层替换必须在这一刻完成 ——
+// file 依赖一旦进了图，就没有「解析后再摘」的干净时机（见文件开头三条死路）。
 project.configurations.configureEach { configuration ->
     configuration.dependencies.whenObjectAdded { dependency ->
         def coordinates = patchedCoordinatesFor(dependency)
