@@ -150,11 +150,18 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #     报 `set: Illegal option -o pipefail` 以退出码 2 结束整层构建 —— 这一步
 #     在 if 之外，会让整层直接以退出码 2 结束。脚本自己的 shebang 是 bash，
 #     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
+#   * 联网预热用的 GRADLE_USER_HOME 是 /tmp/cnb-warmup-home，必须先把
+#     cnb-cache-only.gradle 放进去：紧接着那次「只看缓存」的复核要用它，而
+#     gradle-proxy.init.gradle.kts 是按 $GRADLE_USER_HOME 找的。少了这一步，复核
+#     就以「脚本缺失」而不是「缓存不全」失败，报错还把人往上面那条 COPY 上引
+#     （第一次跑正是如此，白烧一次整层构建）。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
+    mkdir -p /tmp/cnb-warmup-home; \
     cd /tmp/cnb-warmup; \
     bash -x /opt/cnb/warmup-project.sh; \
     printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
+    cp /opt/gradle-user-home/cnb-cache-only.gradle /tmp/cnb-warmup-home/; \
     if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 600 \
          /opt/gradle/bin/gradle --no-daemon --console=plain --info \
          --init-script /opt/cnb/gradle-init.gradle \
