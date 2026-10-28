@@ -681,6 +681,30 @@ Maven 仓库，把 `app/libs/*-patched.jar` 按**上游坐标 + 高版本号**�
 版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 分段比版本，`patched` 这种非数字段
 排在数字段**之前**，实测 `0.9.9.patched < 0.9.9`，上游反而胜出。
 
+### 「高版本胜出」够不着第二个 group
+
+JitPack 对同一个仓库给两种坐标布局：`com.github.<user>` 与 `com.github.<user>.<repo>`，
+unidbg 两个都在用。`x.y.z.1` 与 `x.y.z` 只有在 **group:module 完全相同**时才会进同一次
+冲突解析；两个 group 是两份互不相干的模块，高版本号对另一个一点作用都没有。
+`cnb-oti-1k625t5fv` 的 Debug 构建报了 333 条重复类，**全部**来自后者：
+
+```
+Duplicate class com.github.unidbg.AbstractEmulator found in modules
+  unidbg-api-0.9.9-android-patched.jar and
+  com.github.zhkl0228.unidbg:unidbg-api:0.9.9
+```
+
+所以 `app/build.gradle.kts` 末尾另有 `configurations.configureEach { exclude(...) }`，
+两个 group × 四个模块逐条点名。写在整个 configuration 上而不是依赖块里：同一坐标有多条
+传递路径（`unicorn2 → unidbg-api → unidbg-android`，`demumble` / `unicorn` 各自也会带），
+逐块写只挡得住自己那一条。
+
+只排这四个模块、不整组排 —— `unicorn:1.0.15` 是 `unicorn.*` 唯一的来源，整组排掉会在
+`session_open` 时 `ClassNotFoundException`。
+
+排查提示：报错里的 group 与 patched jar 的 group 不一致时，先查这条 exclude，
+别往「版本号不够高」上找 —— 那条路对两个 group 天然无效。
+
 ### 三条走不通的路（都实测过）
 
 这才是这次红点的真正来源：前两版都在「解析完之后动 classpath」，而
