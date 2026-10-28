@@ -352,14 +352,22 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
     implementation("org.jsoup:jsoup:1.22.2")
-    // 这四个是上游同名模块的重打包版本。`patchedJar` 返回一个 file 依赖，而
-    // buildSrc 的 somcp.patched-local-jars 会在它被声明的那一刻换成
-    // 「上游坐标 + 高版本号」（`x.y.z.1`）：file 依赖不进图，上游那份就算经
-    // unidbg-api 的 POM 传递依赖进来，冲突解析也只会留下高版本那份，于是
-    // checkDebugDuplicateClasses / mergeDebugJavaResource 不再报同名 class。
-    // 换完之后的坐标依赖由 `<project>/build/patched-jars-repo` 提供 jar 与 POM。
+    // 这四个是上游同名模块的重打包版本，由 buildSrc 的 somcp.patched-local-jars
+    // 在文件依赖**被声明的那一刻**换成「上游坐标 + 高版本号」（`x.y.z.1`）：
+    // file 依赖不进图，上游那份就算经 unidbg-api 的 POM 传递依赖进来，冲突解析
+    // 也只会留下高版本那份，于是 checkDebugDuplicateClasses /
+    // mergeDebugJavaResource 不再报同名 class。坐标依赖的 jar 与 POM 由
+    // `app/libs/build/patched-jars-repo` 提供（目录必须先在，理由见下）。
     // 这里的坐标必须与 buildSrc 那张口径表逐字相同（表是唯一真源，对不上会直接
     // 在配置期报错）。
+    //
+    // **两个文件路径都要在声明时就存在**：Gradle 在 `places files()` 那一刻就把
+    // 它们记成任务的输入，路径不存在会当场抛
+    //   Cannot fingerprint input property '...': file .../libs/xxx.jar does not exist,
+    // 而且是在所有被声明的地方一起抛 —— 一行写错，报错会落到别的依赖上。仓库里
+    // 因此提交了 `app/libs/build/patched-jars-repo/.ignore`：`build/` 是被 .gitignore
+    // 忽略的构建产物、空目录也进不了 git，靠这个空占位文件让目录先在场 —— 声明这四
+    // 个 file 依赖时它已经存在，`files(...)` 记输入就不会遇到不存在的路径。
     implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
     implementation(patchedJar("unidbg-android-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-android:0.9.9.1"))
     implementation(patchedJar("capstone-3.1.8-android-patched.jar", "com.github.zhkl0228:capstone:3.1.8.1"))
