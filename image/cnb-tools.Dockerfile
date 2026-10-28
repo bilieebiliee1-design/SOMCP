@@ -179,6 +179,13 @@ RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
     bash -x /opt/cnb/warmup-project.sh; \
+    mkdir -p release; \
+    printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+        /tmp/cnb-warmup-signing.jks warmup-only warmup-only warmup-only > release/keystore.properties; \
+    keytool -genkeypair -noprompt -storetype JKS \
+        -keystore /tmp/cnb-warmup-signing.jks -alias warmup-only \
+        -keyalg RSA -keysize 2048 -validity 1 \
+        -storepass warmup-only -keypass warmup-only -dname 'CN=warmup' > /dev/null 2>&1; \
     printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
     if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 900 \
          /opt/gradle/bin/gradle --no-daemon --console=plain --info \
@@ -223,7 +230,7 @@ RUN set -eu; \
       exit 1; \
     fi; \
     rm -f /tmp/cnb-warmup.log /tmp/cnb-warmup-offline.log; \
-    cd /; rm -rf /tmp/cnb-warmup /tmp/cnb-warmup-home /root/.gradle; \
+    cd /; rm -rf /tmp/cnb-warmup /tmp/cnb-warmup-home /tmp/cnb-warmup-signing.jks /root/.gradle; \
     du -sh /opt/gradle-user-home
 
 WORKDIR /workspace
