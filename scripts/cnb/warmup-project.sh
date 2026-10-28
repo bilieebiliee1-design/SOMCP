@@ -20,10 +20,9 @@
 # 预热去 Google 找不到 AGP 的 marker，运行期又反过来缺 aliyun 镜像。
 # 用 grep 取整块，取不到就失败（比静默生成一个残缺工程强）。
 #
-# 构建上下文里不带 buildSrc/，:app 脚本里那行 `id("somcp.patched-local-jars")` 在
-# 两遍里都注释掉：插件的实现与声明一旦只剩一边，:app 的脚本就编译不过，而它的
-# dependencies {} 写在 plugins {} 之后 —— 编译不过就一行都求值不到。
-# 详见 disable_buildsrc_plugin() 的注释。
+# :app 脚本里那个 `somcp.patched-local-jars` 插件在第一遍之前整个摘掉（声明、工厂、
+# 调用点三处）：它的实现住在 buildSrc 里，而这份实现按设计只在真构建里生效 ——
+# 插件生成的本地仓库（`x.y.z.1`）不该进镜像缓存。详见 disable_buildsrc_plugin()。
 #
 # 两遍：第一遍用**仓库原样**跑（:app 的真实脚本 + app/libs/ 都在，才解析得到
 # 那一整张依赖图），第二遍才把工程改写成最小形态、再跑一次。
@@ -38,9 +37,8 @@ cd "$DIR"
 # 缓存。手写一份最小 :app 等于自己决定「预热覆盖哪些依赖」，漏掉的那些运行期照样
 # 现场冲网。
 #
-# 所以改写之前做两件事：把 app/libs/ 里的 jar 打印出来（少了它们，
-# files("libs/*-patched.jar") 那两条依赖解析不到），以及停用 buildSrc 的插件
-# （见 disable_buildsrc_plugin）。
+# 所以改写之前做两件事：把 app/libs/ 里的 jar 打印出来（第一遍的真实脚本里
+# 那四条依赖指着它们），以及摘掉 buildSrc 那个插件（见 disable_buildsrc_plugin）。
 prepare_runtime_layout() {
   mkdir -p app
   [ -f app/build.gradle.kts ] \
@@ -93,24 +91,75 @@ warm_build() {
 # 现在第一遍按仓库原样把它编译一遍（marker 进缓存），第二遍再换成占位
 # （stage_buildsrc_placeholder），保证「预热的工程形状 = 运行期的工程形状」。
 disable_buildsrc_plugin() {
-  if grep -q 'somcp\.patched-local-jars' app/build.gradle.kts; then
-    # 注释加在**行尾**，不是整行替换：行号不能动。app 脚本里 :app 的签名配置用
-    # `releaseKeystoreProperties.getProperty(...)` 读 release/keystore.properties，
-    # 而那个文件在 Dockerfile 里是先 `mkdir -p release` 写好、再跑本脚本的 ——
-    # 文件在、内容在，写的却是一次性的 CI 临时 keystore（第一个下标的 jar 也正
-    # 躺在 app/libs 里），:app 的脚本本来就能完整求值。整行替换成一个空格加注释，
-    # 缩进、列位、行号全变，Kotlin DSL 里行号/列位是有意义的（报错定位、行内
-    # 语义），没有任何理由为了行尾一句话去改它们。
-    sed -i 's|^\([[:space:]]*\)id("somcp\.patched-local-jars".*$|\1// [cnb-warmup] disabled: &|' app/build.gradle.kts
-    # 判据从「那行 id(...) 没了」改成「它被注释掉了」：行尾追加意味着原文还在，
-    # 只按 `^[[:space:]]*id("somcp.patched-local-jars")` 去找会永远命中，把
-    # 「sed 什么都没改」放过去 —— 断言必须看行首有没有被注释符挡住。
-    if grep -qE '^[[:space:]]*id\("somcp\.patched-local-jars"' app/build.gradle.kts; then
-      echo "[warmup] ERROR: could not disable somcp.patched-local-jars in the app script" >&2
-      exit 1
-    fi
-    echo "[warmup] disabled somcp.patched-local-jars in the warmup app script"
+  local script=app/build.gradle.kts
+  grep -q 'somcp\.patched-local-jars' "$script" \
+    || return 0
+  # 三处一起删，判据是「删完还能解析」而不是「删了哪几行」：
+  #   * `id("somcp.patched-local-jars")` —— 插件声明；
+  #   * `val patchedJar = ... patchedLocalJarDependency ...` 那段工厂 —— 插件不 apply
+  #     时 `project.ext` 上根本没有这个属性，取出来是 null，非空转换当场抛
+  #     `null cannot be cast to non-null type groovy.lang.Closure<*>`（报错点落在这行
+  #     lambda，看着跟插件毫无关系）；
+  #   * 调用它的那几行 `implementation(patchedJar(...))` —— 工厂没了就没人能认它们。
+  #
+  # **不能改成「保留工厂、换成同坐标字符串」**（`neutralize_patched_factory` 那一版）：
+  # 那样第一遍解析的就是 `x.y.z.1`，而这份本地仓库要靠插件生成，插件又必须删掉 ——
+  # 于是 `Searched in` 里一个仓库都不认 `.1`，报「找不到依赖」。
+  #
+  # 删掉这四条依赖不会让依赖图失真：patched jar 就是上游同名模块的重打包版本，
+  # 上游 `unidbg-android:0.9.9` 会经 unidbg-unicorn2 的传递依赖自己进来，它带出的
+  # 传递依赖（apk-parser / jna / demumble …）一条不少，与运行期只差「同名的那份
+  # 字节」—— 而预热要的是坐标，不是字节。
+  sed -i \
+    -e '/id("somcp\.patched-local-jars")/d' \
+    -e '/^[[:space:]]*implementation(patchedJar(/d' \
+    "$script"
+
+  # 工厂那一块连同它上面的注释一起吃掉：逐行删 `val patchedJar` 会留下孤立的注释
+  # 和没有主人的 `}`，Kotlin DSL 当场编译失败。按花括号配平整块删，另加一条判据：
+  # 被删的块只能有那两行 var（`val` + 注释），多一行就说明配方变了，收工报错比
+  # 静默留下半块强。
+  awk '
+    /^val patchedJar: \(String, String\)/ { in_factory = 1; depth = 0 }
+    in_factory {
+      depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+      dropped++
+      if (depth <= 0) { in_factory = 0 }
+      next
+    }
+    { print }
+    END { if (in_factory) exit 3; if (dropped > 0 && dropped < 3) exit 4 }
+  ' "$script" > "$script.cnb-strip" 2>/dev/null || {
+    rm -f "$script.cnb-strip"
+    echo "[warmup] ERROR: unexpected shape of the patchedJar factory in the app script" >&2
+    exit 1
+  }
+  mv "$script.cnb-strip" "$script"
+  # 那几段说明注释放着没意义（读的人会去找一个已经不在的东西），一并删：
+  # 工厂上面两行、依赖块里解释 patchedJar 的那一段。
+  sed -i \
+    -e '/buildSrc 的 somcp\.patched-local-jars 把工厂挂在 project.ext 上/d' \
+    -e '/Kotlin DSL 访问 ext 属性必须走 extraProperties/d' \
+    -e '/这四个是上游同名模块的重打包版本/d' \
+    -e '/buildSrc 的 somcp\.patched-local-jars 会在它被声明的那一刻换成/d' \
+    -e '/「上游坐标 + 高版本号」（`x\.y\.z\.1`）：file 依赖不进图/d' \
+    -e '/unidbg-api 的 POM 传递依赖进来，冲突解析也只会留下高版本那份/d' \
+    -e '/checkDebugDuplicateClasses \/ mergeDebugJavaResource 不再报同名 class/d' \
+    -e '/换完之后的坐标依赖由 `<project>\/build\/patched-jars-repo` 提供/d' \
+    -e '/这里的坐标必须与 buildSrc 那张口径表逐字相同/d' \
+    -e '/在配置期报错）。/d' \
+    "$script"
+  # 断言：两类痕迹一行不剩，且脚本里的花括号仍然配平。`patchedJar` 这个词单独
+  # 不查 —— 上面那几行注释里出现过，查它等于把「注释删干净了」也当成失败。
+  if grep -nE 'somcp\.patched-local-jars|patchedLocalJarDependency|patchedJar\(' "$script"; then
+    echo "[warmup] ERROR: patched-jar leftovers above; the app script would not compile" >&2
+    exit 1
   fi
+  local balance
+  balance="$(tr -cd '{}' < "$script" | awk '{ n = gsub(/\{/, "{"); m = gsub(/\}/, "}"); print n - m }')"
+  [ "$balance" = "0" ] \
+    || { echo "[warmup] ERROR: app script braces unbalanced (${balance}) after stripping the patched-jar block" >&2; exit 1; }
+  echo "[warmup] app script: patched-jar plugin, factory and call sites removed"
 }
 
 # --- 第二遍：buildSrc 换成占位（不删） ---------------------------------------
@@ -166,79 +215,6 @@ stage_buildsrc_placeholder() {
   } > buildSrc/build.gradle.kts
   rm -f buildsrc-repositories.tmp
   echo "[warmup] buildSrc/ replaced with a marker-only placeholder (same plugin as the repo)"
-}
-
-# --- patched jar 的本地仓库：预热的第二遍也要能解析 x.y.z.1 -------------------
-# 运行期这份仓库由 buildSrc 的插件在 `app/build/patched-jars-repo` 生成；预热第二遍
-# 用的是占位 buildSrc（不产出任何插件），settings.gradle.kts 里那条
-# `somcpPatchedLocal` 就指向一个空目录，第二遍的坐标依赖因此解析不到 `.1`。
-#
-# 这里按同一个布局自己造一份：口径表直接从仓库应用脚本的 somcpPatchedJars 表里
-# 读（group:module:version 与 jar 文件名一一对应），jar 从 app/libs/ 复制，POM 用
-# 最小写的（上游那份 POM 是上游模块自己的事，本地仓库只声明「有这么个构件」）。
-# 表读不到就跳过：那说明应用脚本换了写法，预热只覆盖上游坐标，判据交给第一遍。
-#
-# 排在 disable_buildsrc_plugin / stage_buildsrc_placeholder 之前：口径表就住在
-# buildSrc/src 里，第二遍那道会把整个目录换掉，排在后面就永远读不到表，只剩一句
-# WARNING，第二遍解析 `.1` 时才会报「找不到依赖」—— 跟真正的原因隔着十万八千里。
-publish_patched_local_repo() {
-  local app_script=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
-  local target_dir=app/build/patched-jars-repo
-  if [ ! -f "$app_script" ]; then
-    echo "[warmup] WARNING: buildSrc plugin not in the context; patched x.y.z.1 stays unresolved in pass 2" >&2
-    return 0
-  fi
-  rm -rf "$target_dir"
-  local published=0
-  while IFS=$'\t' read -r jar_name coordinates; do
-    [ -n "$jar_name" ] || continue
-    [ -f "app/libs/$jar_name" ] \
-      || { echo "[warmup] ERROR: app/libs/$jar_name missing for $coordinates" >&2; exit 1; }
-    local group module version dir
-    group="${coordinates%%:*}"; coordinates="${coordinates#*:}"
-    module="${coordinates%%:*}"; version="${coordinates#*:}"
-    dir="$target_dir/${group//./\/}/$module/$version"
-    mkdir -p "$dir"
-    cp "app/libs/$jar_name" "$dir/$module-$version.jar"
-    printf '<?xml version="1.0" encoding="UTF-8"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>%s</groupId>\n  <artifactId>%s</artifactId>\n  <version>%s</version>\n  <packaging>jar</packaging>\n</project>\n' \
-      "$group" "$module" "$version" > "$dir/$module-$version.pom"
-    published=$((published + 1))
-  done < <(sed -n -e "s/^[[:space:]]*'\([^']*\.jar\)'[[:space:]]*:[[:space:]]*'\([^']*\)'[[:space:]]*,*[[:space:]]*$/\1\t\2/p" "$app_script")
-  echo "[warmup] published $published patched jar(s) into $target_dir"
-}
-
-# --- patched jar 的工厂：插件停用之后换成普通坐标 -----------------------------
-# 停用 somcp.patched-local-jars 只挡住了 plugins {} 那一行 ——
-#     implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
-# 照常求值，而工厂挂在 project.ext 上（插件 apply 时才挂），于是第一次红在
-#     line 327: Cannot invoke "Object.toString()" because the return value of
-#     "org.gradle.api.plugins.ExtraPropertiesExtension.get(Object)" is null
-# dependencies {} 在 Kotlin DSL 里是脚本编译完就执行的代码，光注释插件不够。
-#
-# 换成**同坐标的普通字符串依赖**：上游版本照旧从真仓库解析（:app 的依赖图因此
-# 完整），`.1` 版本由预热工程自己生成的本地仓库提供 —— 判据仍然是「这几条依赖
-# 能不能解析」，只是不再依赖一个预热工程里根本不存在的插件。
-neutralize_patched_factory() {
-  local script=app/build.gradle.kts
-  grep -q '^val patchedJar: (String, String) -> Any = { fileName' "$script" \
-    || { echo "[warmup] ERROR: patchedJar factory not found in the app script" >&2; exit 1; }
-  # 定界符是行首的 `val patchedJar ... {` 与紧随其后的一个 `}`：函数体只有四行，
-  # 往后多扫一行就会把 `dependencies {}` 也吞掉 —— 那正是「预热只做了一半」那个坑。
-  awk '
-    /^val patchedJar: \(String, String\) -> Any = \{ fileName/ {
-      print "// [cnb-warmup] patchedJar replaced: the buildSrc plugin is not applied in the warmup project."
-      print "val patchedJar: (String, String) -> Any = { _: String, coordinates: String -> coordinates }"
-      swap = 1
-      next
-    }
-    swap && /^[[:space:]]*\}[[:space:]]*$/ { swap = 0; next }
-    swap { next }
-    { print }
-  ' "$script" > "$script.cnb-rewrite"
-  mv "$script.cnb-rewrite" "$script"
-  grep -q '^val patchedJar: (String, String) -> Any = { fileName' "$script" \
-    && { echo "[warmup] ERROR: could not neutralize the patchedJar factory" >&2; exit 1; }
-  echo "[warmup] patchedJar factory neutralized; patched jars resolve by coordinate"
 }
 
 # --- 先把 SDK / namespace 读出来 --------------------------------------------
@@ -374,15 +350,13 @@ SETTINGS
 
 # --- 两遍执行 ---------------------------------------------------------------
 # 顺序不能换，理由见各自函数的注释：
-#   1. prepare_runtime_layout → publish_patched_local_repo → disable_buildsrc_plugin
-#      → neutralize_patched_factory → rewrite_root_script → cold_build
+#   1. prepare_runtime_layout → disable_buildsrc_plugin → rewrite_root_script
+#      → cold_build
 #      （仓库原样，联网，失败即整层失败）
 #   2. stage_buildsrc_placeholder → simplify_* → warm_build（最小工程，只打 WARNING）
 echo "[warmup] pass 1/2: repository as-is (app/build.gradle.kts + app/libs)"
 prepare_runtime_layout
-publish_patched_local_repo
 disable_buildsrc_plugin
-neutralize_patched_factory
 rewrite_root_script
 if cold_build > /tmp/cnb-warmup.log 2>&1; then
   echo "[warmup] pass 1 OK: repository as-is"

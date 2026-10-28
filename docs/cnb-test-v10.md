@@ -267,10 +267,11 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
   插件版本、仓库声明与重试参数
 - `buildSrc/` —— **整目录进上下文**。预热第一遍按仓库原样跑，真实 `buildSrc` 连插件
   marker 一起下进缓存（运行期每个 stage 都要真的编译它，`--offline` 复核读的就是
-  这份缓存）；第二遍才换成占位，插件 id 与仓库列表都从这份源码读出来。其中
-  `src/main/groovy/somcp.patched-local-jars.gradle` 还有第二个用途：口径表
-  （jar 文件名 ↔ 上游坐标）在里面，`warmup-project.sh` 按它自己造一份 `x.y.z.1`
-  的本地仓库
+  这份缓存）；第二遍才换成占位，插件 id 与仓库列表都从这份源码读出来。
+  `src/main/groovy/somcp.patched-local-jars.gradle` 只为「运行期要编译」进上下文：
+  预热工程里**不 apply 它、也不解析它生成的 `x.y.z.1`**，`warmup-project.sh` 在第一遍
+  之前就把 `:app` 里那行 `id(...)`、`patchedJar` 工厂和四条调用一起摘掉 ——
+  `.1` 只存在于真构建才生成的那个本地仓库里，进不了镜像缓存
 - `app/build.gradle.kts` 与 `app/libs/` —— 预热**第一遍按仓库原样跑**，`:app` 的真实
   脚本要求值一次，才能把 androidx / compose / ktor / okhttp 与
   `files("libs/*-patched.jar")` 解析掉。第二遍才换成生成的
@@ -414,16 +415,26 @@ Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
 一行都求值不到（`val releaseKeystoreProperties` 就在 `plugins {}` 后面），
 androidx / compose / ktor / okhttp 全没进缓存，而日志只看得到一句插件找不到。
 
-所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 只断「声明」这一半：
-把那行 `id("somcp.patched-local-jars")` **行尾注释掉**（`// [cnb-warmup] disabled: …`，
-行首、缩进、行号一律不动），随后 grep 断言行首已经不是 `id(...)`；改了仓库写法让
-sed 失配时报错退出，不静默放行。目录这一半不能断 —— 第一遍正需要它被编译。
+所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 在第一遍之前把三处一起摘掉：
 
-停用插件之后 patched jar 还得能解析，所以另有两条：`neutralize_patched_factory()`
-把 `patchedJar(...)` 工厂换成「直接返回坐标字符串」（工厂挂在 `project.ext` 上，
-只有插件 apply 时才挂），`publish_patched_local_repo()` 按 `somcpPatchedJars` 口径表
-自己造一份 `app/build/patched-jars-repo`，第二遍才解析得到 `x.y.z.1`。后者必须排在
-换占位**之前** —— 口径表就住在 `buildSrc/src` 里。
+| 摘什么 | 不摘会怎样 |
+| --- | --- |
+| `plugins {}` 里那行 `id("somcp.patched-local-jars")` | 脚本编译期直接失败（上面的第二种） |
+| `val patchedJar: (String, String) -> Any = { … patchedLocalJarDependency … }` | 插件不 apply，`project.ext` 上没有这个属性，取出来是 `null`，非空转换当场抛 `null cannot be cast to non-null type groovy.lang.Closure<*>` —— 报错落在这个 lambda 上，跟插件看着毫无关系 |
+| 四条 `implementation(patchedJar(...))` | 工厂没了，Kotlin DSL 报未解析的引用 |
+
+摘完之后 grep 断言这三类痕迹一行不剩，再用 `tr -cd '{}'` 数花括号配平 —— 逐行删
+很容易留下孤立的注释与没有主人的 `}`，而这种残缺在预热里只会表现为
+「脚本编译失败」，离真正的原因很远。
+
+**不能改成「保留工厂、换成同坐标字符串」**（`neutralize_patched_factory` 那一版）：
+那样第一遍解析的就是 `x.y.z.1`，而这份本地仓库要靠插件生成，插件又必须摘掉 ——
+`Searched in` 里一个仓库都不认 `.1`，报的是「找不到依赖」。
+
+摘掉这四条不影响判据：patched jar 就是上游同名模块的重打包版本，上游
+`unidbg-android:0.9.9` 会经 `unidbg-unicorn2` 的传递依赖自己进来，它的传递依赖
+（apk-parser / jna / demumble …）一条不少。预热要的是「这些坐标能不能解析到」，
+不是「字节是哪一份」。
 
 ## 预热分两遍：第一遍按仓库原样跑
 
@@ -516,7 +527,9 @@ Dockerfile 走，Dockerfile 一改 `docker:cache` 的 key 就变，overlay 从�
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
 | `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
 | `Plugin [id: '...', version: '...'] was not found`，`Searched in` 里没有 Google | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
-| `Plugin [id: 'somcp.patched-local-jars'] was not found ... (plugin dependency must include a version number for this source)`，落在 `app/build.gradle.kts` 的 `plugins {}` 上（`cnb-hkj-1k624u580`） | 预热工程删了 `buildSrc/` 却留下 `:app` 那行 `id(...)`，整段脚本编译不过 | `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把该行行尾注释掉（不动缩进与行号）并 grep 断言，已修 |
+| `Plugin [id: 'somcp.patched-local-jars'] was not found ... (plugin dependency must include a version number for this source)`，落在 `app/build.gradle.kts` 的 `plugins {}` 上（`cnb-hkj-1k624u580`） | 预热工程删了 `buildSrc/` 却留下 `:app` 那行 `id(...)`，整段脚本编译不过 | `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把声明、工厂、调用点三处一起摘掉并断言，已修 |
+| `null cannot be cast to non-null type groovy.lang.Closure<*>`，落在 `app/build.gradle.kts` 的 `val patchedJar = …` 那行（`cnb-ooc-1k626h4rl`） | 只摘了插件声明，工厂与四条 `implementation(patchedJar(...))` 还在求值；插件不 apply 时 `project.ext` 上没有那个属性 | 同上，三处一起摘；花括号配平单独断言，已修 |
+| `Duplicate class com.github.unidbg.*` 同时出现在 `*-patched.jar` 与上游坐标里（`cnb-oti-1k625t5fv`） | patched jar 用 `files()` 声明，Gradle 认不出它顶替的是哪个模块；`.1` 坐标没有进图 | `somcp.patched-local-jars` 在 `whenObjectAdded` 里把 file 依赖换成坐标依赖，并生成带 POM 的本地仓库，已修 |
 | `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven 镜像的 200 空壳挡住 AGP marker | 插件侧改挂 `repository/gradle-plugin`（对 AGP marker 返 404），见「插件解析与依赖解析不能用同一个镜像」 |
 | `Plugin [id: 'org.jetbrains.kotlin.plugin.compose' ...] was not found`，`Searched in` 里有 google 镜像 | `repository/google` 里没有 Kotlin 插件 marker | 同上 |
 | 镜像层预热 warning 里出现 `fus-statistics-gradle-plugin:2.4.0` 的 429 | 预热工程缺 `dependencyResolutionManagement`，插件 buildscript classpath 只剩隐式 `MavenRepo` | `scripts/cnb/warmup-project.sh` 补上该段，已修 |
@@ -662,10 +675,24 @@ buildSrc 是 **included build**：不继承 `settings.gradle.kts` 的 `pluginMan
 
 ### 现在的做法
 
-判据从「事后从 classpath 上摘文件」改成「**让上游那份根本不进图**」：
-`buildSrc/src/main/groovy/somcp.patched-local-jars.gradle`（预编译脚本插件，Gradle 自带的
-`groovy-gradle-plugin`，零外部插件依赖）在 `app/build/patched-jars-repo` 生成一个最小
-Maven 仓库，把 `app/libs/*-patched.jar` 按**上游坐标 + 高版本号**发布：
+判据是「**让上游那份根本不进图**」，分两半，缺一不可。
+
+**A. 声明层替换。** `app/build.gradle.kts` 里那四条依赖写成
+
+```kotlin
+implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
+```
+
+`patchedJar` 住在 `buildSrc/src/main/groovy/somcp.patched-local-jars.gradle`（预编译脚本插件，
+用 Gradle 自带的 `groovy-gradle-plugin`，零外部插件依赖）。它返回一个 file 依赖，插件在
+`configurations.configureEach { dependencies.whenObjectAdded { … } }` 里**当场**把同名文件
+依赖换成坐标依赖：file 依赖根本不进图，上游那份没有东西跟它并存。
+
+为什么是「声明时」而不是「解析后」：见下一节三条死路。`whenObjectAdded` 在解析之前跑，
+读的是声明里那个文件，既不用翻解析结果，也不会在配置缓存序列化时被重新求值。
+
+**B. 坐标能解析到 patched 内容。** 插件同时在 `app/build/patched-jars-repo` 生成一个最小
+Maven 仓库：
 
 | patched jar | 坐标 |
 | --- | --- |
@@ -674,9 +701,15 @@ Maven 仓库，把 `app/libs/*-patched.jar` 按**上游坐标 + 高版本号**�
 | `capstone-3.1.8-android-patched.jar` | `com.github.zhkl0228:capstone:3.1.8.1` |
 | `keystone-0.9.7-android-patched.jar` | `com.github.zhkl0228:keystone:0.9.7.1` |
 
-`settings.gradle.kts` 里这个仓库排在 google / mavenCentral / jitpack **之后**。上游版本照样
-从前面的仓库解析，`0.9.9.1` 只有本地仓库有；同名模块两个版本都进了图，Gradle 按
-「高版本胜出」只留 patched 那份 —— `unidbg-api:0.9.9 -> 0.9.9.1`，上游那份从图上消失。
+`settings.gradle.kts` 里这个仓库排**第一**：`.1` 只有这里有，命中即停，不必让每个 `.1`
+都去 google / Central / JitPack 各撞一次 404（冷启动撞的是 Central 的 429，会直接判死）。
+上游的 `x.y.z` 在这里确实没有，照样落到后面的真仓库。
+
+生成仓库那份 POM **必须带 dependencies**：Gradle 眼里 `x.y.z.1` 是个全新模块，上游 POM 的
+依赖不会自动搬过来。所以插件里另有一张 `somcpPatchedPomDependencies`，逐条照抄上游 POM
+中非 test scope 的条目。最典型的是 `capstone:3.1.8.1` —— 它在坐标世界里没有第二个声明方
+（`unidbg-unicorn2` 那三条 `exclude` 就是证据），空壳 POM 会让它的 `jna` /
+`native-lib-loader` 整片消失，编译或许还过，运行期 JNA 那条路径直接找不到类。
 
 版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 分段比版本，`patched` 这种非数字段
 排在数字段**之前**，实测 `0.9.9.patched < 0.9.9`，上游反而胜出。
@@ -715,13 +748,15 @@ error writing value of type
 
 一句话：**必须让上游那份根本不进图**，而不是在最后一步把它藏起来。
 
-三条不变量写在插件头部注释里，改之前先读：
+四条不变量写在插件头部注释里，改之前先读：
 
 1. `somcpPatchedJars` 是唯一口径表：文件名 ↔ 上游坐标，改 jar 必须两边一起改。表外的一律
    不处理 —— `unicorn:1.0.15` 是 `unicorn.*` 唯一的来源（见 `app/build.gradle.kts` 里那段
    注释），谁替掉它 `session_open` 就 `ClassNotFoundException`。
 2. 版本号必须是 `<上游版本>.1`（纯数字追加段）。
-3. 生成仓库必须在 `settings.gradle.kts` 的仓库列表里、且排在真仓库之后。
+3. 生成仓库必须在 `settings.gradle.kts` 的仓库列表里（排第一，理由见上）。
+4. `somcpPatchedPomDependencies` 与上游 POM 的 `<dependencies>` 一一对应（不含 test scope）。
+   上游升级时两张表一起改 —— 漏抄的那条只会在运行期以 `ClassNotFoundException` 出现。
 
 **buildSrc 的插件选择因此被限制住了**：只能用 `groovy-gradle-plugin`，不能用 `kotlin-dsl`。
 后者要从 Portal 拿 marker，而 `--offline` 复核读的是预热出来的用户目录，那里没有它。
@@ -740,21 +775,20 @@ Build file '/tmp/cnb-warmup/app/build.gradle.kts' line: 328
 null cannot be cast to non-null type groovy.lang.Closure<*>
 ```
 
-所以 `warmup-project.sh` 做两件事：
+所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把声明、工厂、调用点三处
+一起摘掉（做法与判据见上文「预热分两遍」那一节）。
 
-1. `neutralize_patched_factory()` —— 把工厂换成同坐标的普通字符串依赖
-   （`{ _: String, coordinates: String -> coordinates }`）。上游版本照旧从真仓库解析，
-   `:app` 的依赖图因此是完整的；`.1` 版本由第 2 步提供。
-2. `publish_patched_local_repo()` —— 预热工程自己造那份本地仓库。
-   口径表直接从 `buildSrc/src/main/groovy/somcp.patched-local-jars.gradle` 读
-   （`.cnb.yml` 的 `by` / `versionBy` 里显式声明了这一个文件，整个 `buildSrc/` 仍然不进
-   上下文、也不会被当 included build 编译），jar 从 `app/libs/` 复制，POM 写最小的。
-   顺序很要紧：**必须在 `disable_buildsrc_plugin` 之前**，那个函数第一步就是
-   `rm -rf buildSrc`，反过来就永远读不到口径表。
+**试过一次「换成同坐标字符串」：不行。** 那一版把工厂改成
+`{ _: String, coordinates: String -> coordinates }`，再由预热工程自己造一份
+`app/build/patched-jars-repo` 供第二遍解析。表面上「依赖图完整」，实则第一遍就在
+`x.y.z.1` 上失败 —— 那份本地仓库由插件生成，而插件在预热里必须摘掉，
+于是第二个仓库列表里一个仓库都不认 `.1`：
 
-第二遍（最小工程）里 `settings.gradle.kts` 那条 `somcpPatchedLocal` 因此指向一个
-**真的有内容**的目录，`x.y.z.1` 能解析；第一遍则连这两个改动都不需要 —— 它跑的就是
-换过工厂的真实脚本。
+```
+Could not find com.github.zhkl0228:unidbg-api:0.9.9.1
+```
+
+结论：`x.y.z.1` 只属于真构建，镜像缓存里不该有它。
 
 **顺带补的一处**：镜像预热工程会生成一个一次性 keystore
 （`release/keystore.properties` + `keytool -genkeypair`）。`:app` 的配置阶段要读
