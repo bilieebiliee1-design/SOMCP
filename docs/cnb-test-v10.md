@@ -723,6 +723,18 @@ POM 就多一条把上游同名模块吊回图的路径，而下面那组 `exclu
 版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 分段比版本，`patched` 这种非数字段
 排在数字段**之前**，实测 `0.9.9.patched < 0.9.9`，上游反而胜出。
 
+`jna` 那一条在 POM 里还要多写一个 `<type>aar</type>`。`:app` 自己声明的是
+`jna:5.10.0@aar`，POM 里不带 type 的传递依赖会另外解析出一份 jar，两份都上 classpath：
+
+```
+Duplicate class com.sun.jna.AltCallingConvention found in modules
+  jna-5.10.0.aar -> jna-5.10.0-runtime (net.java.dev.jna:jna:5.10.0) and
+  jna-5.10.0.jar -> jna-5.10.0 (net.java.dev.jna:jna:5.10.0)
+```
+
+上游 POM 的 `<packaging>aar</packaging>` 只描述模块自身，传不到传递依赖上 —— 这条只能
+在 patched 的 capstone / keystone POM 里显式写出来。
+
 ### 「高版本胜出」够不着第二个 group
 
 JitPack 对同一个仓库给两种坐标布局：`com.github.<user>` 与 `com.github.<user>.<repo>`，
