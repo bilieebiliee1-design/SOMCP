@@ -71,10 +71,16 @@ def PLUGIN_CENTRAL_MIRROR_URLS = [
 
 // 追加镜像。`all {}` 会在每次往仓库列表里新增仓库后被回调，所以这个闭包会被
 // 重复调用：用 findByName 挡住重复添加。
+//
+// 但**一个 `all {}` 回调只保证跑一次**：在回调里加仓库不会让它再被调用，所以
+// 不能指望 `addMirrors` 加完第一个就停、下一轮由回调替它补第二个 —— 实测
+// pluginManagement 里只剩 `cnb-plugin-mirror-0` 与 `cnb-plugin-central-mirror-0`，
+// `/gradle-plugin` 那条镜像根本没出现。改成让 `addMirrors` 自己循环到干不动为止：
+// `all {}` 负责起头，`addMirrors` 负责加完，任何一方先退出都不影响结果。
 def addMirrors = { repositories, urls, prefix ->
     urls.eachWithIndex { url, i ->
         def name = prefix + i
-        if (!repositories.findByName(name)) {
+        while (!repositories.findByName(name)) {
             repositories.maven { repo ->
                 repo.name = name
                 repo.url = url
