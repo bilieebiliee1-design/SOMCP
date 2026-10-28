@@ -67,15 +67,20 @@ fi
 # 连 SDK/NDK 一起重建），改为在这里用 --offline 复跑一次 `gradle help` ——
 # 离线跑得通，说明插件与构建期依赖确实都在用户目录里；跑不通就是缓存不完整，
 # 当场失败，报错点比后面某个 stage 的 "Plugin ... was not found" 近得多。
-# 这一条和原工作流 setup-gradle 的判据等价：缓存拿不到就退回联网解析，
-# 这里则是明确报错，指向需要重跑的下游步骤。
+#
+# 必须跟运行期同一条路：`scripts/cnb/gradle.sh`（同一个 API 级 init script →
+# 必要时走代理）+ 预热自己用的那份 init script。早先这里跑的是**裸 gradle**，
+# 既不给 proxy init script 也不给 api-version 对齐，于是预热带代理、复核不带，
+# 两边根本不是同一个判据；而镜像里 GRADLE_USER_HOME 也不是 bash 的 export，
+# 裸 gradle 读不到。改为直接复用 shim：shim 里已经 cd 到工作区并透传参数。
 WARMUP_CHECK="${GRADLE_WARMUP_CHECK:-1}"
 if [ "$WARMUP_CHECK" = "1" ]; then
-  if ( cd "$WS" && gradle --offline --no-daemon --console=plain -q help > /tmp/cnb-warmup-check.log 2>&1 ); then
+  if ( cd "$WS" && GRADLE_USER_HOME="$GRADLE_USER_HOME" \
+       bash scripts/cnb/gradle.sh --offline -q help > /tmp/cnb-warmup-check.log 2>&1 ); then
     log "gradle user home: warmup cache verified (offline help OK)"
   else
     tail -n 40 /tmp/cnb-warmup-check.log >&2 || true
-    fail "gradle warmup cache is incomplete: \`gradle --offline help\` failed. The image warmup step (image/cnb-tools.Dockerfile) did not finish; rebuild the base image (docker:cache) rather than retrying the pipeline"
+    fail "gradle warmup cache is incomplete: \`gradle --offline help\` failed. The image warmup step (image/cnb-tools.Dockerfile) did not finish; rebuild the base image (docker:cache) rather than retrying the pipeline (set GRADLE_WARMUP_CHECK=0 to skip this check while debugging)"
   fi
   rm -f /tmp/cnb-warmup-check.log
 fi
