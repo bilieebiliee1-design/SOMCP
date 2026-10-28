@@ -481,3 +481,75 @@ cnbCacheOnlyCheck requested but /root/.gradle/cnb-cache-only.gradle is missing
 
 **init script 里没法自省「我在哪个用户目录」** —— system property 是在 init script
 求值之后才应用的，此刻读到的还是启动时的旧值，所以路径只能靠显式参数给。
+
+## 打补丁的 unidbg jar 必须带 module 元数据（Debug 构建的重复类）
+
+`Debug 构建` 第一次真正跑起来时挂在这里：
+
+```
+Execution failed for task ':app:checkDebugDuplicateClasses'.
+> Duplicate class com.github.unidbg.AbstractEmulator found in modules
+    unidbg-api-0.9.9-android-patched.jar and com.github.zhkl0228.unidbg:unidbg-api:0.9.9
+Execution failed for task ':app:mergeDebugJavaResource'.
+> 2 files found with path 'android/sdk23/system/usr/share/zoneinfo/tzdata' from inputs:
+    - unidbg-android-0.9.9-android-patched.jar
+    - com.github.zhkl0228.unidbg:unidbg-android:0.9.9
+```
+
+看起来像「CI 把依赖装重了」，其实是 `app/build.gradle.kts` 里一直存在的写法问题：
+
+```kotlin
+implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
+```
+
+`files()` 的依赖**不参与冲突检测** —— Gradle 不知道它和 Maven 上的
+`com.github.zhkl0228:unidbg-api` 是同一个模块。而上游那份会经
+`unidbg-unicorn2` → `unidbg-api` 的 POM 传递依赖自动进来，于是同一个包被两份
+jar 提供，AGP 的 `checkDebugDuplicateClasses` 与 `mergeDebugJavaResource`
+双双失败。`capstone` / `keystone` / `net.java.dev.jna:jna` 是同一个病的另三处
+（后者的 aar 与 jar 也同时上了 classpath）。
+
+至于「为什么 GitHub 上一直是绿的」：Gradle 只有在**拿不到 POM** 时才会把依赖当成
+无元数据模块，无元数据模块不参与冲突检测、双方并存也能编译过。CNB 的镜像预热把
+POM 缓存了下来（这正是预热该做的事），真实依赖图第一次完整出现，问题才暴露。
+**这是被预热照出来的真 bug，不是预热引入的问题。**
+
+修法是把这四个 jar 发布成**带 module 元数据的同版本模块**：
+
+- `buildSrc/src/main/kotlin/SomcpPatchedLocalJarsPlugin.kt`（插件 id
+  `somcp.patched-local-jars`）在配置期把
+  `app/libs/*-patched.jar` 复制成 `buildSrc/build/patched-jar-repository/` 下的
+  Maven 布局，连同 `.module` 文件（写明 `org.gradle.jvm.environment=android`
+  与 usage/libraryelements，AGP 靠这几个属性认出「同一个模块」）；
+- `settings.gradle.kts` 的 `somcpPatchedLocalJars` 指向该目录，且必须排在
+  `google()` / `mavenCentral()` **之前** —— 本地这份与上游同为 0.9.9，同版本
+  冲突解析取「先见到的那个」，排后面就轮不到它。CNB 上还多一步：
+  `scripts/cnb/gradle-init.gradle` 把它提到所有 `cnb-*-mirror-*` 之前，
+  `gradle-cache-only.gradle` 的「只看缓存」复核则把它原样保留（它不是缓存）；
+- `app/build.gradle.kts` 改用坐标声明：
+
+```kotlin
+implementation("com.github.zhkl0228:unidbg-api:0.9.9")
+implementation("com.github.zhkl0228:unidbg-android:0.9.9")
+implementation("com.github.zhkl0228:capstone:3.1.8")
+implementation("com.github.zhkl0228:keystone:0.9.7")
+```
+
+依赖图因此与打补丁前**逐条一致**：这些模块的传递依赖（unicorn / commons-codec /
+fastjson / demumble）本来就在 `app/build.gradle.kts` 里显式声明过。
+
+`net.java.dev.jna:jna` 多一条尾巴：aar 与 jar 是**同一个模块的两个 artifact**，
+冲突解析按模块算、永远「同版本」，救不了。所以把 jar 从上述四个模块的传递依赖里
+`exclude` 掉，只留 `@aar`（它带 `libjnidispatch.so`）。不能反过来用
+`files.removeIf` 删 jar —— 那会把 `.so` 一起删掉，APK 运行期才炸。
+
+验证（本机 JDK 17 + Gradle 9.6.1 + SDK 36）：
+
+- `:app:checkDebugDuplicateClasses` 与 `:app:mergeDebugJavaResource` 从 117/2 条
+  重复降到 0；
+- `:app:assembleDebug`、`:app:assembleRelease`、`:app:testDebugUnitTest`、
+  `:app:lintDebug` 全绿；
+- 拆开 `app-universal-debug.apk` 核对：`lib/<abi>/libjnidispatch.so` 在
+  （x86_64 那份），`com.github.unidbg.*` 的 966 个类在单个 dex 里各只有一份，
+  且 `com.github.unidbg.mcp`（只存在于本地 patched jar）在内 —— 证明生效的是
+  打补丁那一份，不是上游那份。

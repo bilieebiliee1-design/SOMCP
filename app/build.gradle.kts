@@ -17,6 +17,8 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    // 把 app/libs/*-patched.jar 发布成带 module 元数据的依赖（buildSrc）。
+    id("somcp.patched-local-jars")
 }
 
 val releaseKeystoreProperties = Properties().apply {
@@ -335,10 +337,32 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
     implementation("org.jsoup:jsoup:1.22.2")
-    implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
-    implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
-    implementation(files("libs/capstone-3.1.8-android-patched.jar"))
-    implementation(files("libs/keystone-0.9.7-android-patched.jar"))
+    // 四个打补丁的 jar 都不再用 files()：files() **不参与冲突检测**，Gradle 不知道
+    // 它和 Maven 上的 com.github.zhkl0228:unidbg-api / capstone / keystone 是同一个
+    // 模块，而上游那三份会经 unidbg-api 的 POM 传递依赖自动进来。两边并存就是
+    //   Duplicate class com.github.unidbg.AbstractEmulator ...
+    //   Duplicate class capstone.Arm ... / keystone.jna.KeystoneTypeMapper ...
+    // 由 somcp.patched-local-jars（buildSrc 插件）发布成「带 module 元数据的同版本模块」之后，
+    // Gradle 才按默认的 newest 策略挑掉上游那份（依赖图与打补丁前逐条一致）。
+    //
+    // 顺带：这些模块的 POM（含上游 unidbg-api）都把 net.java.dev.jna:jna 当普通
+    // jar 传递依赖带进来，而本工程要的是 aar（classes.jar + libjnidispatch.so）。
+    // 两边是同一个模块的两个 artifact，冲突解析按模块算、永远「同版本」，所以只能
+    // 从传递链里排掉 jar 那一份，见下面的 jna 依赖。
+    implementation("com.github.zhkl0228:unidbg-api:0.9.9") {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+    implementation("com.github.zhkl0228:unidbg-android:0.9.9") {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+    implementation("com.github.zhkl0228:capstone:3.1.8") {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+    implementation("com.github.zhkl0228:keystone:0.9.7") {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+    // 只要 aar：aar 与 jar 里是同一份 com.sun.jna，aar 还额外带
+    // libjnidispatch.so（Unidbg 靠它 System.loadLibrary("jnidispatch")）。
     implementation("net.java.dev.jna:jna:5.10.0@aar")
     implementation("commons-codec:commons-codec:1.21.0")
     implementation("org.apache.commons:commons-collections4:4.5.0")
