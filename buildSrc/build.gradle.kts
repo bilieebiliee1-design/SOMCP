@@ -30,7 +30,38 @@ plugins {
 
 // buildSrc 不继承 settings.gradle.kts 的仓库，必须自己声明；否则连
 // `groovy-gradle-plugin` 自身要用的 Groovy 都解析不到（"no repositories are defined"）。
+//
+// **复核模式不能用外部仓库**（`-PcnbCacheOnlyCheck`，见
+// scripts/cnb/gradle-cache-only.gradle）：那次运行是 `--offline` 的，判据是
+// 「镜像预热的用户目录里有没有这份构件」，所以两个插件的仓库列表都必须换成同一个
+// 按仓库顺序编号的空本地目录。运行期这张列表有五个仓库（google / Portal Maven /
+// Central / Portal / 镜像注入的几条），其中一个都没预热过 —— 复核就会在这里报
+//   Could not resolve org.apache.groovy:groovy:4.x
+//   Searched in .../cnb-cache-only/deps/*/...
+// 而报错点是 `校验代码准备` 里那句含糊的 "warmup cache is incomplete"，离根因很远。
+//
+// 这些空目录**与主工程复核时用的是同一批**（`deps/0..4`，按仓库顺序编号）：buildSrc 与
+// 主工程在运行期走的是同一组上游仓库、同一个 GRADLE_USER_HOME，缓存索引只有一份；
+// 分成两组目录只会让同一份构件的索引落到两个地方，复核时「有却判无」。
+// 本地空目录里的 repo-info.json 把缓存 hash 指回原 url，细节见
+// scripts/cnb/gradle-cache-only.gradle。
+//
+// 目录由 scripts/cnb/gradle-cache-only.gradle 建；这里只指向它，mkdirs 兜一次
+// （仓库 url 指向不存在的目录时 Gradle 会跳过它，那样复核就成了「一个仓库都没有」）。
+val cnbCacheOnlyCheck = gradle.startParameter.projectProperties.containsKey("cnbCacheOnlyCheck")
+val cnbCacheOnlyHome = File(System.getenv("GRADLE_USER_HOME") ?: "${System.getProperty("user.home")}/.gradle")
+
 repositories {
+    if (cnbCacheOnlyCheck) {
+        (0..4).forEach { slot ->
+            val dir = cnbCacheOnlyHome.resolve("cnb-cache-only/deps/$slot").apply { mkdirs() }
+            maven {
+                name = "cnbCacheOnly$slot"
+                url = dir.toURI()
+            }
+        }
+        return@repositories
+    }
     google()
     // Plugin Portal 的 Maven 端点，排在这里而不是只靠末尾的 gradlePluginPortal()。
     //

@@ -119,16 +119,26 @@ def somcpPatchedPomDependencies = [
     ],
 ]
 
-// 生成仓库的位置：跟着 build 目录走，配置缓存与 clean 都不会留下脏状态。
+// 生成仓库的位置：`<项目>/build/patched-jars-repo`，也就是项目自己的 build 目录。
 // 这个目录同时也是 `settings.gradle.kts` 里 `somcpPatchedLocal` 仓库的 url，
 // 所以它必须在**任何依赖被声明之前**就存在：Gradle 在 `places files()` 那一刻
 // 就把路径记成任务的输入，声明 `files()` 时目录还没建出来，报的是
 //   Cannot fingerprint input property '...': file .../build/patched-jars-repo does not exist
 // —— 与本插件随后要写进去的东西毫无关系，报错却隔着三层。
-// 仓库里带了 `app/libs/build/patched-jars-repo/.ignore` 占位（`build/` 被 gitignore
-// 忽略，空目录进不了仓库），这里再兜一次：本脚本求值 = 项目已配置，建目录是配置期
-// 的纯文件系统操作，不影响配置缓存（它不读环境、不读解析结果）。
-def somcpPatchedRepo = new File(project.layout.buildDirectory.get().asFile, 'patched-jars-repo')
+// 目录不需要占位文件：本脚本求值 = 项目已配置，`mkdirs()` 是配置期的纯文件系统
+// 操作，不影响配置缓存（它不读环境、不读解析结果）。
+//
+// **不要换回 `project.layout.buildDirectory`**（`cnb-stn-1k629u1nl` 的 Android
+// Lint 红点就是这么来的）：`:app` 的 layout buildDirectory 是 `app/build`，而
+// `settings.gradle.kts` 位在**根**工程，那里的 `rootDir.resolve(...)` 得到的是
+// 根目录下的 `build`。两个 url 不同 = 两份互不相干的仓库 —— 插件把 `.1` 铺在
+// `app/build`，解析却去根目录那个仓库找 —— 两个 jar 全都解析不到，Kotlin 编译报
+//   Unresolved reference 'capstone' / 'keystone'
+// —— 版本号、POM 都对了，报的是「类不存在」。
+//
+// `project.projectDir` 由项目路径决定（`:app` -> `<root>/app`），而 `rootDir` 是
+// 「仓库根」在这里唯一的定义，两边算出来的必须是同一个绝对路径。
+def somcpPatchedRepo = new File(project.projectDir, 'build/patched-jars-repo')
 somcpPatchedRepo.mkdirs()
 
 // 本地仓库里那份 POM。**必须带 dependencies**：见 somcpPatchedPomDependencies 的注释，

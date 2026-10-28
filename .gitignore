@@ -4,14 +4,8 @@
 .idea/
 __pycache__/
 *.py[cod]
-**/build/*
-# 例外：patched jar 本地 Maven 仓库的目录占位。它是 settings.gradle.kts 里
-# `somcpPatchedLocal` 仓库的 url，必须在任何 file 依赖被声明之前存在；空目录进不了
-# git，所以靠这个空文件占位。详见 app/build.gradle.kts 里那四个 patchedJar 的注释。
-# 用 `build/*` 而不是 `build/`：后者把目录本身也排除了，negation 无法把它救回来。
-!app/libs/build/patched-jars-repo/
-!app/libs/build/patched-jars-repo/.ignore
-**/.cxx/*
+**/build/
+**/.cxx/
 *.iml
 .trae/
 .reasonix/

@@ -287,6 +287,52 @@ rewrite_root_script() {
 # 为什么不在预热里干脆把插件摘掉（disable_buildsrc_plugin 只摘声明/工厂/调用点）：
 # 那会让预热的依赖图与运行期**不是同一张** —— patched 的 `.1` 顶掉上游 `x.y.z`
 # 这件事只能在真构建里发生，预热照做一遍，缓存里那份才是运行期真正要的那份。
+
+# 按口径表生成一份 POM：`<dependencies>` 逐条照抄插件里的 somcpPatchedPomDependencies。
+#
+# **口径表只有一份**：插件里那张是唯一真源，这里从源码里读，不另抄一份。
+# 解析认两处形状：`'文件名.jar': 'g:a:v'`（somcpPatchedJars）与
+# `'g:a:v': [ 'g:a:v', ... ]`（somcpPatchedPomDependencies）。认不出条目就失败 ——
+# 静默生成空 POM 会退回「预热一张图、运行期另一张图」的老问题，而那个问题的症状
+# （`Unresolved reference 'capstone'`）离根因很远。
+pom_for() {
+  local coordinates="$1"
+  local table=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
+  local deps
+  deps="$(awk -v want="$coordinates" '
+    # 只认 somcpPatchedPomDependencies 这一张表：条目头是 `'"'"'g:a:v'"'"': [`，
+    # 命中 want 就进这一条，遇到下一个条目头或者表尾（顶格 `]`）就收。
+    /^def somcpPatchedPomDependencies/ { intable = 1; next }
+    !intable { next }
+    /^\]/ { exit }
+    /^[[:space:]]*'"'"'[^'"'"']+:[^'"'"']+:[^'"'"']+'"'"'[[:space:]]*:/ {
+      if (index($0, "'"'"'" want "'"'"'")) { inrow = 1; next }
+      inrow = 0
+      next
+    }
+    inrow && match($0, /'"'"'[^'"'"']+:[^'"'"']+:[^'"'"']+'"'"'/) {
+      print substr($0, RSTART + 1, RLENGTH - 2)
+    }
+  ' "$table")"
+  [ -n "$deps" ] \
+    || { echo "[warmup] ERROR: no POM dependencies parsed for ${coordinates}; the somcpPatchedPomDependencies table format changed" >&2; exit 1; }
+  local group="${coordinates%%:*}"
+  local rest="${coordinates#*:}"
+  local module="${rest%%:*}"
+  local version="${rest#*:}"
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>%s</groupId>\n  <artifactId>%s</artifactId>\n  <version>%s</version>\n  <packaging>jar</packaging>\n  <dependencies>\n' \
+    "$group" "$module" "$version"
+  local dep
+  while IFS= read -r dep; do
+    [ -n "$dep" ] || continue
+    printf '    <dependency>\n      <groupId>%s</groupId>\n      <artifactId>%s</artifactId>\n      <version>%s</version>\n    </dependency>\n' \
+      "$(printf '%s' "$dep" | cut -d: -f1)" \
+      "$(printf '%s' "$dep" | cut -d: -f2)" \
+      "$(printf '%s' "$dep" | cut -d: -f3)"
+  done <<< "$deps"
+  printf '  </dependencies>\n</project>\n'
+}
+
 publish_patched_local_repo() {
   local table=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
   local target_dir=app/build/patched-jars-repo
@@ -314,16 +360,32 @@ publish_patched_local_repo() {
     local dir="${target_dir}/${group//./\/}/${module}/${version}"
     mkdir -p "$dir"
     cp "$source" "${dir}/${module}-${version}.jar"
-    # POM 里只写这三段：预热要的是「坐标解析得到」，传递依赖照旧由上游 POM 提供
-    # （patched 的 `.1` 与上游 `x.y.z` 同时进图时，Gradle 只留高版本那份，上游的
-    # 依赖列表不会因此消失）。运行期那份 POM 带 dependencies，是给真构建用的。
-    printf '<?xml version="1.0" encoding="UTF-8"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>%s</groupId>\n  <artifactId>%s</artifactId>\n  <version>%s</version>\n  <packaging>jar</packaging>\n</project>\n' \
-      "$group" "$module" "$version" > "${dir}/${module}-${version}.pom"
+    # POM 里必须带 dependencies，且与插件写的那份**逐条一致**（同一张口径表
+    # somcpPatchedPomDependencies）：Gradle 眼里 `x.y.z.1` 是全新模块，上游 POM 的
+    # 依赖列表不会自动搬过来。且运行期插件把上游的 `x.y.z` 全排掉了
+    # （configurations.exclude），patched 那份的 POM 就是那四个模块唯一的元数据来源。
+    #
+    # 早先这里写的是空壳 POM（理由曾是「传递依赖由上游 POM 提供」）—— `cnb-stn-1k629u1nl`
+    # 的编译就死在它上面：`unidbg-api:0.9.9.1` 的 POM 里没有 capstone / keystone，
+    # 而它们在上游那边唯一的声明方正是已经 `.1` 化（且上游坐标被 exclude 掉）的
+    # 那份 POM，于是 Kotlin 编译报 `Unresolved reference 'capstone' / 'keystone'`。
+    # 预热下的图必须与运行期是同一张，否则预热本身就是错的。
+    pom_for "$coordinates" > "${dir}/${module}-${version}.pom"
     published=$((published + 1))
   done <<< "$rows"
   [ "$published" -eq "$count" ] \
     || { echo "[warmup] ERROR: published ${published}/${count} patched jars into ${target_dir}" >&2; exit 1; }
   echo "[warmup] published ${published} patched jar(s) into ${target_dir}"
+
+  # 判据落在产物上：每条 POM 都必须带 <dependencies>，且每条依赖都得是 `g:a:v`。
+  # 口径表被写坏（比如依赖表那条改名、缩进变了）时 pom_for 会拿空表生成空壳 POM，
+  # 而那正是本次红点的起因 —— 这里当场拦下，比等到编译期报 Unresolved reference 近。
+  local pom
+  for pom in "$target_dir"/*/*/*/*/*.pom "$target_dir"/*/*/*/*.pom; do
+    [ -f "$pom" ] || continue
+    grep -q '<dependencies>' "$pom" \
+      || { echo "[warmup] ERROR: ${pom} has no <dependencies>; the patched POM must mirror somcpPatchedPomDependencies" >&2; exit 1; }
+  done
 }
 
 # --- app/build.gradle.kts：第二遍才改写成只声明插件的模块脚本 ---------------
