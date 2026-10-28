@@ -102,7 +102,11 @@ Gradle 对 429 **是**会重试的（`NetworkingIssueVerifier` 把它归入 tran
 但默认只试 3 次、退避 1 秒，冷启动那一波并发下不够。重试用尽后它报的仍是
 `Plugin [id: ..., version: ...] was not found` —— 看起来像版本号写错。
 注意 `org.gradle.internal.repository.max.retries` 这个键在 Gradle 8 里**不存在**
-（正确键是 `max.tentatives`，且必须带 `systemProp.` 前缀），那种写法加了也无效。
+（正确键是 `max.tentatives`）。而且这组开关**必须带 `systemProp.` 前缀**：
+源码是 `Integer.getInteger(KEY)` 读 **JVM 属性**，Gradle 只把 `systemProp.*` 转发进 JVM。
+不带前缀看上去更像「Gradle 属性」，实际根本不读 —— A/B 实测（空用户目录、最小工程）：
+不带前缀 `max.tentatives=3` → `BUILD FAILED`；带前缀 `=12` → `BUILD SUCCESSFUL`。
+这两者只解决零星 429，解析源本身不可达时照样失败，所以主力仍是镜像预热。
 
 主力的做法是 `scripts/cnb/gradle-init.gradle`：把镜像**追加**在原仓库列表之后。
 它只在 `CNB_BUILD_ID` 存在时生效，本地开发完全不介入。
@@ -221,17 +225,36 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 
 - `image/cnb-tools.Dockerfile` —— Dockerfile 自身
 - `scripts/cnb/gradle-init.gradle` —— `COPY` 进 `/opt/gradle-user-home/init.d/`
+  与 `/opt/cnb/`（预热期显式 `--init-script` 用）
+- `scripts/cnb/gradle-proxy.init.gradle.kts` —— 预热期的代理桥接，与运行期
+  `scripts/cnb/gradle.sh` 传的是同一个文件
+- `scripts/cnb/warmup-project.sh` —— 把下面三个文件改写成最小工程
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
-  插件版本、仓库声明与 Maven 重试参数
+  插件版本、仓库声明与重试参数
 
 在 `by` 里声明只解决「进上下文」，不解决「进镜像」：Dockerfile 里必须再 `COPY`
 一次，否则 `RUN` 阶段根本看不到它们（曾因此失败在
 `sed: can't read /build.gradle.kts: No such file or directory`）。
 `COPY` 的源是上下文根、按仓库相对路径写，不能带 `../`；目标用绝对路径，
-不依赖当时的工作目录。三个文件被拷到 `/tmp/cnb-warmup/` 后就地改写成最小工程
-（清空 `settings.gradle.kts`、只留 `plugins {}` 给 `build.gradle.kts`），
-再用裸 `gradle help` 预热 —— 不用 `--build-file` / `--settings-file`，
-Gradle 9 已经把这两个参数删掉了。
+不依赖当时的工作目录。三个文件被拷到 `/tmp/cnb-warmup/` 后由
+`scripts/cnb/warmup-project.sh` 就地改写成最小工程：
+
+- `build.gradle.kts` 只留 `plugins {}`；
+- `settings.gradle.kts` 只留 `pluginManagement { repositories { ... } }`，
+  **仓库声明必须保留**——早先的做法是清空成一行 `rootProject.name`，Gradle 于是
+  只剩缺省的 `gradlePluginPortal`，而 AGP 的 marker 在 Google，预热解析
+  `com.android.application:9.2.1` 永远拿不到；运行期则相反，只剩 Google/MavenCentral、
+  缺 aliyun 镜像（`gradle-init.gradle` 追加的那条）。两边任何一种都会表现为
+  `Plugin ... was not found`，所以改写脚本用 `grep` 断言「插件块在」+「仓库声明在」，
+  取不到就失败，不生成残缺工程；
+- 预热命令与运行期同一条路：`CNB_BUILD_ID`（`gradle-init.gradle` 走同一分支）+
+  两个 init script + 同一个 shim。区别只有两点：不给 `--offline`（预热的活就是联网），
+  以及 `GRADLE_USER_HOME` 显式指到 `/tmp/cnb-warmup-home` 再 `cp -a` 回
+  `/opt/gradle-user-home`——镜像 `ENV` 里是 `/root/.gradle`，不显式给的话预热结果
+  会被收尾的 `rm -rf /root/.gradle` 一起删掉，等于白预热。
+
+预热整段加了 `timeout 600`：CI 的代理变量在无网环境下会变成「连上去不说话」的
+黑洞，而 Gradle 的仓库超时是无限的，一次挂起就足以让镜像构建被平台杀掉。
 
 还有一条容易踩的：**`RUN` 的续行里不能夹注释**。行尾 `\` 会把下一行的 `# 注释`
 拼进同一条命令，而 `#` 只在行首才是注释，于是被拼到 `sed -n '...'` 后面就成了
@@ -257,8 +280,12 @@ sed: can't read /build.gradle.kts: No such file or directory
 - **镜像层**：预热失败只打 warning（把 Gradle 日志尾部打到 stderr，否则只剩一行
   `BUILD FAILED`），镜像照常产出。这意味着镜像可能带着不完整的依赖缓存。
 - **运行期**：`scripts/cnb/setup-build-env.sh` 在第一个 stage 用
-  `gradle --offline --no-daemon help` 复核 —— 离线跑得通才说明插件与构建期依赖
-  真的都在 `$GRADLE_USER_HOME` 里；跑不通当场失败，并指回 Dockerfile 的预热段。
+  `bash scripts/cnb/gradle.sh --offline -q help` 复核 —— 走的是与后续每个 stage
+  完全相同的入口（同一个 proxy init script、同一份用户目录），离线跑得通才说明
+  插件与构建期依赖真的都在 `$GRADLE_USER_HOME` 里；跑不通当场失败，并指回
+  Dockerfile 的预热段。这里曾经是裸 `gradle --offline`：既不带 proxy init script
+  （预热带代理、复核不带，两边不是同一个判据），也不是 `export` 出来的
+  `GRADLE_USER_HOME`，复核读的其实是另一个目录。
 
 这样「缓存可用」这个判据一条没少，只是失败点从镜像构建挪到了第一个 stage，
 报错文字也从后面的 `Plugin [id: ..., version: ...] was not found` 提前成一句
@@ -270,6 +297,7 @@ sed: can't read /build.gradle.kts: No such file or directory
 | --- | --- | --- |
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
 | `Plugin [id: '...', version: '...'] was not found` | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
+| 预热全绿但运行期 `--offline` 复核失败 | 预热用的 `GRADLE_USER_HOME` 与运行期不是同一个 / 预热缺 init script | 见上一节，已修 |
 | 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
 
 `GRADLE_WARMUP_CHECK=0` 可以关掉运行期复核（只用于排查，正常流水线不要关）。
