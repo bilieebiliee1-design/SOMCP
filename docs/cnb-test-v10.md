@@ -532,9 +532,9 @@ cnbCacheOnlyCheck requested but /root/.gradle/cnb-cache-only.gradle is missing
 **init script 里没法自省「我在哪个用户目录」** —— system property 是在 init script
 求值之后才应用的，此刻读到的还是启动时的旧值，所以路径只能靠显式参数给。
 
-## 打补丁的 unidbg jar 必须带 module 元数据（Debug 构建的重复类）
+## 上游 unidbg jar 与 patched jar 的重名冲突
 
-`Debug 构建` 第一次真正跑起来时挂在这里：
+`Debug 构建` 第一次真正跑起来时，两处红点同一个根因：
 
 ```
 Execution failed for task ':app:checkDebugDuplicateClasses'.
@@ -546,60 +546,53 @@ Execution failed for task ':app:mergeDebugJavaResource'.
     - com.github.zhkl0228.unidbg:unidbg-android:0.9.9
 ```
 
-看起来像「CI 把依赖装重了」，其实是 `app/build.gradle.kts` 里一直存在的写法问题：
+`app/libs/*-patched.jar` 是上游同名模块的重打包版本，上游那份还在 classpath 上就必然撞。
+**为什么 GitHub 上一直是绿的**：`files()` 的依赖不带坐标，Gradle 只在拿不到 POM 时才把
+上游依赖当成「无元数据模块」，那种模块不参与冲突检测、两边并存也能编译过。CNB 的镜像
+预热把 POM 缓存下来，真实依赖图第一次完整出现 —— 这是被预热照出来的存量 bug。
 
-```kotlin
-implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
+### 走过的一条弯路：把 jar 发布成本地 Maven 仓库
+
+试过一版：`buildSrc` 把 `app/libs/*-patched.jar` 复制成带 `.module` 元数据的同版本模块，
+`settings.gradle.kts` 里那个本地仓库排在最前，让 Gradle 的冲突解析挑掉上游那份。
+依赖图确实干净了，但它把 buildSrc 变成了预热判据的一部分：
+
+```
+* Where: Build file '/workspace/buildSrc/build.gradle.kts' line: 23
+Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+Searched in the following repositories: Gradle Central Plugin Repository
 ```
 
-`files()` 的依赖**不参与冲突检测** —— Gradle 不知道它和 Maven 上的
-`com.github.zhkl0228:unidbg-api` 是同一个模块。而上游那份会经
-`unidbg-unicorn2` → `unidbg-api` 的 POM 传递依赖自动进来，于是同一个包被两份
-jar 提供，AGP 的 `checkDebugDuplicateClasses` 与 `mergeDebugJavaResource`
-双双失败。`capstone` / `keystone` / `net.java.dev.jna:jna` 是同一个病的另三处
-（后者的 aar 与 jar 也同时上了 classpath）。
+buildSrc 是 **included build**：不继承 `settings.gradle.kts` 的 `pluginManagement`，
+`--init-script` 传进去的仓库对它也不生效，只能靠自己那份列表。而 `--offline` 复核读的是
+镜像预热出来的用户目录 —— 预热工程里没有 buildSrc，`kotlin-dsl` 的 marker 从没进过缓存。
+钉版本、自带 `gradlePluginPortal()` 都试过，仍然倒在同一行。
 
-至于「为什么 GitHub 上一直是绿的」：Gradle 只有在**拿不到 POM** 时才会把依赖当成
-无元数据模块，无元数据模块不参与冲突检测、双方并存也能编译过。CNB 的镜像预热把
-POM 缓存了下来（这正是预热该做的事），真实依赖图第一次完整出现，问题才暴露。
-**这是被预热照出来的真 bug，不是预热引入的问题。**
+### 现在的做法
 
-修法是把这四个 jar 发布成**带 module 元数据的同版本模块**：
+判据从「让冲突解析替我们选」改成「上游那份直接别上 classpath」：
+`buildSrc/src/main/groovy/somcp.patched-local-jars.gradle`（预编译脚本插件，Gradle 自带的
+`groovy-gradle-plugin`，零外部插件依赖）在 `incoming.afterResolve` 里把同 `group:module`
+的上游 artifact 剔掉，只留 patched jar。解析完成之后、三个合并 task（
+`checkDebugDuplicateClasses` / `mergeDebugJavaResource` / `mergeDebugNativeLibs`）
+之前，刚好卡在点上。
 
-- `buildSrc/src/main/kotlin/SomcpPatchedLocalJarsPlugin.kt`（插件 id
-  `somcp.patched-local-jars`）在配置期把
-  `app/libs/*-patched.jar` 复制成 `buildSrc/build/patched-jar-repository/` 下的
-  Maven 布局，连同 `.module` 文件（写明 `org.gradle.jvm.environment=android`
-  与 usage/libraryelements，AGP 靠这几个属性认出「同一个模块」）；
-- `settings.gradle.kts` 的 `somcpPatchedLocalJars` 指向该目录，且必须排在
-  `google()` / `mavenCentral()` **之前** —— 本地这份与上游同为 0.9.9，同版本
-  冲突解析取「先见到的那个」，排后面就轮不到它。CNB 上还多一步：
-  `scripts/cnb/gradle-init.gradle` 把它提到所有 `cnb-*-mirror-*` 之前，
-  `gradle-cache-only.gradle` 的「只看缓存」复核则把它原样保留（它不是缓存）；
-- `app/build.gradle.kts` 改用坐标声明：
+判据是「解析结果里有没有同名 patched jar」，与「谁把它带进来的」无关 —— 逐个 `exclude`
+堵来路已经试过一次：带上游 jar 进来的路径不止一条，排掉一条，换条路径又漏回来。
 
-```kotlin
-implementation("com.github.zhkl0228:unidbg-api:0.9.9")
-implementation("com.github.zhkl0228:unidbg-android:0.9.9")
-implementation("com.github.zhkl0228:capstone:3.1.8")
-implementation("com.github.zhkl0228:keystone:0.9.7")
-```
+三条不变量写在插件头部注释里，改之前先读：
 
-依赖图因此与打补丁前**逐条一致**：这些模块的传递依赖（unicorn / commons-codec /
-fastjson / demumble）本来就在 `app/build.gradle.kts` 里显式声明过。
+1. 只对 `unidbg-api` / `unidbg-android` 生效。`unicorn` / `capstone` / `keystone` 的上游
+   jar 不是重复品而是**替代品**（`unicorn:1.0.15` 是 `unicorn.*` 唯一的来源），剔了会在
+   `session_open` 时 `ClassNotFoundException`。
+2. 同一配置里必须同时看到 patched jar 才动，否则说明该配置压根不需要它。
+3. 副作用打一行 `[patched-jars] ...` lifecycle 日志 —— 依赖图被动过，日志里得看得见。
 
-`net.java.dev.jna:jna` 多一条尾巴：aar 与 jar 是**同一个模块的两个 artifact**，
-冲突解析按模块算、永远「同版本」，救不了。所以把 jar 从上述四个模块的传递依赖里
-`exclude` 掉，只留 `@aar`（它带 `libjnidispatch.so`）。不能反过来用
-`files.removeIf` 删 jar —— 那会把 `.so` 一起删掉，APK 运行期才炸。
+**buildSrc 的插件选择因此被限制住了**：只能用 `groovy-gradle-plugin`，不能用 `kotlin-dsl`。
+后者要从 Portal 拿 marker，而 `--offline` 复核读的是预热出来的用户目录，那里没有它。
+`scripts/cnb/setup-build-env.sh` 里那条复核的注释记着这件事。
 
-验证（本机 JDK 17 + Gradle 9.6.1 + SDK 36）：
-
-- `:app:checkDebugDuplicateClasses` 与 `:app:mergeDebugJavaResource` 从 117/2 条
-  重复降到 0；
-- `:app:assembleDebug`、`:app:assembleRelease`、`:app:testDebugUnitTest`、
-  `:app:lintDebug` 全绿；
-- 拆开 `app-universal-debug.apk` 核对：`lib/<abi>/libjnidispatch.so` 在
-  （x86_64 那份），`com.github.unidbg.*` 的 966 个类在单个 dex 里各只有一份，
-  且 `com.github.unidbg.mcp`（只存在于本地 patched jar）在内 —— 证明生效的是
-  打补丁那一份，不是上游那份。
+**顺带补的一处**：镜像预热工程会生成一个一次性 keystore
+（`release/keystore.properties` + `keytool -genkeypair`）。`:app` 的配置阶段要读
+`signingConfigs.release`，文件缺失时 AGP 在配置期就报错 —— 那跟「依赖下没下全」无关，
+却会让预热整段失败。运行期的真实签名仍由 `scripts/cnb/prepare-keystore.sh` 负责。

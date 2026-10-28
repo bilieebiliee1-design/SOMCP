@@ -1,0 +1,74 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-only
+ *
+ * SOMCP - buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
+ * Copyright (C) 2026 SOMCP authors
+ * Upstream: https://github.com/bilieebiliee1-design/SOMCP
+ *
+ * This program is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU Affero General Public License version 3 as published by
+ * the Free Software Foundation.
+ *
+ * 把 app/libs 下打补丁的 jar 当成「上游同名模块的替代品」挂进依赖图。
+ *
+ * 为什么需要这一步：`implementation(files("libs/unidbg-api-...-patched.jar"))` 这类
+ * 依赖在 Gradle 眼里是「无坐标的文件」，而 upstream 那份会经 unidbg-api 的 POM
+ * 传递依赖自动进来。早年两边并存也能编译，是因为上游 POM 拿不到、Gradle 把它当成
+ * 无元数据模块（不参与冲突检测）；CNB 的镜像预热把 POM 缓存下来之后，真实依赖图
+ * 第一次完整出现，于是：
+ *
+ *   Duplicate class com.github.unidbg.AbstractEmulator found in modules
+ *     unidbg-api-0.9.9-android-patched.jar and com.github.zhkl0228.unidbg:unidbg-api:0.9.9
+ *   2 files found with path 'android/sdk23/system/usr/share/zoneinfo/tzdata'
+ *     - unidbg-android-0.9.9-android-patched.jar
+ *     - com.github.zhkl0228.unidbg:unidbg-android:0.9.9
+ *
+ * 做法：在依赖解析完成之后（`incoming.afterResolve`，早于
+ * checkDebugDuplicateClasses / mergeDebugJavaResource / mergeDebugNativeLibs
+ * 这些合并任务），把同 group:module 的上游 artifact 剔掉，只留 patched jar。
+ * 判据是「解析出来的构件里有没有同名 patched jar」，与「谁把它带进来的」无关 ——
+ * 逐个 exclude 堵来路这条路已经试过：带上游 jar 进来的路径不止一个，排掉一条，
+ * 换条路径又漏回来。
+ *
+ * 三条不变量，改之前先读：
+ *   1. **只对 unidbg-api / unidbg-android 生效**。unicorn / capstone / keystone 的
+ *      上游 jar 不是重复品而是替代品（见 app/build.gradle.kts 里 unicorn:1.0.15
+ *      那段注释：它是 unicorn.* 唯一的来源），剔了会在 session_open 时
+ *      ClassNotFoundException。
+ *   2. **同一配置里必须同时看到 patched jar 才动**，否则说明该配置压根不需要它
+ *      （比如 buildSrc 自己的编译配置）。
+ *   3. 副作用会打一行 lifecycle 日志（[patched-jars] ...）：依赖图被动过，日志里
+ *      得看得见，否则下次查重复类会先怀疑仓库。
+ */
+
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
+def somcpPatchedModules = [
+    'com.github.zhkl0228:unidbg-api',
+    'com.github.zhkl0228:unidbg-android',
+] as Set
+
+configurations.configureEach { configuration ->
+    configuration.incoming.afterResolve {
+        def resolved = resolvedArtifacts.toList()
+        def patchedNames = resolved.findAll { it.file.name.contains('-patched') }*.file*.name as Set
+
+        def dropped = resolved.findAll { artifact ->
+            def id = artifact.id.componentIdentifier
+            def key = id instanceof ModuleComponentIdentifier ?
+                "${id.group}:${id.module}" : null
+            key != null &&
+                key in somcpPatchedModules &&
+                !artifact.file.name.contains('-patched') &&
+                patchedNames.any { it.startsWith("${id.module}-") }
+        }
+
+        dropped.each { configuration.artifacts.remove(it) }
+        if (!dropped.isEmpty()) {
+            logger.lifecycle(
+                "[patched-jars] ${configuration.name}: dropped upstream " +
+                    dropped.collect { it.file.name }.join(', ')
+            )
+        }
+    }
+}
