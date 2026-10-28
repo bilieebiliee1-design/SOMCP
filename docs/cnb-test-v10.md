@@ -447,6 +447,15 @@ Cannot get property 'somcpNamespace' on extra properties extension as it does no
 所以 `rewrite_root_script` 在 `plugins {}` 之后无条件重贴 `^[[:space:]]*extra\["somcp` 三行，
 并逐个断言它们在改写结果里 —— 这几行是纯字面量赋值、不引用任何插件，留在预热工程里没有副作用。
 
+**同一个函数里还有两处坑，一起记下**（`cnb-4gb-1k625dvfg` 连着红了两次，都是它）：
+
+- 中间文件不能叫 `build.gradle.kts.new`。Kotlin DSL 按扩展名认脚本，`.kts.new` 只是普通文件，
+  Gradle 不会读；`mv` 回原名之后看似「改完了」，实际上一行都没进构建（报错仍是上面那句
+  `Cannot get property 'somcpNamespace' ...`，位置也一样，完全看不出改写没生效）。改用
+  `root-plugins-block.kts` 这种**自身也是合法脚本名**的临时文件。
+- `extra` 那几行必须在覆盖根脚本**之前**取出来。先覆盖再 grep 同一个文件，得到的是
+  `grep: build.gradle.kts: input file is also the output`，一行都拿不到，断言当场判失败。
+
 ## 预热失败与工具链失败的分界
 
 镜像里的预热段（`warmup-project.sh` + `--offline` 复核）与工具链（JDK / Gradle /
