@@ -26,7 +26,7 @@ CNB 这份流水线的定位是「同一套构建与静态检查，在 CNB 上�
 | --- | --- | --- | --- |
 | 1 | `actions/checkout`（`submodules: recursive`、`fetch-depth: 0`） | 代码准备阶段 + `校验代码准备` | submodule 由 `git.submodules` 显式声明；`fetch-depth: 0` 对应 CNB 本地已有完整历史；`scripts/cnb/setup-build-env.sh` 断言 `third_party/*` 全部非空 |
 | 2 | `actions/setup-java`（temurin 17） | `基础镜像与工具链` | 镜像基于 `eclipse-temurin:17-jdk-noble`，setup 脚本断言 `java.specification.version == 17` |
-| 3 | `gradle/actions/setup-gradle`（9.6.1，`cache-disabled`） | `基础镜像与工具链` | 镜像内装 Gradle 9.6.1；setup 脚本校验版本号；不挂跨流水线缓存 |
+| 3 | `gradle/actions/setup-gradle`（9.6.1，`cache-disabled`） | `基础镜像与工具链` | 镜像内装 Gradle 9.6.1、装用户级 init script（Maven Central 镜像）、预热插件与构建期依赖；用户目录挂 data 卷。见下方「Gradle 用户目录」与「Maven Central 限流」 |
 | 4 | `android-actions/setup-android` + `sdkmanager` | `基础镜像与工具链` | 镜像内装 platform-tools / android-36 / build-tools 36.0.0 / ndk 29.0.14206865（另含 VMP 壳要的 android-34 与 cmake 3.22.1） |
 | 5 | Determine base revision（`id: base-rev`） | `判定 base revision` | `scripts/cnb/base-rev.sh`，`CNB_EVENT` + `CNB_PULL_REQUEST_TARGET_SHA`，`##[set-output]` → `BASE_REV` |
 | 6 | Check for empty PR | `空 PR 拦截` | `scripts/cnb/check-empty-diff.sh` |
@@ -78,19 +78,43 @@ CNB 这份流水线的定位是「同一套构建与静态检查，在 CNB 上�
 Gradle 缓存保持关闭语义：`/root/.gradle` 只是 data 卷，不设跨流水线缓存。
 
 **任务间产物共享**：CNB 只跨 job 共享 `CNB_BUILD_WORKSPACE` 与文件顶层声明的 `volumes`，
-所以 `native-build`（原生归档）与 `gradle-home`（`/root/.gradle`）都用 `data` 类型卷声明。
+所以 `native-build`（原生归档）与 `gradle-user-home`（挂到 `/root/.gradle`，Gradle 用户目录）
+都用 `data` 类型卷声明。Gradle 用户目录直接挂到镜像 `ENV` 写死的位置，是为了让每个 stage
+的 `gradle` 无需任何环境变量就指向同一份缓存 —— 环境变量不跨 stage 传递。
 
-**代理与限流**：两件不同的事，都不会让判据变松。
+**Gradle 用户目录必须挂到镜像写死的位置**：环境变量不跨 stage 传递，每个 stage 的
+`GRADLE_USER_HOME` 取的是镜像里 `ENV` 的值，不是上一 stage `export` 的值。
+早先的版本把卷挂在 `/gradle-home`、却只在前置 stage 里 `export GRADLE_USER_HOME`，
+结果每个 `gradle` stage 都用镜像里的空用户目录（`/root/.gradle`），`Android Lint` 直接报
+`Plugin [id: 'org.jetbrains.kotlin.android', version: '2.4.0'] was not found`。
+现在卷直接挂到 `/root/.gradle`，`scripts/cnb/setup-build-env.sh` 再把镜像内的用户目录内容
+（`scripts/cnb/gradle-init.gradle` + 依赖预热结果）搬进卷，首次构建就有缓存可用。
 
-- 代理：CNB 会把 Runner 宿主机的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 同步进容器，
-  但 Gradle 的 JVM 不读这些环境变量。所有 gradle 调用因此走 `scripts/cnb/gradle.sh`，
-  它带上 `scripts/cnb/gradle-proxy.init.gradle.kts`，在 daemon 启动、插件解析之前
-  把它们桥接成 JVM 属性。没有（或 host 为空）的代理变量时不做任何事，本地开发不加这个参数即可。
-- 限流：`repo1.maven.org` 对同一出口 IP 有共享的请求上限，CI 冷启动要拉几十个 POM，撞上 HTTP 429
-  是常态。Gradle 默认把 429 当成不可重试，报出来的却是
-  「Plugin [id: '...', version: '...'] was not found」——版本明明存在。`gradle.properties` 里
-  `org.gradle.internal.repository.max.retries=8` + `initial.backoff=1000` 让 429/5xx 变成可重试。
-  这一条不是平台差异，本地同样生效。
+预热为什么必要：`gradle/actions/setup-gradle` 在上游把插件和构建期依赖拉好，
+CNB 上没有对应动作；不预热就只能每个 stage 从空缓存现场冲网。预热在镜像里做
+（`image/cnb-tools.Dockerfile` 的 warmup 构建，插件版本与仓库声明都从仓库自己的
+`build.gradle.kts` / `settings.gradle.kts` 里读，不另抄一份），只在镜像重建时付出一次成本；
+卷随流水线销毁，所以预热结果不会跨流水线污染，`cache-disabled` 的语义不变。
+
+**Maven Central 限流必须正面处理**：`repo1.maven.org` / `repo.maven.apache.org`
+对同一出口 IP 有共享请求上限，实测连打同一个 POM 40 次有 16 次返回 429（40%）。
+Gradle 默认把 429 判成**不可重试**，于是一个限流响应被翻译成
+`Plugin [id: ..., version: ...] was not found` —— 看起来像版本号写错。
+`gradle.properties` 里的 `org.gradle.internal.repository.max.retries` /
+`initial.backoff` 实测救不了（给 daemon JVM 设了属性也照样不重试 429），
+所以不靠它，靠镜像。
+
+真正有效的做法是 `scripts/cnb/gradle-init.gradle`：把镜像**追加**在原仓库列表之后。
+它只在 `CNB_BUILD_ID` 存在时生效，本地开发完全不介入。
+
+- **不删不改原仓库**：`google()`、`gradlePluginPortal()`、原 `mavenCentral()` 全在，
+  所以 AGP 的 marker 仍走 Google，解析顺序和失败语义不变；
+- **版本与产物不变**：镜像里是同一份构件（`group:artifact:version` 一致，字节相同），
+  实测 `gradle-9.2.1.jar` 与 `kotlin-gradle-plugin-2.4.0-gradle813.jar` 都按声明解析到位；
+- **判据不变**：Gradle 只在 404 时才试下一个仓库，真不存在的版本照样失败。
+
+实测对比（同一台机器、空用户目录、冷启动）：不挂镜像 4 次里 1 次成功，
+挂上镜像 4 次全成功。
 
 ## 无法逐字等价的项
 

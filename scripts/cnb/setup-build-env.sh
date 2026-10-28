@@ -46,8 +46,22 @@ GRADLE_ACTUAL="$(gradle --version 2> /dev/null | sed -n 's/^Gradle //p' | head -
 # 缓存语义与原工作流一致：gradle/actions/setup-gradle 的 cache-disabled: true
 # 表示「不复用、也不写远程缓存」。这里用的 /root/.gradle 是 data 类型卷，
 # 只在本次流水线内跨 stage 共享，流水线结束即销毁。
+#
+# 卷必须挂在镜像 ENV 写死的位置：环境变量不跨 stage 传递，各 stage 的
+# GRADLE_USER_HOME 取的是镜像里的值，不是上一 stage export 的值。挂在
+# /gradle-home 再 export 是无效的，实测表现为每个 stage 都用空用户目录、
+# 现场冲网解析插件（Plugin ... was not found）。
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-/root/.gradle}"
-mkdir -p "$GRADLE_USER_HOME"
+mkdir -p "$GRADLE_USER_HOME/init.d"
+# data 卷首次挂载是空目录，把镜像里预置的用户目录（init script + 预热好的依赖）
+# 搬进去。只在 init script 还不存在时搬：后续 stage 复用同一份卷，重搬会覆盖
+# 本流水线刚下好的缓存。
+GRADLE_IMAGE_HOME="${GRADLE_IMAGE_HOME:-/opt/gradle-user-home}"
+if [ -d "$GRADLE_IMAGE_HOME" ] && [ ! -e "$GRADLE_USER_HOME/init.d/cnb-init.gradle" ]; then
+  cp -a "$GRADLE_IMAGE_HOME/." "$GRADLE_USER_HOME/" 2> /dev/null || true
+fi
+[ -f "$GRADLE_USER_HOME/init.d/cnb-init.gradle" ] \
+  || fail "missing $GRADLE_USER_HOME/init.d/cnb-init.gradle (image warmup did not run)"
 log "gradle: ${GRADLE_ACTUAL} (GRADLE_USER_HOME=${GRADLE_USER_HOME}, data volume, no cross-build cache)"
 
 # --- Android SDK / NDK -----------------------------------------------------
@@ -106,24 +120,5 @@ done
 [ "${#missing[@]}" -eq 0 ] \
   || fail "third_party submodules not checked out (native backends would silently degrade): ${missing[*]}"
 log "submodules: ${#SUBMODULES[@]} present"
-
-# --- 出网可达性 ------------------------------------------------------------
-# Gradle 的插件解析如果连不上 Google / Maven Central，报的是
-# 「Plugin [id: ...] was not found in any of the following sources」——看起来像
-# 版本号写错，实际是网络。先把真实原因摆出来，省得下次又按版本问题去查。
-# 代理变量由 CNB 从 Runner 宿主机同步（文档「代理环境变量自动同步」），
-# 这里只用于日志，不做判断。
-log "proxy: HTTP_PROXY=${HTTP_PROXY:-<unset>} HTTPS_PROXY=${HTTPS_PROXY:-<unset>} NO_PROXY=${NO_PROXY:-<unset>}"
-for url in \
-    "https://repo.maven.apache.org/maven2/" \
-    "https://plugins.gradle.org/m2/" \
-    "https://dl.google.com/dl/android/maven2/"; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url" 2> /dev/null || echo 000)"
-  if [ "$code" = "000" ]; then
-    log "WARNING: cannot reach $url (Gradle dependency resolution will fail)"
-  else
-    log "reachable: $url (HTTP $code)"
-  fi
-done
 
 echo "[setup] toolchain OK"
