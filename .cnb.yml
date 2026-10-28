@@ -98,9 +98,9 @@ main:
             #     这三个只进上下文，Dockerfile 里另有 COPY 才会进镜像。
             #   * app/build.gradle.kts 与 app/libs/ **都要进上下文**：预热的
             #     **第一遍按仓库原样跑**，:app 的真实脚本要求值一次，才能把
-            #     androidx / compose / ktor / okhttp 与 files("libs/*-patched.jar")
-            #     解析掉。第二遍才换成 warmup-project.sh 生成的最小脚本（只含
-            #     plugins {} + 最小 android {}），那时它们已不影响结果。
+            #     androidx / compose / ktor / okhttp 与 patched jar 的 `x.y.z.1` 解析掉
+            #     （jar 本体也从 app/libs 读）。第二遍才换成 warmup-project.sh 生成的
+            #     最小脚本（只含 plugins {} + 最小 android {}），那时它们已不影响结果。
             #     历史教训：怕「脚本编译不过就闷杀整层预热」而干脆不带 app 脚本，
             #     结果就是 :app 的运行时依赖一个都没预热，运行期照样现场冲网。
             #   * buildSrc/ **整目录要进上下文**：预热第一遍按仓库原样跑，真实 buildSrc
@@ -109,12 +109,12 @@ main:
             #     仓库列表都从这份源码读出来。
             #     早先两遍都把它删掉，于是预热的工程形状与运行期不同，复核连续几轮
             #     都倒在 `buildSrc/build.gradle.kts` 那行 `kotlin-dsl was not found`。
-            #     `src/main/groovy/somcp.patched-local-jars.gradle` 只作为「运行期要编译的
-            #     东西」进上下文（第一遍编译它，插件 marker 才进缓存）；预热工程里
-            #     **不 apply 它、也不解析它生成的 `x.y.z.1`** —— 那份本地仓库是给真构建的
-            #     依赖图用的，进镜像缓存只会在复核时变成「找不到依赖」。所以
-            #     warmup-project.sh 在第一遍之前把 :app 里那行 `id(...)`、工厂和四条
-            #     调用一起摘掉（详见该脚本的 disable_buildsrc_plugin）。
+            #     `src/main/groovy/somcp.patched-local-jars.gradle` 还兼一份口径表：
+            #     patched jar 走「声明时换坐标」之后，第一遍的真实 :app 解析的是
+            #     `x.y.z.1`，而那份本地仓库只有 warmup-project.sh 按这张表铺出来
+            #     （publish_patched_local_repo）。所以插件在第一遍里**照常 apply** ——
+            #     预热下的坐标必须与运行期是同一套；第二遍的 :app 已换成没有
+            #     dependencies {} 的最小脚本，用不上它。
             #
             #     buildSrc 自己那份 `groovy-gradle-plugin` 是 Gradle 自带的，零外部
             #     插件依赖 —— 占位里写的也是同一个 id，两边必须是同一个插件，

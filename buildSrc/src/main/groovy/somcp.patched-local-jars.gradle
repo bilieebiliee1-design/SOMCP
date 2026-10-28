@@ -120,7 +120,16 @@ def somcpPatchedPomDependencies = [
 ]
 
 // 生成仓库的位置：跟着 build 目录走，配置缓存与 clean 都不会留下脏状态。
+// 这个目录同时也是 `settings.gradle.kts` 里 `somcpPatchedLocal` 仓库的 url，
+// 所以它必须在**任何依赖被声明之前**就存在：Gradle 在 `places files()` 那一刻
+// 就把路径记成任务的输入，声明 `files()` 时目录还没建出来，报的是
+//   Cannot fingerprint input property '...': file .../build/patched-jars-repo does not exist
+// —— 与本插件随后要写进去的东西毫无关系，报错却隔着三层。
+// 仓库里带了 `app/libs/build/patched-jars-repo/.ignore` 占位（`build/` 被 gitignore
+// 忽略，空目录进不了仓库），这里再兜一次：本脚本求值 = 项目已配置，建目录是配置期
+// 的纯文件系统操作，不影响配置缓存（它不读环境、不读解析结果）。
 def somcpPatchedRepo = new File(project.layout.buildDirectory.get().asFile, 'patched-jars-repo')
+somcpPatchedRepo.mkdirs()
 
 // 本地仓库里那份 POM。**必须带 dependencies**：见 somcpPatchedPomDependencies 的注释，
 // 空壳 POM 会让 capstone / keystone 的传递依赖整片消失，而它们在坐标世界里没有
@@ -232,18 +241,25 @@ def somcpUpstreamGroups = ['com.github.zhkl0228', 'com.github.zhkl0228.unidbg']
 // `configureEach` 保证后声明的 configuration（AGP 建的 debug*/release*/test* 等）
 // 也挂得上钩子。
 //
-// `whenObjectAdded` 在 `add` 里也可能被触发（本插件自己就 add 了一次），所以换完
-// 的坐标依赖必须再过一遍 `patchedCoordinatesFor` 时立刻返回 null。它返回 null 的
-// 依据是「不是 FileCollectionDependency」，与「是不是我加的」无关 —— 判据落在
-// 类型上，不靠状态位，重入也不会自己咬自己。
+// 换的方式是 `ModuleDependency.useTarget(...)`（Gradle 7.6 起稳定；老写法是
+// `DependencySubstitution`，那条路在配置缓存下会存一份替换规则，没必要），
+// 不是 `remove` + `add`：
+//   * `remove` 改的是集合本身，`whenObjectAdded` 正挂在这个集合的迭代里，边迭代
+//     边删是未定义行为；`useTarget` 只把**这一条**依赖的目标换掉，集合、顺序、
+//     约束都不动；
+//   * 换完的依赖仍然是坐标依赖，再回到本回调时 `patchedCoordinatesFor()` 返回 null
+//     （判据落在类型上，不靠状态位），重入不会自己咬自己；
+//   * `whenObjectAdded` 的契约要求回调是**非惰性**的（DependencySet.addLater 会直接
+//     抛 "Cannot mutate the dependency set in a lazy manner"）。声明层替换必须在这一
+//     刻完成 —— file 依赖一旦进了图，就没有「解析后再摘」的干净时机（见文件开头
+//     三条死路）。
 project.configurations.configureEach { configuration ->
     configuration.dependencies.whenObjectAdded { dependency ->
         def coordinates = patchedCoordinatesFor(dependency)
         if (coordinates == null) {
             return
         }
-        configuration.dependencies.remove(dependency)
-        configuration.dependencies.add(project.dependencies.create((String) coordinates))
+        dependency.useTarget(project.dependencies.create((String) coordinates))
         logger.info("[patched-jars] ${configuration.name}: file dependency -> ${coordinates}")
     }
     // 上游那两份 group 的坐标整块排掉（理由见上）。排在整个 configuration 上而不是

@@ -448,9 +448,10 @@ androidx / compose / ktor / okhttp 全没进缓存，而日志只看得到一句
 所以拆成两遍（`scripts/cnb/warmup-project.sh`）：
 
 1. **第一遍，仓库原样**（联网）：`buildSrc/` 在、`app/build.gradle.kts` 在、
-   `app/libs/` 在（只把 `buildSrc` 那个插件的 id 注释掉，见上一节）。这一遍把插件
-   marker（含 `buildSrc` 的）、AGP、lint 以及 `:app` 的整张运行时依赖图下进
-   `GRADLE_USER_HOME`。**失败即整层失败** —— 缓存没建起来就不该出镜像。
+   `app/libs/` 在、`buildSrc` 那个插件**照常 apply**（patched jar 的 `x.y.z.1` 就是它
+   换出来的，见上一节）。这一遍把插件 marker（含 `buildSrc` 的）、AGP、lint 以及
+   `:app` 的整张运行时依赖图下进 `GRADLE_USER_HOME`。**失败即整层失败** —— 缓存没
+   建起来就不该出镜像。
 2. **第二遍，最小工程**（联网）：`buildSrc/` 换成占位、`:app` 换成生成的最小脚本、
    `settings` 只留 `pluginManagement` + 照抄的 `dependencyResolutionManagement`。
    这一遍失败**只打 WARNING**：依赖在第一遍已经下来了，缺的只是改写后那份工程的边角。
@@ -458,8 +459,9 @@ androidx / compose / ktor / okhttp 全没进缓存，而日志只看得到一句
 镜像层的 `RUN` 只管两件事：跑这个脚本，然后用 `--offline` + `-PcnbCacheOnlyCheck`
 做一次「只看缓存」的复核。
 
-第二遍里 `settings.gradle.kts` 那条 `somcpPatchedLocalJars` 仓库仍然照抄保留（它指向的
-目录此时已不存在，Gradle 视为「什么都找不到」），依赖图照样解析。
+第二遍里 `settings.gradle.kts` 那条 `somcpPatchedLocal` 仓库仍然照抄保留 —— 第一遍铺
+在 `app/build/patched-jars-repo` 的那四个 `.1` 还在那儿，第二遍的最小 `:app` 没有
+`dependencies {}`，用不上，留着只为「预热和运行期看同一份仓库列表」。
 
 ### 裁根脚本时要把 `extra["somcp*"]` 留下
 
@@ -793,43 +795,44 @@ error writing value of type
 后者要从 Portal 拿 marker，而 `--offline` 复核读的是预热出来的用户目录，那里没有它。
 `scripts/cnb/setup-build-env.sh` 里那条复核的注释记着这件事。
 
-### 预热工程怎么处理这个插件（`cnb-ooc-1k626h4rl`）
+### 预热工程怎么处理这个插件（现在：第一遍带着它跑）
 
-预热工程不 apply 这个插件，但**光把 `plugins {}` 里那行注释掉不够**。`dependencies {}` 在
-Kotlin DSL 里是脚本编译完就执行的代码，四行 `implementation(patchedJar("x.jar", "g:a:v"))`
-照样求值，而工厂挂在 `project.ext` 上（只有插件 apply 时才挂）：
+`fce2fc8` 之后，patched jar 走的是「声明时换坐标」：`app/build.gradle.kts` 里那四条
+`implementation(patchedJar("x.jar", "x.y.z.1"))` 会被插件在**声明的那一刻**换成
+`x.y.z.1` 坐标依赖（`dependency.useTarget(...)`），jar 与 POM 由
+`app/libs/build/patched-jars-repo` 提供。
 
-```
-* Where:
-Build file '/tmp/cnb-warmup/app/build.gradle.kts' line: 328
-* What went wrong:
-null cannot be cast to non-null type groovy.lang.Closure<*>
-```
+预热必须跟着这条走：**第一遍按原样带着插件跑**，否则预热下的是上游 `x.y.z`、
+运行期用的是 `x.y.z.1`，两份缓存对不上。所以顺序是
 
-所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把声明、工厂、调用点三处
-一起摘掉（做法与判据见上文「预热分两遍」那一节）。
+1. `publish_patched_local_repo()`：照口径表把四个 `.1` 的 jar + 最小 POM 铺进
+   `app/build/patched-jars-repo`（`settings.gradle.kts` 里那个仓库 url）；
+2. `rewrite_root_script()`；
+3. `cold_build` —— 这一遍里插件是真的 apply 的。
 
-**试过一次「换成同坐标字符串」：不行。** 那一版把工厂改成
-`{ _: String, coordinates: String -> coordinates }`，再由预热工程自己造一份
-`app/build/patched-jars-repo` 供第二遍解析（`neutralize_patched_factory()` +
-`publish_patched_local_repo()`，两个函数现在都已删除）。表面上「依赖图完整」，实则第一遍
-就在 `x.y.z.1` 上失败 —— 那份本地仓库由插件生成，而插件在预热里必须摘掉，于是
-`Searched in` 里一个仓库都不认 `.1`：
+两个坑都在这一条线上踩过，改之前先读：
 
-```
-Could not find com.github.zhkl0228:unidbg-api:0.9.9.1
-```
+- **本地仓库目录必须比 `files()` 声明更早存在**。Gradle 在 `places files()` 那一刻就把
+  路径记成任务输入，目录不在会当场抛
+  `Cannot fingerprint input property '...': file .../patched-jars-repo does not exist`，
+  而且报在**所有**被声明的 `files()` 上，看着跟插件毫无关系。仓库里因此提交了
+  `app/libs/build/patched-jars-repo/.ignore`（空文件，只为让目录进 git），插件自己也会
+  `mkdirs()` 兜一次。
+- **`patchedJar` 返回的 file 依赖在镜像里必须能找到那两个 jar**，否则同一个
+  `Cannot fingerprint input property` 会落到 `libs/xxx.jar` 上。
 
-结论：`x.y.z.1` 只属于真构建，镜像缓存里不该有它。
+`disable_buildsrc_plugin()` 还在（摘声明 / 工厂 / 调用点三处，附 grep 与花括号断言），
+但现在**第一遍不调它**，只在真要回到「预热不带插件」的形态时才用。历史教训仍然有效：
+光把 `plugins {}` 那行注释掉不够，`dependencies {}` 照样求值，工厂挂在 `project.ext`
+上，插件不 apply 就取不到 —— 报错是
+`null cannot be cast to non-null type groovy.lang.Closure<*>`，落在 lambda 那行。
 
-**口径表缺席不是警告，是失败**（这条判据留着，虽然读表的地方已经不在预热里了）。
-它踩出来的教训值得记：曾经的 `publish_patched_local_repo()` 找不到口径表时只打一句
-`WARNING: buildSrc plugin not in the context` 就 `return 0`，于是 `x.y.z.1` 一整轮
-（`cnb-tau-1k627283e`）都没发布过，而那一轮的 **pass 2 照样"通过"** ——
+**口径表缺席不是警告，是失败**。曾经的 `publish_patched_local_repo()` 找不到口径表时
+只打一句 `WARNING: buildSrc plugin not in the context` 就 `return 0`，于是 `x.y.z.1`
+一整轮（`cnb-tau-1k627283e`）都没发布过，而那一轮的 **pass 2 照样"通过"** ——
 `simplify_app_script` 已经把 `:app` 换成没有 `dependencies {}` 的最小脚本，空的依赖图
 当然解析得开，**判据其实一直是空的**。现在预热对「该在的东西不在」一律 `exit 1`：
-`disable_buildsrc_plugin()` 摘完三类痕迹要 grep 断言一遍、花括号要数一遍，
-少一样就当场失败，不把红点留给运行期。
+口径表不在、`app/libs` 里少了某个 jar、解析出的条目数为 0，都会当场失败。
 
 **顺带补的一处**：镜像预热工程会生成一个一次性 keystore
 （`release/keystore.properties` + `keytool -genkeypair`）。`:app` 的配置阶段要读

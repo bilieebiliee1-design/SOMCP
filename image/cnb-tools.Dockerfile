@@ -128,15 +128,19 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 #     少设一次就是「预热下的东西运行期用不上」，白跑。
 # app/build.gradle.kts 与 app/libs/ 必须一起进上下文：预热的**第一遍**按仓库原样
 # 跑，:app 的真实脚本要求值一次 —— 只有这样才能把 androidx / compose / ktor /
-# okhttp 与 files("libs/*-patched.jar") 解析掉。第二遍才换成 warmup-project.sh
+# okhttp 与 patched jar 的 x.y.z.1 解析掉（四个 jar 本体也从这里读，见
+# warmup-project.sh 的 publish_patched_local_repo）。第二遍才换成 warmup-project.sh
 # 生成的最小脚本（只含 plugins {} + 最小 android {}），那时它们已不影响结果。
+# `app/libs/build/patched-jars-repo/` 那个空目录占位也一起进来 —— 它在仓库里就是为
+# 了让 `files()` 声明时目录已在（Gradle 会把不存在的路径当成 fingerprint 失败）。
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
 COPY app/build.gradle.kts /tmp/cnb-warmup/app/build.gradle.kts
 COPY app/libs/ /tmp/cnb-warmup/app/libs/
 # buildSrc 整个目录要进预热工程：预热第一遍按仓库原样跑（含真实 buildSrc），
 # 第二遍才换成占位 —— 理由见下面「buildSrc 必须被预热」那段。
-# 其中口径表 `somcpPatchedJars`（文件名 ↔ 上游坐标）另有用处：预热工程按它自己
-# 造一份本地仓库，第二遍的小工程才解析得到 `x.y.z.1`。
+# 其中口径表 `somcpPatchedJars`（文件名 ↔ 上游坐标）另有用处：warmup-project.sh
+# 按它把四个 `x.y.z.1` 铺成本地仓库，第一遍的真实 :app 才解析得到（插件在声明时把
+# file 依赖换成坐标，没有这份仓库就是 `Could not find ...:0.9.9.1`）。
 COPY buildSrc/ /tmp/cnb-warmup/buildSrc/
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
@@ -199,10 +203,10 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #       Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
 #     只删 /tmp/cnb-warmup 里的副本，仓库自己的 buildSrc/ 一个字节不碰。
 #
-#     另一头是 app 脚本里那行 `id("somcp.patched-local-jars")`：第二遍的占位
-#     buildSrc 不产出这个插件，所以第二遍**之前**要把那行注释掉，否则 app 脚本
-#     编译不过，而 :app 的 dependencies {} 全写在 plugins {} 之后 —— androidx /
-#     compose / ktor / okhttp 一行都求值不到（cnb-hkj-1k624u580 就是这么红的）。
+#     另一头是 app 脚本里那行 `id("somcp.patched-local-jars")`：**第一遍照常
+#     apply**（patched jar 的 `x.y.z.1` 就是它换出来的，预热必须下那套坐标，本地
+#     仓库由 warmup-project.sh 的 publish_patched_local_repo 提前铺好）；第二遍的
+#     :app 已被换成没有 dependencies {} 的最小脚本，插件自然用不上。
 #
 #     buildSrc 用 Gradle 自带的 `groovy-gradle-plugin` 而不用 `kotlin-dsl`：
 #     后者的 marker 要先从 Portal 下来，而占位里写的正是仓库那份的插件 id ——
