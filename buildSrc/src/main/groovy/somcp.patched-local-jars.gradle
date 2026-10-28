@@ -251,50 +251,55 @@ def patchedCoordinatesFor = { Object dependency ->
 // `com.github.zhkl0228.unidbg:unidbg-api` —— 那是另一份模块。
 //
 // 于是在替换的同一个钩子里把它也排掉：`exclude` 是**声明层**的操作（不像
-// `artifacts.remove` 那样动解析结果），配置缓存与变体视图都不受影响。写在整个
-// configuration 上而不是某个依赖块里 —— 同一坐标有多条传递路径
-// （unicorn2 → unidbg-api → unidbg-android，demumble / unicorn 各自也会带），
-// 逐块写只管得住自己那一条。
-//
-// 只排这四个模块，不整组排：`unicorn:1.0.15` 是 `unicorn.*` 唯一的来源
-// （见 app/build.gradle.kts 里那段注释），整组排掉会在 session_open 时
-// ClassNotFoundException。
-def somcpUpstreamGroups = ['com.github.zhkl0228', 'com.github.zhkl0228.unidbg']
+// `artifacts.remove` 那样动解析结果），配置缓存与变体视图都不受影响。
 
 // 只动 `files()` 这一种声明：普通坐标依赖、platform、project 依赖原样通过。
 // `configureEach` 保证后声明的 configuration（AGP 建的 debug*/release*/test* 等）
 // 也挂得上钩子。
 //
-// 换的方式是 `ModuleDependency.useTarget(...)`（Gradle 7.6 起稳定；老写法是
-// `DependencySubstitution`，那条路在配置缓存下会存一份替换规则，没必要），
-// 不是 `remove` + `add`：
-//   * `remove` 改的是集合本身，`whenObjectAdded` 正挂在这个集合的迭代里，边迭代
-//     边删是未定义行为；`useTarget` 只把**这一条**依赖的目标换掉，集合、顺序、
-//     约束都不动；
-//   * 换完的依赖仍然是坐标依赖，再回到本回调时 `patchedCoordinatesFor()` 返回 null
-//     （判据落在类型上，不靠状态位），重入不会自己咬自己；
+// 换的方式是 `remove` + `add`，**不是 `useTarget`**：
+//   * `useTarget` 只存在于 `ModuleDependency` 上。`files(...)` 造出来的是
+//     `DefaultFileCollectionDependency`，调它直接抛
+//       No signature of method: ...DefaultFileCollectionDependency.useTarget()
+//       is applicable for argument types: (DefaultExternalModuleDependency_Decorated)
+//     —— 而且是在配置期，整个工程连配置都过不去（本地实测，Gradle 9.6.1）。
+//   * `remove` + `add` 在本场景下是安全的：`whenObjectAdded` 的回调在依赖被加入
+//     集合**之后**触发，此时迭代已经结束，不是「边迭代边删」。本地实测无
+//     ConcurrentModificationException。add 进去的是坐标依赖，再回到本回调时
+//     `patchedCoordinatesFor()` 返回 null（判据落在类型上），重入不会自己咬自己。
 //   * `whenObjectAdded` 的契约要求回调是**非惰性**的（DependencySet.addLater 会直接
 //     抛 "Cannot mutate the dependency set in a lazy manner"）。声明层替换必须在这一
 //     刻完成 —— file 依赖一旦进了图，就没有「解析后再摘」的干净时机（见文件开头
 //     三条死路）。
+//
+// 顺序要紧：先 `add` 坐标依赖、再 `remove` file 依赖。反过来的话，中间那一刻配置里
+// 一条依赖都不剩，AGP 随后读声明时可能看到空集合；先 add 则集合始终非空。
 project.configurations.configureEach { configuration ->
     configuration.dependencies.whenObjectAdded { dependency ->
         def coordinates = patchedCoordinatesFor(dependency)
         if (coordinates == null) {
             return
         }
-        dependency.useTarget(project.dependencies.create((String) coordinates))
-        logger.info("[patched-jars] ${configuration.name}: file dependency -> ${coordinates}")
+        configuration.dependencies.add(
+            project.dependencies.create((String) coordinates)
+        )
+        configuration.dependencies.remove(dependency)
+        logger.lifecycle("[patched-jars] ${configuration.name}: ${dependency.name} -> ${coordinates}")
     }
-    // 上游那两份 group 的坐标整块排掉（理由见上）。排在整个 configuration 上而不是
-    // 某个依赖块里：同一坐标有多条传递路径。`exclude` 的语义是集合，`configureEach`
-    // 重复执行也只是同一组规则被再说一遍，不叠加。
-    somcpPatchedJars.keySet().each { fileName ->
-        def module = parseCoordinates(somcpPatchedJars[fileName])[1]
-        somcpUpstreamGroups.each { upstreamGroup ->
-            configuration.exclude(group: upstreamGroup, module: module)
-        }
-    }
+    // **这里绝不能按 group/module 加 exclude。**
+    //
+    // 声明层替换之后，patched 版本是 `x.y.z.1`、上游是 `x.y.z`，两者 group / module
+    // 逐字相同、只有版本不同。`exclude(group:, module:)` 不认版本，会把 patched 那份
+    // 一起排掉 —— 于是 unidbg-api / unidbg-android 的**所有** jar 都从 classpath
+    // 上消失，Debug 构建不报重复类了（看着像修好了），但 APK 里没有 unidbg 的类，
+    // session_open 时 ClassNotFoundException。本地实测：加 exclude 时
+    //   all files = [... 没有 unidbg-api / unidbg-android ...]
+    // 去掉 exclude 时
+    //   all files = [..., unidbg-android-0.9.9.1.jar, unidbg-api-0.9.9.1.jar, ...]
+    // 且 duplicated = []。
+    //
+    // 上游 `x.y.z` 不需要另外排：`.1` 与它同坐标，Gradle 的冲突解析按版本取高，
+    // `.1` 必然胜出，上游那份连 artifact 都不会落地。实测依赖树里只剩 `0.9.9.1`。
 }
 
 // `app/build.gradle.kts` 里用 `patchedJar(fileName, coordinates)` 取依赖；返回普通
