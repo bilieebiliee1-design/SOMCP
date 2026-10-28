@@ -39,13 +39,19 @@
 
 // 原位替换：不增不减、不打乱顺序，逐个把 url 换成本地空目录。
 // 空目录保证「未命中就是真的没有」，--offline 保证不会真的出网。
+// 本地空目录必须跟 GRADLE_USER_HOME 走，不能写死 ~/.gradle：镜像里那个变量是
+// /root/.gradle、user.home 也是 /root，看起来一样；但预热复核用的 GRADLE_USER_HOME
+// 是 /tmp/cnb-warmup-home，CNB 的 task 容器也不保证 HOME 等于它。写死只会把目录
+// 生成在别处（判据本身不受影响，但位置对不上，排查时容易往错的方向找）。
+def gradleUserHome = new File(System.getenv('GRADLE_USER_HOME') ?: System.getProperty('user.home') + '/.gradle')
+
 def restrict = { repositories, layer ->
     def originals = repositories.collect { repo -> [repo.name, repo.url.toString()] }
     repositories.clear()
     originals.eachWithIndex { original, i ->
         def name = original[0]
         def url = original[1]
-        def repoDir = new File(System.getProperty('user.home'), ".gradle/cnb-cache-only/${layer}/${i}")
+        def repoDir = new File(gradleUserHome, "cnb-cache-only/${layer}/${i}")
         repoDir.mkdirs()
         repositories.maven { repo ->
             repo.name = "${name}-cache-only"

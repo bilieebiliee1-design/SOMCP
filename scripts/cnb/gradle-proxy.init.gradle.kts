@@ -72,7 +72,14 @@ if (System.getenv("CNB_BUILD_ID") != null && cnbHasProjectProperty("cnbCacheOnly
     // 拆成独立脚本的理由：本文件是 .kts，`beforeSettings` 收的是 bridged 的
     // org.gradle.api.Action，Kotlin 侧要额外的 SAM 适配才好写；那半段逻辑一次成型、
     // 不值得把整个 init script 改成 Groovy（代理那段已经稳定）。
-    val cacheOnlyScript = File(System.getProperty("user.home"), ".gradle/cnb-cache-only.gradle")
+    // 位置跟 GRADLE_USER_HOME 走：镜像里那个变量是 /root/.gradle，看起来和 ~/.gradle
+    // 一样，但预热复核用的是 /tmp/cnb-warmup-home —— 写成 user.home 时，
+    // 镜像里的「只看缓存」复核会找不到脚本、以「脚本缺失」而不是「缓存不全」失败
+    // （第一次跑就是这样，报错还把人往 Dockerfile 的 COPY 上引）。
+    val cacheOnlyScript = File(
+        System.getenv("GRADLE_USER_HOME") ?: System.getProperty("user.home") + "/.gradle",
+        "cnb-cache-only.gradle",
+    )
     if (!cacheOnlyScript.isFile) {
         throw IllegalStateException(
             "cnbCacheOnlyCheck requested but ${cacheOnlyScript} is missing; " +
