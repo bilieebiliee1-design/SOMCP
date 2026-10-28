@@ -62,8 +62,9 @@ if [ -d "$GRADLE_IMAGE_HOME" ] && [ ! -e "$GRADLE_USER_HOME/init.d/cnb-init.grad
 fi
 [ -f "$GRADLE_USER_HOME/init.d/cnb-init.gradle" ] \
   || fail "missing $GRADLE_USER_HOME/init.d/cnb-init.gradle (image warmup did not run)"
-# 复核脚本跟 init script 一起搬过来；缺了它 -PcnbCacheOnlyCheck 会在求值 init
-# script 时就抛错，报错点比「缓存不完整」更难读。
+# 复核脚本由 gradle-init.gradle 的 deployCacheOnlyScript 从 /opt/cnb 投放；
+# 缺了它 -PcnbCacheOnlyCheck 会在求值 init script 时就抛错，报错点比
+# 「缓存不完整」更难读，所以这里补一条断言（init script 那边只打 warning）。
 [ -f "$GRADLE_USER_HOME/cnb-cache-only.gradle" ] \
   || fail "missing $GRADLE_USER_HOME/cnb-cache-only.gradle (image must COPY scripts/cnb/gradle-cache-only.gradle)"
 
