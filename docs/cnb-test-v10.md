@@ -98,14 +98,28 @@ CNB 上没有对应动作；不预热就只能每个 stage 从空缓存现场冲
 
 **Maven Central 限流必须正面处理**：`repo1.maven.org` / `repo.maven.apache.org`
 对同一出口 IP 有共享请求上限，实测连打同一个 POM 40 次有 16 次返回 429（40%）。
-Gradle 默认把 429 判成**不可重试**，于是一个限流响应被翻译成
+Gradle 对 429 **是**会重试的（`NetworkingIssueVerifier` 把它归入 transient），
+但默认只试 3 次、退避 1 秒，冷启动那一波并发下不够。重试用尽后它报的仍是
 `Plugin [id: ..., version: ...] was not found` —— 看起来像版本号写错。
-`gradle.properties` 里的 `org.gradle.internal.repository.max.retries` /
-`initial.backoff` 实测救不了（给 daemon JVM 设了属性也照样不重试 429），
-所以不靠它，靠镜像。
+注意 `org.gradle.internal.repository.max.retries` 这个键在 Gradle 8 里**不存在**
+（正确键是 `max.tentatives`，且必须带 `systemProp.` 前缀），那种写法加了也无效。
 
-真正有效的做法是 `scripts/cnb/gradle-init.gradle`：把镜像**追加**在原仓库列表之后。
+主力的做法是 `scripts/cnb/gradle-init.gradle`：把镜像**追加**在原仓库列表之后。
 它只在 `CNB_BUILD_ID` 存在时生效，本地开发完全不介入。
+兜底有三层，判据都不放松：
+
+1. `gradle.properties` 的 `systemProp.org.gradle.internal.repository.max.tentatives=12` +
+   `initial.backoff=1000` —— 把重试次数从默认 3 次提到 12 次。
+2. `scripts/cnb/gradle.sh` 外层重试：失败 → 退避 → 原命令重跑，最多 3 次。
+   已下载的依赖不会重下，重跑只重新解析；真失败重跑仍然失败。
+3. `gradle-proxy.init.gradle.kts` 在 `settingsEvaluated` 里**断言**上面两个属性存在：
+   缺了直接报出修复方法，而不是让 429 再伪装成「插件不存在」。
+
+另外 `gradle-proxy.init.gradle.kts` 还会把 `MavenRepo` 挪到 pluginManagement 首位
+（`remove` + `addFirst` 同一实例；Gradle 8 没有 `RepositoryHandler.move`，
+`clear()` 重建会连镜像一起清掉）。原因：`google()` 排在 Central 前面，而 Google Maven
+没有 `kotlin.android.gradle.plugin` 这类标记 artifact，每个插件都要先吃一次 404 才回落。
+这轮 404 与真正要拉的 POM 一起把 429 打出来。只调顺序、不增删仓库，镜像仍在末尾兜底。
 
 - **不删不改原仓库**：`google()`、`gradlePluginPortal()`、原 `mavenCentral()` 全在，
   所以 AGP 的 marker 仍走 Google，解析顺序和失败语义不变；
