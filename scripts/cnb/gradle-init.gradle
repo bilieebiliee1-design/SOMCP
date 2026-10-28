@@ -26,8 +26,9 @@
 // 但「只追加」对 JitPack 这类**没有公共镜像**的仓库是致命的，见 noMirror 与
 // addCentralOnlyMirror 的注释 —— 假 200 与 429 都能让它在镜像那里就走不下去。
 //
-// 只追加、不删除、不替换原仓库：
-//   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，解析顺序不变；
+// 不加、不删、不改原仓库：
+//   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，相对顺序不变
+//     （镜像插到最前，理由见 addMirrors）；
 //   * 版本、依赖图、产物字节完全一致（镜像里是同一份构件）；
 //   * 真不存在的版本照样失败（Gradle 只在 404 时才继续试下一个仓库）。
 //
@@ -106,23 +107,39 @@ def noMirror = { repo ->
     url.contains('jitpack.io') || url.startsWith('file:')
 }
 
-// 追加镜像。`all {}` 会在每次往仓库列表里新增仓库后被回调，所以这个闭包会被
-// 重复调用：用 findByName 挡住重复添加。
+// 把镜像加进仓库列表，并且**插到最前面**，不是追加在末尾。
 //
-// 但**一个 `all {}` 回调只保证跑一次**：在回调里加仓库不会让它再被调用，所以
-// 不能指望 `addMirrors` 加完第一个就停、下一轮由回调替它补第二个 —— 实测
+// 顺序是有讲究的，别「统一一下」：`repositories.maven { }` 默认追加在末尾，于是
+// 依赖侧的 `cnb-mirror-0(/public)` 排在 `mavenCentral()` 后面 —— 冷启动几十个请求
+// 先撞 Maven Central 的 429，解析在第一个仓库就失败，后面那个能用的镜像
+// **一次都没被访问**（实测：本地复刻镜像的预热工程，日志里 maven.aliyun.com
+// 出现 0 次、repo.maven.apache.org 一路 429）。插件侧那两个同样插到最前，但相对
+// 顺序保持「gradle-plugin 镜像在前、/public 在后」：marker 必须由 gradle-plugin
+// 镜像或 google() 命中，/public 对 AGP marker 的假 200 不能抢在前面。
+// 上面 noMirror 那段是同一个病的另一面：原仓库里没有的构件，镜像不能替它做决定。
+//
+// 「只追加不删改原仓库」的初衷是不改变解析**结果**，不是不改变**顺序** ——
+// 镜像命中即同一份构件，顺序变了结果不变；真不存在的版本照样落到下一个仓库。
+//
+// 另一个坑：**一个 `all {}` 回调只保证跑一次**，在回调里加仓库不会让它再被调用，
+// 所以不能指望 `addMirrors` 加完第一个就停、下一轮由回调替它补第二个 —— 实测
 // pluginManagement 里只剩 `cnb-plugin-mirror-0` 与 `cnb-plugin-central-mirror-0`，
-// `/gradle-plugin` 那条镜像根本没出现。改成让 `addMirrors` 自己循环到干不动为止：
-// `all {}` 负责起头，`addMirrors` 负责加完，任何一方先退出都不影响结果。
+// `/gradle-plugin` 那条镜像根本没出现。所以 `addMirrors` 自己循环到加进去为止：
+// `all {}` 负责起头，`addMirrors` 负责加完。
 //
-// 顺序仍然是「追加在末尾」，不做插队：原仓库先试，镜像只兜它们的缺货。
+// `all {}` 会被重复回调，findByName 挡住重复添加；每次新加的那条都要
+// `remove` + `addFirst` 才算插到最前。
 def addMirrors = { repositories, urls, prefix ->
     urls.eachWithIndex { url, i ->
         def name = prefix + i
-        while (!repositories.findByName(name)) {
-            repositories.maven { repo ->
-                repo.name = name
-                repo.url = url
+        if (!repositories.findByName(name)) {
+            while (!repositories.findByName(name)) {
+                def mirror = repositories.maven { repo ->
+                    repo.name = name
+                    repo.url = url
+                }
+                repositories.remove(mirror)
+                repositories.addFirst(mirror)
             }
         }
     }
@@ -130,11 +147,13 @@ def addMirrors = { repositories, urls, prefix ->
 
 // 依赖侧真正的坑：**JitPack 的坐标会被 Maven Central 镜像直接接走。**
 //
-// 依赖仓库列表是 google() / mavenCentral() / jitpack 加末尾的 cnb-mirror-0。
+// 依赖仓库列表最终形如 [jitpack, cnb-mirror-0, google, mavenCentral]
+// （镜像插在最前，JitPack 由 jitpackFirst 再提到首位，见文件末尾）。
 // 本仓库的 com.github.rikkahub:markdown 只有 JitPack 有（Maven Central 上
-// 404，Google 上 404），前两个仓库老实放过它，轮到 cnb-mirror-0 时：
+// 404，Google 上 404），真正的问题是排在列表最前的镜像先接到这个坐标：
 // 没被限流就是 200 + 一张「资源不存在」的 HTML 页，被限流就是 429 ——
-// 两种都让 Gradle 原地判死，**JitPack 明明在最后一行却永远走不到**。
+// 两种都让 Gradle 原地判死 —— 这也是文件末尾要有 jitpackFirst 的原因：把 JitPack
+// 提到整个列表首位，让「命中即停」，这些请求根本不发出去。
 //
 // 试过的另一条路是给镜像加 content 过滤（只放行 Central 上确实存在的 group），
 // 靠 group 级 maven-metadata.xml 判断。实测在 aliyun 上不可靠：
