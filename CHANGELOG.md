@@ -49,6 +49,17 @@
   - 顺带订正一处文档结论：Gradle **不是**把 429 判成不可重试（`NetworkingIssueVerifier` 明确把 429 归入 transient），而是默认只重试 3 次、退避 1 秒，冷启动并发下不够。
   - **验证**：最小工程复刻真实 `pluginManagement` 并声明 kotlin.android / plugin.compose 两个 2.4.0 插件。`max.tentatives=3`（默认）→ `BUILD FAILED`，日志 2 处 429；`=12` → `BUILD SUCCESSFUL`，日志 0 处 429，仓库顺序 `[MavenRepo, Google, Gradle Central Plugin Repository]`；与 `gradle-init.gradle` 同时加载时顺序为 `[MavenRepo, Google, cnb-mirror-0, ...]`，两者不冲突。抽掉两个 `systemProp` → init script 立即以可读信息失败。**未执行**：完整流水线（本机禁本地构建）。
 
+- **CI 修复第八轮：429 的真实受害者是 JitPack 依赖，不只是插件**（`scripts/cnb/gradle-init.gradle`）。`Android Lint` 这次换了个报错（`cnb-mhn-1k61ntauj` stage 8）：
+  ```
+  Could not resolve com.github.rikkahub:markdown:d79a97cc8e
+    > Could not GET 'https://repo.maven.apache.org/maven2/com/github/rikkahub/
+       markdown/d79a97cc8e/markdown-d79a97cc8e.pom'. Received status code 429
+  ```
+  `com.github.rikkahub:markdown` 只在 JitPack 上（我实测 Maven Central 对该 POM 是 404，JitPack 是 200）。问题在于 `settings.gradle.kts` 里 `mavenCentral()` 排在 `maven("https://jitpack.io")` 前面，所以每个仅在 JitPack 上的依赖都要先去 Central 撞一次。
+  - **关键区别：404 会继续试下一个仓库，429 不会**。`NetworkingIssueVerifier` 把 429 判成 transient，重试次数用尽后整个解析直接失败，后面那个真正有构件的仓库根本轮不到。所以「多给点重试」治不了这一类——必须让请求根本不发到 Central。
+  - **修法**：在 `settingsEvaluated` 里把 JitPack 移到 `dependencyResolutionManagement` 的首位，命中即停。按 URL 匹配而不是按名字（`maven("https://jitpack.io")` 的默认名是 `maven`，改名或同名多个就会挪错）。只挪顺序、不增删仓库，且只在 `CNB_BUILD_ID` 存在时生效。
+  - **验证**：造了个只依赖 `com.github.rikkahub:markdown:d79a97cc8e` 的最小工程，空 `GRADLE_USER_HOME`。`projectsLoaded` 时仓库顺序由 `[Google, cnb-mirror-0, MavenRepo, maven]` 变为 `[maven, Google, cnb-mirror-0, MavenRepo]`，`resolve` 拿到 `markdown-d79a97cc8e.jar`，全程没有向 Central 请求过该 POM。**未执行**：完整流水线。
+
 - **CI 触发清理：移除 test.yml ~ test-v8.yml 与 build.yml 的 push 自动触发**（`.github/workflows/test.yml`、`test-v2.yml`、`test-v3.yml`、`test-v4.yml`、`test-v5.yml`、`test-v6.yml`、`test-v7.yml`、`test-v8.yml`、`build.yml`）。push 到 main 不再自动跑这 9 个工作流，仅保留 `workflow_dispatch`（手动触发以及 `pr-auto-review.yml` 合并后 dispatch 补触发入口）；test-v9.yml / test-v10.yml / release.yml 等其余工作流不在此列。目的：消除每次推送 main 触发的双倍 CI 负载（含 2h VMP 构建）。
 - **新增 CVE-2026-111943（eMudhra 中间 CA 私钥泄漏）的 TLS 拉黑，覆盖 app 自建的 6 个 HTTPS 客户端**（`core/CompromisedCaBlocklist.kt` 新增、`core/CloudflareTunnelManager.kt`、`core/PublicReachability.kt`、`core/GitHubUpdateManager.kt`、`core/AgentKernel.kt`、`core/ApkMcpBridge.kt`、`core/DeepAnalysisService.kt` 各接入一行、`app/src/test/java/com/soreverse/mcp/core/CompromisedCaBlocklistTest.kt` 新增）。2025-04-30 eMudhra 一次密钥仪式产出的 8 张中间 CA 密钥，其 P-384 标量熵不足 256 位，2026-10-17 起任何人可在数秒内还原私钥（6 张 TLS、2 张代码签名）；持有者能为任意主机名签发证书，而设备默认信任链仍然接受它。对本 app 而言受影响的真实面是：快隧道注册（api.trycloudflare.com）、隧道公网可达性探测（用户自填的 `*.trycloudflare.com` 地址——被劫持时探测会报"可访问"这种假绿灯）、GitHub 更新与 APK 校验、以及 AI 引擎与深度分析的全部出网请求。
   - **判据落在公钥上而不是证书上（本条的核心判断）**。现场核验发现 8 张中间证书**全部另有由 "AAA Certificate Services" 交叉签名的副本，且公钥完全相同**（SPKI 的 SHA-256 一致，交叉签名副本有效期到 2028-12-31）。吊销与根程序不信任都以「eMudhra 自有根 + 序列号」为键，交叉签名副本的 issuer/serial 不在其列；AAA 根本身是各信任库里的常规锚点——于是「伪造叶子 → AAA 签名的 G3B/G3C → AAA 根」这条链在已经同步了吊销信息的设备上也照样验证通过。照公告只拉黑那 8 张证书，攻击面几乎没缩。因此主判据是泄漏公钥的 SPKI SHA-256（8 条），证书 DER SHA-256（17 条已知编码）只作次判据。
