@@ -81,4 +81,37 @@ if (System.getenv('CNB_BUILD_ID') != null) {
         pluginRepos.all { addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-') }
         depRepos.all { addMirrors(depRepos, MIRROR_URLS, 'cnb-mirror-') }
     }
+
+    // JitPack 仓库前置到 Maven Central 之前。
+    //
+    // 真正的失败长这样（stage Android Lint，cnb-mhn-1k61ntauj）：
+    //
+    //   Could not resolve com.github.rikkahub:markdown:d79a97cc8e
+    //     > Could not GET 'https://repo.maven.apache.org/maven2/com/github/rikkahub/
+    //        markdown/d79a97cc8e/markdown-d79a97cc8e.pom'.
+    //       Received status code 429 from server: Too Many Requests
+    //
+    // 这个构件只在 JitPack 上（Maven Central 上是 404，我实测过），settings 里
+    // `mavenCentral()` 排在 `maven("https://jitpack.io")` 前面，所以每次都要先去
+    // Central 撞一次。**404 的话 Gradle 会继续试下一个仓库，429 不会**：
+    // NetworkingIssueVerifier 把 429 判成 transient，重试次数用尽后整个解析就失败，
+    // 后面那个真正有构件的仓库根本轮不到。所以把 JitPack 提到 Central 前面，
+    // 让「命中即停」，Central 那边一次请求都不发。
+    //
+    // 只挪顺序、不增删仓库；本地没有 CNB_BUILD_ID 时这句话不会执行。
+    // 按 URL 找，不按名字：`maven("https://jitpack.io")` 的默认名是 `maven`，
+    // 但仓库改名 / 同名多个时按名字猜就会挪错。
+    def jitpackFirst = { repositories ->
+        def jitpack = repositories.find { repo ->
+            repo instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository &&
+                repo.url.toString().startsWith('https://jitpack.io')
+        }
+        if (jitpack != null && repositories.indexOf(jitpack) != 0) {
+            repositories.remove(jitpack)
+            repositories.addFirst(jitpack)
+        }
+    }
+    settingsEvaluated { settings ->
+        jitpackFirst(settings.dependencyResolutionManagement.repositories)
+    }
 }
