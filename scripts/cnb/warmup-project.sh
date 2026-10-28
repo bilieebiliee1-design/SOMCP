@@ -49,19 +49,33 @@ awk '
 ' settings.gradle.kts > settings.gradle.kts.new
 grep -q 'mavenCentral\|google()' settings.gradle.kts.new \
   || { echo "[warmup] ERROR: pluginManagement repositories not found in settings.gradle.kts" >&2; exit 1; }
+# 子项目必须声明：只解析插件时，:app 的运行时依赖（androidx / compose / ktor /
+# okhttp…）一个都不会进缓存 —— 运行期照样现场冲网，预热等于只做了一半。
+# AGP 配置子项目时要查 SDK，因此这条只在镜像里成立（ANDROID_HOME 由 ENV 给出，
+# sdkmanager 装齐的 android-36 就在同一个镜像里）。
+#
+# dependencyResolutionManagement 必须**照抄仓库自己的那份**，不能手写一份
+# `google() + mavenCentral()`：本仓库还依赖 JitPack 的 com.github.<owner>:<repo>
+# 坐标，手写的列表里没有 jitpack.io，预热就会在 `:app:dependencies` 处把它解析成
+# FAILED（实测日志里出现 `com.github.rikkahub:markdown:d79a97cc8e FAILED`、
+# jitpack.io 一次都没被请求），而运行期是有的 —— 预热的仓库列表与运行期不一致，
+# 等于给运行期留了一份「预热没覆盖到」的依赖。
+awk '
+  /^dependencyResolutionManagement[[:space:]]*\{/ { indep = 1 }
+  indep { print }
+  indep && /^\}/ { exit }
+' settings.gradle.kts > dependency-resolution.tmp
+[ -s dependency-resolution.tmp ] \
+  || { echo "[warmup] ERROR: dependencyResolutionManagement not found in settings.gradle.kts" >&2; exit 1; }
 # 预热工程不需要真正的项目名，但不能没有（Gradle 9 缺省用目录名，留着原文更明确）。
+printf '\n' >> settings.gradle.kts.new
+cat dependency-resolution.tmp >> settings.gradle.kts.new
 cat >> settings.gradle.kts.new <<'SETTINGS'
 
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-
 rootProject.name = "cnb-warmup"
+include(":app")
 SETTINGS
+rm -f dependency-resolution.tmp
 mv settings.gradle.kts.new settings.gradle.kts
 
 echo "[warmup] project rewritten in $DIR:"
