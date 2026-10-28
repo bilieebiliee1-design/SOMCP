@@ -232,3 +232,30 @@ sed: can't read /build.gradle.kts: No such file or directory
 
 `versionBy` 仍只写 Dockerfile。被 `by` 额外带进上下文的文件只解决「可见性」，
 不该让缓存版本跟着漂移；预热本身吃 `RUN` 层缓存，构建脚本变了 Gradle 会自己重解析。
+
+## 预热失败与工具链失败的分界
+
+镜像里的预热段（`gradle help`）与工具链（JDK / Gradle / SDK / NDK）共用同一个
+`RUN` 之前的若干层。如果预热失败就让镜像构建整体失败，一次 Maven Central 抖动
+就要连 sdkmanager 一起重来（实测整层 4 分 38 秒，其中 SDK 安装 171 秒）。
+所以两件事分开判：
+
+- **镜像层**：预热失败只打 warning（把 Gradle 日志尾部打到 stderr，否则只剩一行
+  `BUILD FAILED`），镜像照常产出。这意味着镜像可能带着不完整的依赖缓存。
+- **运行期**：`scripts/cnb/setup-build-env.sh` 在第一个 stage 用
+  `gradle --offline --no-daemon help` 复核 —— 离线跑得通才说明插件与构建期依赖
+  真的都在 `$GRADLE_USER_HOME` 里；跑不通当场失败，并指回 Dockerfile 的预热段。
+
+这样「缓存可用」这个判据一条没少，只是失败点从镜像构建挪到了第一个 stage，
+报错文字也从后面的 `Plugin [id: ..., version: ...] was not found` 提前成一句
+「warmup cache is incomplete」。要多付一次 `gradle help` 的 10 秒左右（离线、无 daemon）。
+
+已知的预热失败形态与当前处理：
+
+| 现象 | 归属 | 处理 |
+| --- | --- | --- |
+| `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
+| `Plugin [id: '...', version: '...'] was not found` | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
+| 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
+
+`GRADLE_WARMUP_CHECK=0` 可以关掉运行期复核（只用于排查，正常流水线不要关）。

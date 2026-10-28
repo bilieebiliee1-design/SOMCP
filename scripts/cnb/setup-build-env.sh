@@ -62,6 +62,23 @@ if [ -d "$GRADLE_IMAGE_HOME" ] && [ ! -e "$GRADLE_USER_HOME/init.d/cnb-init.grad
 fi
 [ -f "$GRADLE_USER_HOME/init.d/cnb-init.gradle" ] \
   || fail "missing $GRADLE_USER_HOME/init.d/cnb-init.gradle (image warmup did not run)"
+
+# 复核镜像里的预热结果：镜像构建时预热失败不判死镜像（否则一次网络抖动就要
+# 连 SDK/NDK 一起重建），改为在这里用 --offline 复跑一次 `gradle help` ——
+# 离线跑得通，说明插件与构建期依赖确实都在用户目录里；跑不通就是缓存不完整，
+# 当场失败，报错点比后面某个 stage 的 "Plugin ... was not found" 近得多。
+# 这一条和原工作流 setup-gradle 的判据等价：缓存拿不到就退回联网解析，
+# 这里则是明确报错，指向需要重跑的下游步骤。
+WARMUP_CHECK="${GRADLE_WARMUP_CHECK:-1}"
+if [ "$WARMUP_CHECK" = "1" ]; then
+  if ( cd "$WS" && gradle --offline --no-daemon --console=plain -q help > /tmp/cnb-warmup-check.log 2>&1 ); then
+    log "gradle user home: warmup cache verified (offline help OK)"
+  else
+    tail -n 40 /tmp/cnb-warmup-check.log >&2 || true
+    fail "gradle warmup cache is incomplete: \`gradle --offline help\` failed. The image warmup step (image/cnb-tools.Dockerfile) did not finish; rebuild the base image (docker:cache) rather than retrying the pipeline"
+  fi
+  rm -f /tmp/cnb-warmup-check.log
+fi
 log "gradle: ${GRADLE_ACTUAL} (GRADLE_USER_HOME=${GRADLE_USER_HOME}, data volume, no cross-build cache)"
 
 # --- Android SDK / NDK -----------------------------------------------------
