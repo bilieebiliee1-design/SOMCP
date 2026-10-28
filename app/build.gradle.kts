@@ -357,9 +357,10 @@ dependencies {
     // file 依赖不进图，上游那份就算经 unidbg-api 的 POM 传递依赖进来，冲突解析
     // 也只会留下高版本那份，于是 checkDebugDuplicateClasses /
     // mergeDebugJavaResource 不再报同名 class。坐标依赖的 jar 与 POM 由插件写进
-    // `app/build/patched-jars-repo`，也就是 `settings.gradle.kts` 里
-    // `somcpPatchedLocal` 那个仓库的 url（两边必须是同一个绝对路径，路径怎么算的
-    // 见插件里 somcpPatchedRepo 那一段）。
+    // `app/libs/build/patched-jars-repo`，也就是 `settings.gradle.kts` 里
+    // `somcpPatchedLocal` 那个仓库的 url（两边必须是同一个绝对路径）。刻意不开在
+    // `build/` 下：buildDir 中途被清空会让 `.1` 变成「找不到依赖」，见插件里
+    // somcpPatchedRepo 那一段。
     // 这里的坐标必须与 buildSrc 那张口径表逐字相同（表是唯一真源，对不上会直接
     // 在配置期报错）。
     //
