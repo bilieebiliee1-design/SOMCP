@@ -109,11 +109,12 @@ main:
             #     仓库列表都从这份源码读出来。
             #     早先两遍都把它删掉，于是预热的工程形状与运行期不同，复核连续几轮
             #     都倒在 `buildSrc/build.gradle.kts` 那行 `kotlin-dsl was not found`。
-            #     其中 `src/main/groovy/somcp.patched-local-jars.gradle` 还有第二个用途：
-            #     口径表（jar 文件名 ↔ 上游坐标）在里面，warmup-project.sh 按它自己造
-            #     一份 `x.y.z.1` 的本地仓库，第二遍才解析得到那几条依赖。
-            #     注意 :app 里那行 `id("somcp.patched-local-jars")` 第二遍之前要被注释掉
-            #     （占位不产出这个插件），这一步也由 warmup-project.sh 负责。
+            #     `src/main/groovy/somcp.patched-local-jars.gradle` 只作为「运行期要编译的
+            #     东西」进上下文（第一遍编译它，插件 marker 才进缓存）；预热工程里
+            #     **不 apply 它、也不解析它生成的 `x.y.z.1`** —— 那份本地仓库是给真构建的
+            #     依赖图用的，进镜像缓存只会在复核时变成「找不到依赖」。所以
+            #     warmup-project.sh 在第一遍之前把 :app 里那行 `id(...)`、工厂和四条
+            #     调用一起摘掉（详见该脚本的 disable_buildsrc_plugin）。
             #
             #     buildSrc 自己那份 `groovy-gradle-plugin` 是 Gradle 自带的，零外部
             #     插件依赖 —— 占位里写的也是同一个 id，两边必须是同一个插件，

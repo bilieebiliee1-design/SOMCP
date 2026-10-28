@@ -345,13 +345,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
     implementation("org.jsoup:jsoup:1.22.2")
-    // 这四个是上游同名模块的重打包版本，按**上游坐标 + 高版本号**声明：files() 不带
-    // 坐标，Gradle 就认不出「这份 patched jar 顶替的是哪个模块」，上游那份（经
-    // unidbg-api 的 POM 传递依赖自动进来）会与它并存，于是
-    // checkDebugDuplicateClasses / mergeDebugJavaResource 报同名 class。
-    // 版本号 `<上游版本>.1` 让冲突解析按「高版本胜出」挑走我们这份（`.patched` 不行：
-    // Gradle 按字符串比版本，`0.9.9.patched` 排在 `0.9.9` 之前）；
-    // 真正的 jar 内容由 buildSrc/somcp.patched-local-jars 发布到本地 Maven 仓库。
+    // 这四个是上游同名模块的重打包版本。`patchedJar` 返回一个 file 依赖，而
+    // buildSrc 的 somcp.patched-local-jars 会在它被声明的那一刻换成
+    // 「上游坐标 + 高版本号」（`x.y.z.1`）：file 依赖不进图，上游那份就算经
+    // unidbg-api 的 POM 传递依赖进来，冲突解析也只会留下高版本那份，于是
+    // checkDebugDuplicateClasses / mergeDebugJavaResource 不再报同名 class。
+    // 换完之后的坐标依赖由 `<project>/build/patched-jars-repo` 提供 jar 与 POM。
+    // 这里的坐标必须与 buildSrc 那张口径表逐字相同（表是唯一真源，对不上会直接
+    // 在配置期报错）。
     implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
     implementation(patchedJar("unidbg-android-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-android:0.9.9.1"))
     implementation(patchedJar("capstone-3.1.8-android-patched.jar", "com.github.zhkl0228:capstone:3.1.8.1"))
