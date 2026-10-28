@@ -103,20 +103,21 @@ main:
             #     plugins {} + 最小 android {}），那时它们已不影响结果。
             #     历史教训：怕「脚本编译不过就闷杀整层预热」而干脆不带 app 脚本，
             #     结果就是 :app 的运行时依赖一个都没预热，运行期照样现场冲网。
-            #   * buildSrc/src/main/groovy/somcp.patched-local-jars.gradle **要进上下文**：
-            #     预热工程不 apply 这个插件，但第二遍的小工程需要 `x.y.z.1`，而口径表
-            #     （jar 文件名 ↔ 上游坐标）就在这个文件里 —— warmup-project.sh 按它自己
-            #     造一份本地仓库。只声明这一个文件，整个 buildSrc/ 依然不进上下文。
-            #   * buildSrc/ **不再进上下文**：预热工程既不能有 buildSrc/（Gradle
-            #     看见它就会先编译一遍，插件还没下就先要求它可用），也不能留下
-            #     :app 里那行 `id("somcp.patched-local-jars")`（找不到实现，整个
-            #     app 脚本编译不过，而 :app 的依赖全写在 plugins {} 之后）。两件事
-            #     都由 warmup-project.sh 负责，容器里根本不需要看见 buildSrc/。
+            #   * buildSrc/ **整目录要进上下文**：预热第一遍按仓库原样跑，真实 buildSrc
+            #     连插件 marker 一起下进缓存（运行期每个 stage 都要真的编译它，而
+            #     `--offline` 复核读的就是这份缓存）；第二遍才换成占位，插件 id 与
+            #     仓库列表都从这份源码读出来。
+            #     早先两遍都把它删掉，于是预热的工程形状与运行期不同，复核连续几轮
+            #     都倒在 `buildSrc/build.gradle.kts` 那行 `kotlin-dsl was not found`。
+            #     其中 `src/main/groovy/somcp.patched-local-jars.gradle` 还有第二个用途：
+            #     口径表（jar 文件名 ↔ 上游坐标）在里面，warmup-project.sh 按它自己造
+            #     一份 `x.y.z.1` 的本地仓库，第二遍才解析得到那几条依赖。
+            #     注意 :app 里那行 `id("somcp.patched-local-jars")` 第二遍之前要被注释掉
+            #     （占位不产出这个插件），这一步也由 warmup-project.sh 负责。
             #
             #     buildSrc 自己那份 `groovy-gradle-plugin` 是 Gradle 自带的，零外部
-            #     插件依赖 —— 这就是它能出现在这条流水线上的原因：任何要从 Portal
-            #     拿 marker 的插件（`kotlin-dsl` 就是）都会让 `--offline` 复核先倒，
-            #     而复核读的是镜像预热出来的用户目录，那里没有 buildSrc 的插件。
+            #     插件依赖 —— 占位里写的也是同一个 id，两边必须是同一个插件，
+            #     预热下的那套才正好是运行期要的那套。
             by:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -128,7 +129,8 @@ main:
               - gradle.properties
               - app/build.gradle.kts
               - app/libs
-              - buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
+              - buildSrc/build.gradle.kts
+              - buildSrc/src/main/groovy
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
             # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
             # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
@@ -150,7 +152,8 @@ main:
               - gradle.properties
               - app/build.gradle.kts
               - app/libs
-              - buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
+              - buildSrc/build.gradle.kts
+              - buildSrc/src/main/groovy
             sync: true
           exports:
             name: BUILD_ENV_IMAGE
