@@ -113,24 +113,17 @@ log "submodules: ${#SUBMODULES[@]} present"
 # 版本号写错，实际是网络。先把真实原因摆出来，省得下次又按版本问题去查。
 # 代理变量由 CNB 从 Runner 宿主机同步（文档「代理环境变量自动同步」），
 # 这里只用于日志，不做判断。
-#
-# 判据：探的是「Gradle 真正要拉的那个制品」，不是仓库首页 —— 限流（429）只打在
-# 制品路径上，首页常年 200。带上 --retry 是因为 Maven Central 对同一出口 IP 的
-# 限流是突发型：单发一次可能刚好落在允许窗口里，连发才能看出真实可达性。
 log "proxy: HTTP_PROXY=${HTTP_PROXY:-<unset>} HTTPS_PROXY=${HTTPS_PROXY:-<unset>} NO_PROXY=${NO_PROXY:-<unset>}"
-PROBES=(
-  "https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-gradle-plugin/maven-metadata.xml"
-  "https://plugins.gradle.org/m2/org/jetbrains/kotlin/android/org.jetbrains.kotlin.android.gradle.plugin/2.4.0/org.jetbrains.kotlin.android.gradle.plugin-2.4.0.pom"
-  "https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/9.2.1/gradle-9.2.1.pom"
-)
-for url in "${PROBES[@]}"; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 --retry 4 --retry-delay 2 --retry-all-errors "$url" 2> /dev/null || echo 000)"
-  case "$code" in
-    200 | 206) log "reachable: $url (HTTP $code)" ;;
-    429) log "WARNING: $url rate-limited (HTTP 429) — Gradle may report 'plugin not found'" ;;
-    000) log "WARNING: cannot reach $url (Gradle dependency resolution will fail)" ;;
-    *) log "WARNING: unexpected status $code for $url" ;;
-  esac
+for url in \
+    "https://repo.maven.apache.org/maven2/" \
+    "https://plugins.gradle.org/m2/" \
+    "https://dl.google.com/dl/android/maven2/"; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url" 2> /dev/null || echo 000)"
+  if [ "$code" = "000" ]; then
+    log "WARNING: cannot reach $url (Gradle dependency resolution will fail)"
+  else
+    log "reachable: $url (HTTP $code)"
+  fi
 done
 
 echo "[setup] toolchain OK"
