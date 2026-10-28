@@ -110,12 +110,20 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
 # 曾因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
 #
-# 预热失败必须看得见，但不能让镜像作废：镜像里除了这份缓存还有 JDK / Gradle /
-# SDK/NDK（光 sdkmanager 就 3 分钟），为了一次网络抖动重建整个镜像不划算。
-# 所以 —— 失败时把日志尾部打到 stderr（Gradle 从 stdout 走，不打出来就只剩一行
-# "BUILD FAILED"），然后退出码归零；运行期由 scripts/cnb/setup-build-env.sh
-# 以「只看缓存」的方式（--offline + -PcnbCacheOnlyCheck）复核预热结果，缓存不完整
-# 就在 stage 里明确失败并指向这里。
+# 预热失败必须看得见，但**不能只打 warning 就放行**。早期版本就是
+# 「warning + 退出码归零」，把判据全留给运行期；代价是留下一个带残缺缓存的镜像，
+# 被 docker:cache 按版本名记住，之后每次流水线都栽在同一个
+# `Plugin ... was not found` 上，除了清缓存重建镜像没有别的解法。
+#
+# 关键点：**联网预热成功证明不了缓存可用** —— 它可以现场冲网把缺的补齐，
+# 退出码 0 只说明那一刻网络是通的。所以在联网预热之后，立刻在同一份用户目录上
+# 再跑一次「只看缓存」的复核（--offline + -PcnbCacheOnlyCheck，与运行期
+# scripts/cnb/setup-build-env.sh 用的是同一个判据）：只查 GRADLE_USER_HOME 里
+# 有什么，能过才 `cp -a` 进 /opt/gradle-user-home。两种失败都打网络层证据 +
+# 日志尾部，并让镜像构建失败。
+#
+# 成本只是一个 RUN 层的重建（预热层，几十秒到几分钟），JDK / Gradle / SDK/NDK
+# 那几层照旧命中缓存 —— 不是「整个镜像重来」，所以这里判死是划算的。
 #
 # 预热必须替运行期把东西下全：两个 init script 都显式传（gradle-init.gradle
 # 追加 Maven 镜像，gradle-proxy.init.gradle.kts 桥接代理），CNB_BUILD_ID 走
@@ -130,8 +138,8 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #     的目标就是它，不给的话 `gradle help` 与 `cp -a` 会指向同一个目录，
 #     预热下的依赖会被后面的 `rm -rf /root/.gradle` 一起删掉，等于白预热。
 #   * 超时兜底：CI 的代理变量在无网时会变成黑洞（连上去就不说话），Gradle 的
-#     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。给 10 分钟上限，
-#     kill 之后落到下面的 warning 分支，工具链照常产出。
+#     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。联网预热给 10 分钟、
+#     只看缓存的复核给 5 分钟上限，kill 之后落到 ERROR 分支 —— 预热不完整就不出镜像。
 #   * 预热失败时除日志尾巴外，先把「网络层证据」单独捞出来（Could not GET/HEAD、
 #     429、proxy、Connection、timed out）—— 默认日志只有一句 `BUILD FAILED`，
 #     够不到「哪个仓库、什么状态码」，而这一层是整轮里最贵的一次构建。
@@ -140,8 +148,8 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #   * warmup-project.sh 必须用 bash 跑，不能 `sh -x`：Docker 的默认 shell 是
 #     dash，而脚本第 21 行是 `set -euo pipefail`，dash 不认 pipefail，直接
 #     报 `set: Illegal option -o pipefail` 以退出码 2 结束整层构建 —— 这一步
-#     在 if 之外，所以「预热失败只告警」的兜底根本没机会生效。脚本自己的
-#     shebang 是 bash，按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
+#     在 if 之外，会让整层直接以退出码 2 结束。脚本自己的 shebang 是 bash，
+#     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
@@ -153,14 +161,30 @@ RUN set -eu; \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
          help > /tmp/cnb-warmup.log 2>&1; then \
       echo "[warmup] gradle help OK"; \
-      cp -a /tmp/cnb-warmup-home/. /opt/gradle-user-home/; \
     else \
-      echo "[warmup] WARNING: gradle help failed, image keeps the toolchain but the" >&2; \
-      echo "[warmup] WARNING: dependency cache is incomplete; see tail below." >&2; \
+      echo "[warmup] ERROR: gradle help failed; the dependency cache could not be" >&2; \
+      echo "[warmup] ERROR: populated. Network-layer evidence first, then the tail:" >&2; \
       grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup.log | tail -n 40 >&2 || true; \
       tail -n 60 /tmp/cnb-warmup.log >&2 || true; \
+      exit 1; \
     fi; \
-    rm -f /tmp/cnb-warmup.log; \
+    if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 300 \
+         /opt/gradle/bin/gradle --offline --no-daemon --console=plain --info \
+         -PcnbCacheOnlyCheck \
+         --init-script /opt/cnb/gradle-init.gradle \
+         --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
+         help > /tmp/cnb-warmup-offline.log 2>&1; then \
+      echo "[warmup] cache-only recheck OK: the cache is self-sufficient"; \
+      cp -a /tmp/cnb-warmup-home/. /opt/gradle-user-home/; \
+    else \
+      echo "[warmup] ERROR: cache-only recheck failed. The online warmup only looked" >&2; \
+      echo "[warmup] ERROR: successful because the network was reachable; the cache is" >&2; \
+      echo "[warmup] ERROR: NOT self-sufficient, and later stages resolve offline." >&2; \
+      grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup-offline.log | tail -n 40 >&2 || true; \
+      tail -n 60 /tmp/cnb-warmup-offline.log >&2 || true; \
+      exit 1; \
+    fi; \
+    rm -f /tmp/cnb-warmup.log /tmp/cnb-warmup-offline.log; \
     cd /; rm -rf /tmp/cnb-warmup /tmp/cnb-warmup-home /root/.gradle; \
     du -sh /opt/gradle-user-home
 
