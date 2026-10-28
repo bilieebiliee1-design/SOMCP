@@ -747,14 +747,22 @@ null cannot be cast to non-null type groovy.lang.Closure<*>
    `:app` 的依赖图因此是完整的；`.1` 版本由第 2 步提供。
 2. `publish_patched_local_repo()` —— 预热工程自己造那份本地仓库。
    口径表直接从 `buildSrc/src/main/groovy/somcp.patched-local-jars.gradle` 读
-   （`.cnb.yml` 的 `by` / `versionBy` 里显式声明了这一个文件，整个 `buildSrc/` 仍然不进
-   上下文、也不会被当 included build 编译），jar 从 `app/libs/` 复制，POM 写最小的。
-   顺序很要紧：**必须在 `disable_buildsrc_plugin` 之前**，那个函数第一步就是
-   `rm -rf buildSrc`，反过来就永远读不到口径表。
+   （`buildSrc/` 整个目录都在构建上下文里，因为第一遍要按仓库原样编译它），
+   jar 从 `app/libs/` 复制，POM 写最小的。
+   顺序很要紧：**必须在 `cold_build` 之前** —— 第 1 步把工厂换成坐标之后，两遍求值出
+   的都是 `...:0.9.9.1`，而 `.1` 只在这个仓库里存在，第一遍同样要它。
 
-第二遍（最小工程）里 `settings.gradle.kts` 那条 `somcpPatchedLocal` 因此指向一个
-**真的有内容**的目录，`x.y.z.1` 能解析；第一遍则连这两个改动都不需要 —— 它跑的就是
-换过工厂的真实脚本。
+`settings.gradle.kts` 那条 `somcpPatchedLocal` 因此指向一个**真的有内容**的目录，
+`x.y.z.1` 在两次解析里都能落地。
+
+**口径表缺席不是警告，是失败**。这一条是踩出来的：曾经把口径表的 `COPY` 目的地写进
+`/tmp/cnb-warmup/buildSrc/`，而 Dockerfile 下一层还有一句 `rm -rf /tmp/cnb-warmup/buildSrc`
+—— 刚拷进来就被删，`publish_patched_local_repo()` 只打一句
+`WARNING: buildSrc plugin not in the context` 就 `return 0`，`x.y.z.1` 一次都没发布过
+（`cnb-tau-1k627283e`）。而那一轮的 **pass 2 照样"通过"**：`simplify_app_script` 已经把
+`:app` 换成没有 `dependencies {}` 的最小脚本，空的依赖图当然解析得开 —— 判据其实一直
+是空的。所以现在找不到就 `exit 1`：口径表缺席 = `.1` 解析不到 = patched jar 顶替上游
+模块的整套机制失效，把红点留给运行期的「找不到依赖」比在这里报错贵得多。
 
 **顺带补的一处**：镜像预热工程会生成一个一次性 keystore
 （`release/keystore.properties` + `keytool -genkeypair`）。`:app` 的配置阶段要读
