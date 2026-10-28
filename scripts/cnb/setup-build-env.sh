@@ -82,10 +82,11 @@ fi
 # 会按各仓库的名字去 $GRADLE_USER_HOME 里找缓存，网络不可达时同样报
 #   Plugin [id: ...] was not found in any of the following sources: Google, cnb-plugin-mirror-0(...)
 # —— 「缓存里的插件索引在、但远端此刻连不上」会被误报成「镜像预热没做完」。
-# 所以额外传 -PcnbCacheOnlyCheck，由 gradle-proxy.init.gradle.kts 把仓库列表换成
-# 空的本地文件仓库：命中缓存 = 通过，没命中 = 真的没预热到（overlay 与缓存 key
-# 绑定，镜像重建后第一次运行必然是空缓存，这时才该指向 Dockerfile 的预热段）。
-# 代价是缓存里只留了「按仓库名索引」的那份时也要判失败 —— 这是想要的严格：
+# 所以额外传 -PcnbCacheOnlyCheck，由 gradle-proxy.init.gradle.kts 把仓库列表原样
+# 换成本地空目录（顺序、数量都不变，靠 repo-info.json 把缓存索引指回原 url）：
+# 命中缓存 = 通过，没命中 = 真的没预热到（overlay 与缓存 key 绑定，镜像重建后
+# 第一次运行必然是空缓存，这时才该指向 Dockerfile 的预热段）。
+# 代价是「缓存里有这份构件、但索引对不上」时也要判失败 —— 这是想要的严格：
 # 运行期用的正是同一份索引。
 WARMUP_CHECK="${GRADLE_WARMUP_CHECK:-1}"
 if [ "$WARMUP_CHECK" = "1" ]; then
@@ -99,6 +100,9 @@ if [ "$WARMUP_CHECK" = "1" ]; then
       log "hint: fresh overlay with an empty Gradle user home. A re-run of this same pipeline"
       log "hint: (same key) reuses it, but the cache is only populated once the image is built"
       log "hint: with network access to Google / Maven Central (image/cnb-tools.Dockerfile)."
+      log "hint: every repository listed in the rejection is normally the same list the image"
+      log "hint: warmed up; if this repeats with a populated cache, check the repo-info.json"
+      log "hint: trick in scripts/cnb/gradle-cache-only.gradle."
     fi
     tail -n 40 /tmp/cnb-warmup-check.log >&2 || true
     fail "gradle warmup cache is incomplete: cache-only \`gradle help\` failed. Either the image warmup step (image/cnb-tools.Dockerfile) did not finish, or the docker:cache overlay was recreated with an empty user home; copy the tail above into the PR before re-running (set GRADLE_WARMUP_CHECK=0 to skip this check while debugging)"
