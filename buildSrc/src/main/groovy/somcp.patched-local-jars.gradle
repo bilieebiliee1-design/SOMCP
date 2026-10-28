@@ -34,6 +34,9 @@
  *     最小 Maven 布局（`<group>/<module>/<version>/<module>-<version>.jar|.pom`），
  *     jar 从 `app/libs/` 复制、version 取表里的 `x.y.z.1`；`settings.gradle.kts`
  *     把这个仓库排在依赖仓库的**第一位**（`.1` 只有这里有，命中即停）。
+ *     **刻意不开在 `app/build/` 下**：buildDir 构建中途被清空是常态，而这份仓库只在
+ *     配置阶段写一次，清掉之后就是 `Could not find ...:0.9.9.1`（见下面 somcpPatchedRepo
+ *     那段）。
  *     上游那份若仍从别的路径（POM 传递依赖）进图，两个版本按「高版本胜出」
  *     冲突解析，patched 的 `.1` 胜出。
  *     POM 里的传递依赖由 `somcpPatchedPomDependencies` 逐条照抄上游 —— 在 Gradle
@@ -92,14 +95,20 @@ def somcpPatchedJars = [
 // 指向 patched 版本自己 —— 写 `x.y.z` 会从图上带出一份和 patched 同名的上游 jar。
 // test scope 一律不抄：那是上游自己跑测试用的。
 //
-// 唯一的裁剪是 `com.github.zhkl0228:unicorn`（上游 `unidbg-api` 的传递依赖）：
-// `app/build.gradle.kts` 里 `unidbg-unicorn2` 那几条 exclude 把上游坐标排掉之后，
-// 才是靠一条显式 `implementation("com.github.zhkl0228:unicorn:1.0.15")` 把它拉回来的
-// （那里有完整理由）。这张表只抄，不改判据。
+// 裁剪只有两处：
+//   * `com.github.zhkl0228:unicorn`（上游 `unidbg-api` 的传递依赖）—— `app/build.gradle.kts`
+//     里 `unidbg-unicorn2` 那几条 exclude 把上游坐标排掉之后，靠一条显式
+//     `implementation("com.github.zhkl0228:unicorn:1.0.15")` 把它拉回来（那里有完整理由）；
+//   * `capstone` / `keystone` —— 见下，`:app` 自己声明了 `x.y.z.1` 那两条。
 def somcpPatchedPomDependencies = [
+    // capstone / keystone **不抄**：`:app` 声明了 `x.y.z.1` 那两条，POM 再抄一遍只会
+    // 多一条把上游同名模块带进图的路径 —— 而下面那组 exclude 挡的是
+    // `com.github.zhkl0228:<module>`，挡不住 POM 传递。JitPack 对同一个仓库给两种
+    // group 布局，`com.github.zhkl0228.unidbg:<module>` 的 POM 会把 `x.y.z` 吊回来
+    // （配置期 `dependencies --configuration ...` 实测出现过 333 条重复类）。
+    // 其余照抄：它们在坐标世界里没有第二个声明方，空壳 POM 会让 jna /
+    // native-lib-loader 整片消失。
     'com.github.zhkl0228:unidbg-api:0.9.9.1': [
-        'com.github.zhkl0228:capstone:3.1.8.1',
-        'com.github.zhkl0228:keystone:0.9.7.1',
         'commons-codec:commons-codec:1.21.0',
         'org.apache.commons:commons-collections4:4.5.0',
         'commons-io:commons-io:2.21.0',
@@ -119,14 +128,19 @@ def somcpPatchedPomDependencies = [
     ],
 ]
 
-// 生成仓库的位置：`<项目>/build/patched-jars-repo`，也就是项目自己的 build 目录。
+// 生成仓库的位置：`<项目>/libs/build/patched-jars-repo`。
 // 这个目录同时也是 `settings.gradle.kts` 里 `somcpPatchedLocal` 仓库的 url，
 // 所以它必须在**任何依赖被声明之前**就存在：Gradle 在 `places files()` 那一刻
 // 就把路径记成任务的输入，声明 `files()` 时目录还没建出来，报的是
-//   Cannot fingerprint input property '...': file .../build/patched-jars-repo does not exist
+//   Cannot fingerprint input property '...': file .../patched-jars-repo does not exist
 // —— 与本插件随后要写进去的东西毫无关系，报错却隔着三层。
 // 目录不需要占位文件：本脚本求值 = 项目已配置，`mkdirs()` 是配置期的纯文件系统
 // 操作，不影响配置缓存（它不读环境、不读解析结果）。
+//
+// **为什么不放在 buildDir 下**：`build/` 整个是 AGP 的构建产物目录，构建中途被清空
+// 是常态；而 `x.y.z.1` 的 jar 与 POM 只在配置阶段写一次，清掉之后这个仓库就是空的，
+// 解析直接 `Could not find ...:0.9.9.1`。`libs/` 是检入仓库的源码区，没有东西会去
+// 清它 —— 仓库放在这里，`clean` 与配置缓存都不会波及。
 //
 // **不要换回 `project.layout.buildDirectory`**（`cnb-stn-1k629u1nl` 的 Android
 // Lint 红点就是这么来的）：`:app` 的 layout buildDirectory 是 `app/build`，而
@@ -138,7 +152,7 @@ def somcpPatchedPomDependencies = [
 //
 // `project.projectDir` 由项目路径决定（`:app` -> `<root>/app`），而 `rootDir` 是
 // 「仓库根」在这里唯一的定义，两边算出来的必须是同一个绝对路径。
-def somcpPatchedRepo = new File(project.projectDir, 'build/patched-jars-repo')
+def somcpPatchedRepo = new File(project.projectDir, 'libs/build/patched-jars-repo')
 somcpPatchedRepo.mkdirs()
 
 // 本地仓库里那份 POM。**必须带 dependencies**：见 somcpPatchedPomDependencies 的注释，
