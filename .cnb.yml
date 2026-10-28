@@ -80,9 +80,19 @@ main:
           type: docker:cache
           options:
             dockerfile: image/cnb-tools.Dockerfile
-            # 镜像自身钉住了全部版本；只有 Dockerfile 变了才重建。
+            # docker:cache 的构建上下文只包含 Dockerfile 和 by 声明的文件，
+            # 不声明就不会被复制进去（表现为 COPY 报 "not found"）。镜像里要用到：
+            #   * scripts/cnb/gradle-init.gradle —— COPY 进 /opt/gradle-user-home；
+            #   * build.gradle.kts / settings.gradle.kts / gradle.properties ——
+            #     warmup 从里面读插件版本与仓库声明，并让重试参数也生效。
             by:
               - image/cnb-tools.Dockerfile
+              - scripts/cnb/gradle-init.gradle
+              - build.gradle.kts
+              - settings.gradle.kts
+              - gradle.properties
+            # 版本仍只跟 Dockerfile 走（与原先一致）：其余被 by 引入的文件只是
+            # 为了进构建上下文，不该让缓存版本跟着它们漂移。
             versionBy:
               - image/cnb-tools.Dockerfile
             sync: true
