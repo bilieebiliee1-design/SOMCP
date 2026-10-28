@@ -20,9 +20,10 @@
 # 预热去 Google 找不到 AGP 的 marker，运行期又反过来缺 aliyun 镜像。
 # 用 grep 取整块，取不到就失败（比静默生成一个残缺工程强）。
 #
-# :app 脚本里那个 `somcp.patched-local-jars` 插件在第一遍之前整个摘掉（声明、工厂、
-# 调用点三处）：它的实现住在 buildSrc 里，而这份实现按设计只在真构建里生效 ——
-# 插件生成的本地仓库（`x.y.z.1`）不该进镜像缓存。详见 disable_buildsrc_plugin()。
+# :app 脚本里那个 `somcp.patched-local-jars` 插件**第一遍按原样带着跑**：那四条
+# patched jar 依赖在真构建里正是被它换成 `x.y.z.1` 坐标的，预热要下的就是同一套
+# 坐标（它需要的本地仓库由 publish_patched_local_repo() 提前铺好）。第二遍才把工程
+# 改写成最小形态，那时也没有了 dependencies {}，插件自然用不上。
 #
 # 两遍：第一遍用**仓库原样**跑（:app 的真实脚本 + app/libs/ 都在，才解析得到
 # 那一整张依赖图），第二遍才把工程改写成最小形态、再跑一次。
@@ -37,8 +38,8 @@ cd "$DIR"
 # 缓存。手写一份最小 :app 等于自己决定「预热覆盖哪些依赖」，漏掉的那些运行期照样
 # 现场冲网。
 #
-# 所以改写之前做两件事：把 app/libs/ 里的 jar 打印出来（第一遍的真实脚本里
-# 那四条依赖指着它们），以及摘掉 buildSrc 那个插件（见 disable_buildsrc_plugin）。
+# 所以改写之前先把 app/libs/ 里的 jar 打印出来（第一遍的真实脚本里那四条依赖
+# 指着它们），并据此铺好 patched jar 的本地仓库。
 prepare_runtime_layout() {
   mkdir -p app
   [ -f app/build.gradle.kts ] \
@@ -75,11 +76,11 @@ warm_build() {
     help :app:dependencies --configuration releaseRuntimeClasspath
 }
 
-# --- 第一遍：只停用 buildSrc 插件的**声明**，不删 buildSrc ---------------------
-# 不在 plugins {} 里声明版本、只躺在 buildSrc/src 里的插件（本仓库的
-# `somcp.patched-local-jars`）在第一遍里必须停用：第一遍跑的是真实的
-# app/build.gradle.kts，而预热工程要跑的是「仓库的依赖图」，不是「这个插件改造过的
-# 依赖图」。停用之后 patched jar 由下面两个函数换成普通坐标。
+# --- 停用 buildSrc 插件（只在预热工程需要「没有插件」的形态时用）---------------
+# 现在第一遍**不**调它：patched jar 的 `x.y.z.1` 只有插件在场时才会被声明，而预热
+# 要下的正是那套坐标（见 publish_patched_local_repo）。留着这个函数是因为它描述的
+# 三处痕迹（声明 / 工厂 / 调用点）仍然是「插件被摘掉之后脚本还编得过」的完整判据，
+# 哪天要回到「预热不带插件」的形态，照着它三处一起摘就行。
 #
 # **第一遍不能删 buildSrc**：预热的目的就是把它那份插件 marker 及其传递依赖下进
 # 用户目录；而运行期每个 stage 都要真的编译 buildSrc，`--offline` 复核读的正是
@@ -235,6 +236,7 @@ WARMUP_MIN_SDK="$(read_val somcpMinSdk)"
 [ -n "$WARMUP_COMPILE_SDK" ] || { echo "[warmup] ERROR: no compileSdk in root build.gradle.kts" >&2; exit 1; }
 [ -n "$WARMUP_MIN_SDK" ] || { echo "[warmup] ERROR: no minSdk in root build.gradle.kts" >&2; exit 1; }
 
+
 # --- 根 build.gradle.kts：只留 plugins {} 与 extra 三件套 --------------------
 # 只保留**根**工程的插件声明，`plugins {}` 块之外的任何一行都不进预热工程：
 # 根脚本里那些 `configurations.configureEach { ... }` / `tasks.withType<...>` 在
@@ -270,6 +272,58 @@ rewrite_root_script() {
     grep -q "extra\[\"$key\"\]" build.gradle.kts \
       || { echo "[warmup] ERROR: extra[\"$key\"] lost in the warmup root script" >&2; exit 1; }
   done
+}
+
+# --- patched jar 的本地仓库目录必须先在 -------------------------------------
+# 预热第一遍跑的是**真实的** app/build.gradle.kts，而它那四条 patched jar 依赖由
+# buildSrc 的 somcp.patched-local-jars 在**声明的那一刻**换成 `x.y.z.1` 坐标 ——
+# 换完的坐标要能解析，就得有一份「pom + jar」先躺在本地仓库里（那份仓库就是
+# `app/build/patched-jars-repo`，`settings.gradle.kts` 里排在第一位）。
+#
+# 这里按口径表把四个 `.1` 发布出去，判据与运行期完全一致（同样的相对路径、同样的
+# pom 结构）。**必须在 cold_build 之前**：第一遍是真构建的形状，`.1` 解析不到，
+# 第一遍就以 `Could not find com.github.zhkl0228:unidbg-api:0.9.9.1` 收场。
+#
+# 为什么不在预热里干脆把插件摘掉（disable_buildsrc_plugin 只摘声明/工厂/调用点）：
+# 那会让预热的依赖图与运行期**不是同一张** —— patched 的 `.1` 顶掉上游 `x.y.z`
+# 这件事只能在真构建里发生，预热照做一遍，缓存里那份才是运行期真正要的那份。
+publish_patched_local_repo() {
+  local table=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
+  local target_dir=app/build/patched-jars-repo
+  [ -f "$table" ] \
+    || { echo "[warmup] ERROR: $table is not in the build context; the patched x.y.z.1 coordinates cannot be published" >&2; exit 1; }
+  # 只认口径表里那种「一个文件名 -> 一个三段式坐标」的行，别的一概不碰。
+  local rows
+  rows="$(sed -n "s/^[[:space:]]*'\([^']*\.jar\)'[[:space:]]*:[[:space:]]*'\([^']*\)'.*/\1\t\2/p" "$table")"
+  local count
+  count="$(printf '%s' "$rows" | grep -c . || true)"
+  [ "$count" -gt 0 ] \
+    || { echo "[warmup] ERROR: no patched jar entries parsed from $table; the table format changed" >&2; exit 1; }
+
+  rm -rf "$target_dir"
+  local published=0
+  while IFS=$'\t' read -r jar_name coordinates; do
+    [ -n "$jar_name" ] || continue
+    local source="app/libs/${jar_name}"
+    [ -f "$source" ] \
+      || { echo "[warmup] ERROR: ${source} is missing; app/libs must be in docker:cache.by (patched jars are resolved as x.y.z.1)" >&2; exit 1; }
+    local group="${coordinates%%:*}"
+    local rest="${coordinates#*:}"
+    local module="${rest%%:*}"
+    local version="${rest#*:}"
+    local dir="${target_dir}/${group//./\/}/${module}/${version}"
+    mkdir -p "$dir"
+    cp "$source" "${dir}/${module}-${version}.jar"
+    # POM 里只写这三段：预热要的是「坐标解析得到」，传递依赖照旧由上游 POM 提供
+    # （patched 的 `.1` 与上游 `x.y.z` 同时进图时，Gradle 只留高版本那份，上游的
+    # 依赖列表不会因此消失）。运行期那份 POM 带 dependencies，是给真构建用的。
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>%s</groupId>\n  <artifactId>%s</artifactId>\n  <version>%s</version>\n  <packaging>jar</packaging>\n</project>\n' \
+      "$group" "$module" "$version" > "${dir}/${module}-${version}.pom"
+    published=$((published + 1))
+  done <<< "$rows"
+  [ "$published" -eq "$count" ] \
+    || { echo "[warmup] ERROR: published ${published}/${count} patched jars into ${target_dir}" >&2; exit 1; }
+  echo "[warmup] published ${published} patched jar(s) into ${target_dir}"
 }
 
 # --- app/build.gradle.kts：第二遍才改写成只声明插件的模块脚本 ---------------
@@ -393,13 +447,16 @@ SETTINGS
 
 # --- 两遍执行 ---------------------------------------------------------------
 # 顺序不能换，理由见各自函数的注释：
-#   1. prepare_runtime_layout → disable_buildsrc_plugin → rewrite_root_script
+#   1. prepare_runtime_layout → publish_patched_local_repo → rewrite_root_script
 #      → cold_build
 #      （仓库原样，联网，失败即整层失败）
+#      第一遍**不**停用 buildSrc 插件：那四条 patched jar 依赖要按真构建的样子
+#      换成 `x.y.z.1`，预热要下的就是这套坐标。停用只在第二遍发生，且那时整个
+#      :app 已经被换成不带 dependencies 的最小脚本。
 #   2. stage_buildsrc_placeholder → simplify_* → warm_build（最小工程，只打 WARNING）
 echo "[warmup] pass 1/2: repository as-is (app/build.gradle.kts + app/libs)"
 prepare_runtime_layout
-disable_buildsrc_plugin
+publish_patched_local_repo
 rewrite_root_script
 if cold_build > /tmp/cnb-warmup.log 2>&1; then
   echo "[warmup] pass 1 OK: repository as-is"
