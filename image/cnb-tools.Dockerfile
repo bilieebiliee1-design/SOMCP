@@ -31,10 +31,11 @@ RUN apt-get update \
       autoconf automake libtool libarchive-tools openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
-# python-is-python3：app/src/main/cpp/CMakeLists.txt 用 `COMMAND python` 调
-# generate_header.py，GitHub 的 runner 上 `python` 天然存在，裸镜像里只有
-# python3 —— 少了它 CMake 会在 key-gen 处 FATAL_ERROR，Release 构建直接失败。
-# 这条等价于宿主环境差异的补齐，不是新增依赖（脚本 shebang 本来就是 python3）。
+# python3 + pip 是 meson（Rizin 交叉编译）与 dcc 的依赖。
+# CMakeLists.txt 现在先 find_program 再调用（找不到就报清楚），所以不再依赖
+# `python` 这个名字是否存在 —— 但仍然装 python-is-python3：镜像里跑的非
+# CMake 脚本（dcc 的 shebang 是 /usr/bin/env python3，本地工具脚本有写
+# python 的）在 GitHub runner 上一直拿到的是 `python`，保持同一套环境。
 
 # Gradle 9.6.1：仓库故意不带 gradlew 启动器，版本必须由环境供给。
 # 版本与 gradle/wrapper/gradle-wrapper.properties 一致。
@@ -78,6 +79,9 @@ RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
 # 从 /opt/gradle-user-home 搬进去；镜像层保留原件，卷随流水线销毁。
 COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
 COPY scripts/cnb/gradle-proxy.init.gradle.kts /opt/cnb/gradle-proxy.init.gradle.kts
+# 「只看缓存」复核脚本：运行期 setup-build-env.sh 传 -PcnbCacheOnlyCheck 时由
+# gradle-proxy.init.gradle.kts 从 $GRADLE_USER_HOME 里 apply 它（见该文件注释）。
+COPY scripts/cnb/gradle-cache-only.gradle /opt/gradle-user-home/cnb-cache-only.gradle
 COPY scripts/cnb/gradle-init.gradle /opt/cnb/gradle-init.gradle
 
 # 预热用的最小工程：插件版本与仓库声明都从仓库自己的构建脚本里读，不另抄一份
@@ -96,7 +100,7 @@ COPY scripts/cnb/gradle-init.gradle /opt/cnb/gradle-init.gradle
 #     早先的做法是把 settings 清空成一行 rootProject.name，Gradle 于是只剩
 #     缺省的 gradlePluginPortal，而 AGP 的 marker 在 Google，预热解析
 #     `com.android.application:9.2.1` 永远拿不到（镜像层只留 warning，
-#     运行期的 --offline 复核随后报「warmup cache is incomplete」）；
+#     运行期的「只看缓存」复核随后报「warmup cache is incomplete」）；
 #   * gradle.properties 必须一起进预热工程 —— 仓库级重试参数
 #     （org.gradle.internal.repository.max.tentatives / initial.backoff）与
 #     network.retries 都从这份属性文件读，而冷启动最吃重试的正是预热这一次解析；
@@ -106,23 +110,36 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
 # 曾因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
 #
-# 预热失败必须看得见，但不能让镜像作废：镜像里除了这份缓存还有 JDK / Gradle /
-# SDK/NDK（光 sdkmanager 就 3 分钟），为了一次网络抖动重建整个镜像不划算。
-# 所以 —— 失败时把日志尾部打到 stderr（Gradle 从 stdout 走，不打出来就只剩一行
-# "BUILD FAILED"），然后退出码归零；运行期由 scripts/cnb/setup-build-env.sh
-# 以 `gradle --offline` 复核预热结果，缓存不完整就在 stage 里明确失败并指向这里。
+# 预热失败必须看得见，但**不能只打 warning 就放行**。早期版本就是
+# 「warning + 退出码归零」，把判据全留给运行期；代价是留下一个带残缺缓存的镜像，
+# 被 docker:cache 按版本名记住，之后每次流水线都栽在同一个
+# `Plugin ... was not found` 上，除了清缓存重建镜像没有别的解法。
+#
+# 关键点：**联网预热成功证明不了缓存可用** —— 它可以现场冲网把缺的补齐，
+# 退出码 0 只说明那一刻网络是通的。所以在联网预热之后，立刻在同一份用户目录上
+# 再跑一次「只看缓存」的复核（--offline + -PcnbCacheOnlyCheck，与运行期
+# scripts/cnb/setup-build-env.sh 用的是同一个判据）：只查 GRADLE_USER_HOME 里
+# 有什么，能过才 `cp -a` 进 /opt/gradle-user-home。两种失败都打网络层证据 +
+# 日志尾部，并让镜像构建失败。
+#
+# 成本只是一个 RUN 层的重建（预热层，几十秒到几分钟），JDK / Gradle / SDK/NDK
+# 那几层照旧命中缓存 —— 不是「整个镜像重来」，所以这里判死是划算的。
 #
 # 预热必须替运行期把东西下全：两个 init script 都显式传（gradle-init.gradle
 # 追加 Maven 镜像，gradle-proxy.init.gradle.kts 桥接代理），CNB_BUILD_ID 走
-# 同一条分支。预热与运行期唯一允许的差异是「不给 --offline」（预热的整件工作
+# 同一条分支。预热工程由 scripts/cnb/warmup-project.sh 改写：`plugins {}` +
+# `pluginManagement` 保留，**并补上 dependencyResolutionManagement** —— 插件
+# buildscript classpath 的解析用的是后者，缺了它只剩隐式的 MavenRepo
+# （repo.maven.apache.org），冷启动几十个 POM 必吃 429，预热整段失败。
+# 预热与运行期唯一允许的差异是「不给 --offline」（预热的整件工作
 # 就是联网）与「用 /opt 下的副本而不是 $GRADLE_USER_HOME/init.d 里的那份」，
 # 后者是为了不让 init.d 里那份被重复应用 —— 内容取自同一个文件。
 #   * GRADLE_USER_HOME 必须显式给：镜像 ENV 里是 /root/.gradle，而下面 `cp -a`
 #     的目标就是它，不给的话 `gradle help` 与 `cp -a` 会指向同一个目录，
 #     预热下的依赖会被后面的 `rm -rf /root/.gradle` 一起删掉，等于白预热。
 #   * 超时兜底：CI 的代理变量在无网时会变成黑洞（连上去就不说话），Gradle 的
-#     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。给 10 分钟上限，
-#     kill 之后落到下面的 warning 分支，工具链照常产出。
+#     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。联网预热给 10 分钟、
+#     只看缓存的复核给 5 分钟上限，kill 之后落到 ERROR 分支 —— 预热不完整就不出镜像。
 #   * 预热失败时除日志尾巴外，先把「网络层证据」单独捞出来（Could not GET/HEAD、
 #     429、proxy、Connection、timed out）—— 默认日志只有一句 `BUILD FAILED`，
 #     够不到「哪个仓库、什么状态码」，而这一层是整轮里最贵的一次构建。
@@ -131,8 +148,8 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #   * warmup-project.sh 必须用 bash 跑，不能 `sh -x`：Docker 的默认 shell 是
 #     dash，而脚本第 21 行是 `set -euo pipefail`，dash 不认 pipefail，直接
 #     报 `set: Illegal option -o pipefail` 以退出码 2 结束整层构建 —— 这一步
-#     在 if 之外，所以「预热失败只告警」的兜底根本没机会生效。脚本自己的
-#     shebang 是 bash，按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
+#     在 if 之外，会让整层直接以退出码 2 结束。脚本自己的 shebang 是 bash，
+#     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
@@ -144,14 +161,30 @@ RUN set -eu; \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
          help > /tmp/cnb-warmup.log 2>&1; then \
       echo "[warmup] gradle help OK"; \
-      cp -a /tmp/cnb-warmup-home/. /opt/gradle-user-home/; \
     else \
-      echo "[warmup] WARNING: gradle help failed, image keeps the toolchain but the" >&2; \
-      echo "[warmup] WARNING: dependency cache is incomplete; see tail below." >&2; \
+      echo "[warmup] ERROR: gradle help failed; the dependency cache could not be" >&2; \
+      echo "[warmup] ERROR: populated. Network-layer evidence first, then the tail:" >&2; \
       grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup.log | tail -n 40 >&2 || true; \
       tail -n 60 /tmp/cnb-warmup.log >&2 || true; \
+      exit 1; \
     fi; \
-    rm -f /tmp/cnb-warmup.log; \
+    if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 300 \
+         /opt/gradle/bin/gradle --offline --no-daemon --console=plain --info \
+         -PcnbCacheOnlyCheck \
+         --init-script /opt/cnb/gradle-init.gradle \
+         --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
+         help > /tmp/cnb-warmup-offline.log 2>&1; then \
+      echo "[warmup] cache-only recheck OK: the cache is self-sufficient"; \
+      cp -a /tmp/cnb-warmup-home/. /opt/gradle-user-home/; \
+    else \
+      echo "[warmup] ERROR: cache-only recheck failed. The online warmup only looked" >&2; \
+      echo "[warmup] ERROR: successful because the network was reachable; the cache is" >&2; \
+      echo "[warmup] ERROR: NOT self-sufficient, and later stages resolve offline." >&2; \
+      grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup-offline.log | tail -n 40 >&2 || true; \
+      tail -n 60 /tmp/cnb-warmup-offline.log >&2 || true; \
+      exit 1; \
+    fi; \
+    rm -f /tmp/cnb-warmup.log /tmp/cnb-warmup-offline.log; \
     cd /; rm -rf /tmp/cnb-warmup /tmp/cnb-warmup-home /root/.gradle; \
     du -sh /opt/gradle-user-home
 
