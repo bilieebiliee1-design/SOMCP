@@ -139,20 +139,28 @@ WARMUP_MIN_SDK="$(read_val somcpMinSdk)"
 # （cnb-qno-1k625acuu），而报错点看起来跟预热裁剪毫无关系。这几行是纯字面量
 # 赋值、不引用任何插件，留在预热工程里没有副作用。
 rewrite_root_script() {
+  # 目标文件名不能是 `build.gradle.kts.new`：Kotlin DSL 按扩展名认脚本，
+  # `.kts.new` 只是一个普通文件，Gradle 根本不会把它当构建脚本读，改写就成了
+  # 「写了但没生效」—— 下一遍跑的还是原文件。
   awk '
     /^plugins[[:space:]]*\{/ { inblock = 1 }
     inblock { print }
     inblock && /^\}/ { exit }
-  ' build.gradle.kts > build.gradle.kts.new
-  grep -q 'com.android.application' build.gradle.kts.new \
+  ' build.gradle.kts > root-plugins-block.kts
+  grep -q 'com.android.application' root-plugins-block.kts \
     || { echo "[warmup] ERROR: no plugins {} block in build.gradle.kts" >&2; exit 1; }
-  grep -E '^[[:space:]]*extra\["somcp' build.gradle.kts >> build.gradle.kts.new || true
-  # 判据：预热工程里必须能读到那三行，否则第一遍的真实 :app 脚本求值必炸。
+  # extra 赋值要在覆盖根脚本**之前**取出来：先覆盖再 grep 同一个文件，就是
+  # `grep: build.gradle.kts: input file is also the output`，一行都拿不到。
+  grep -E '^[[:space:]]*extra\["somcp' build.gradle.kts > root-extra-lines.kts || true
+  cp root-plugins-block.kts build.gradle.kts
+  rm -f root-plugins-block.kts
+  cat root-extra-lines.kts >> build.gradle.kts
+  rm -f root-extra-lines.kts
+  # 判据：预热工程里必须能读到那几行，否则第一遍的真实 :app 脚本求值必炸。
   for key in somcpNamespace somcpCompileSdk somcpMinSdk; do
-    grep -q "extra\[\"$key\"\]" build.gradle.kts.new \
+    grep -q "extra\[\"$key\"\]" build.gradle.kts \
       || { echo "[warmup] ERROR: extra[\"$key\"] lost in the warmup root script" >&2; exit 1; }
   done
-  mv build.gradle.kts.new build.gradle.kts
 }
 
 # --- app/build.gradle.kts：第二遍才改写成只声明插件的模块脚本 ---------------
