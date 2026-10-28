@@ -103,6 +103,10 @@ main:
             #     plugins {} + 最小 android {}），那时它们已不影响结果。
             #     历史教训：怕「脚本编译不过就闷杀整层预热」而干脆不带 app 脚本，
             #     结果就是 :app 的运行时依赖一个都没预热，运行期照样现场冲网。
+            #   * buildSrc/src/main/groovy/somcp.patched-local-jars.gradle **要进上下文**：
+            #     预热工程不 apply 这个插件，但第二遍的小工程需要 `x.y.z.1`，而口径表
+            #     （jar 文件名 ↔ 上游坐标）就在这个文件里 —— warmup-project.sh 按它自己
+            #     造一份本地仓库。只声明这一个文件，整个 buildSrc/ 依然不进上下文。
             #   * buildSrc/ **不再进上下文**：预热工程既不能有 buildSrc/（Gradle
             #     看见它就会先编译一遍，插件还没下就先要求它可用），也不能留下
             #     :app 里那行 `id("somcp.patched-local-jars")`（找不到实现，整个
@@ -124,6 +128,7 @@ main:
               - gradle.properties
               - app/build.gradle.kts
               - app/libs
+              - buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
             # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
             # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
@@ -145,6 +150,7 @@ main:
               - gradle.properties
               - app/build.gradle.kts
               - app/libs
+              - buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
             sync: true
           exports:
             name: BUILD_ENV_IMAGE

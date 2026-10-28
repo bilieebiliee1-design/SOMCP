@@ -114,6 +114,79 @@ disable_buildsrc_plugin() {
   fi
 }
 
+# --- patched jar 的本地仓库：预热的第二遍也要能解析 x.y.z.1 -------------------
+# 运行期这份仓库由 buildSrc 的插件在 `app/build/patched-jars-repo` 生成；预热工程
+# 不带 buildSrc，settings.gradle.kts 里那条 `somcpPatchedLocal` 就指向一个空目录，
+# 第二遍（最小工程）的 files() 依赖换成坐标之后就解析不到 `.1`。
+#
+# 这里按同一个布局自己造一份：口径表直接从仓库应用脚本的 somcpPatchedJars 表里
+# 读（group:module:version 与 jar 文件名一一对应），jar 从 app/libs/ 复制，POM 用
+# 最小写的（上游那份 POM 是上游模块自己的事，本地仓库只声明「有这么个构件」）。
+# 表读不到就跳过：那说明应用脚本换了写法，预热只覆盖上游坐标，判据交给第一遍。
+#
+# 必须排在 disable_buildsrc_plugin **之前**：那个函数的第一步就是 `rm -rf buildSrc`，
+# 排在它后面就永远读不到口径表，只剩一句 WARNING，第二遍解析 `.1` 时才会报
+# 「找不到依赖」—— 跟真正的原因隔着十万八千里。
+publish_patched_local_repo() {
+  local app_script=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
+  local target_dir=app/build/patched-jars-repo
+  if [ ! -f "$app_script" ]; then
+    echo "[warmup] WARNING: buildSrc plugin not in the context; patched x.y.z.1 stays unresolved in pass 2" >&2
+    return 0
+  fi
+  rm -rf "$target_dir"
+  local published=0
+  while IFS=$'\t' read -r jar_name coordinates; do
+    [ -n "$jar_name" ] || continue
+    [ -f "app/libs/$jar_name" ] \
+      || { echo "[warmup] ERROR: app/libs/$jar_name missing for $coordinates" >&2; exit 1; }
+    local group module version dir
+    group="${coordinates%%:*}"; coordinates="${coordinates#*:}"
+    module="${coordinates%%:*}"; version="${coordinates#*:}"
+    dir="$target_dir/${group//./\/}/$module/$version"
+    mkdir -p "$dir"
+    cp "app/libs/$jar_name" "$dir/$module-$version.jar"
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>%s</groupId>\n  <artifactId>%s</artifactId>\n  <version>%s</version>\n  <packaging>jar</packaging>\n</project>\n' \
+      "$group" "$module" "$version" > "$dir/$module-$version.pom"
+    published=$((published + 1))
+  done < <(sed -n -e "s/^[[:space:]]*'\([^']*\.jar\)'[[:space:]]*:[[:space:]]*'\([^']*\)'[[:space:]]*,*[[:space:]]*$/\1\t\2/p" "$app_script")
+  echo "[warmup] published $published patched jar(s) into $target_dir"
+}
+
+# --- patched jar 的工厂：插件停用之后换成普通坐标 -----------------------------
+# 停用 somcp.patched-local-jars 只挡住了 plugins {} 那一行 ——
+#     implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
+# 照常求值，而工厂挂在 project.ext 上（插件 apply 时才挂），于是第一次红在
+#     line 327: Cannot invoke "Object.toString()" because the return value of
+#     "org.gradle.api.plugins.ExtraPropertiesExtension.get(Object)" is null
+# dependencies {} 在 Kotlin DSL 里是脚本编译完就执行的代码，光注释插件不够。
+#
+# 换成**同坐标的普通字符串依赖**：上游版本照旧从真仓库解析（:app 的依赖图因此
+# 完整），`.1` 版本由预热工程自己生成的本地仓库提供 —— 判据仍然是「这几条依赖
+# 能不能解析」，只是不再依赖一个预热工程里根本不存在的插件。
+neutralize_patched_factory() {
+  local script=app/build.gradle.kts
+  grep -q '^val patchedJar: (String, String) -> Any = { fileName' "$script" \
+    || { echo "[warmup] ERROR: patchedJar factory not found in the app script" >&2; exit 1; }
+  # 定界符是行首的 `val patchedJar ... {` 与紧随其后的一个 `}`：函数体只有四行，
+  # 往后多扫一行就会把 `dependencies {}` 也吞掉 —— 那正是「预热只做了一半」那个坑。
+  awk '
+    /^val patchedJar: \(String, String\) -> Any = \{ fileName/ {
+      print "// [cnb-warmup] patchedJar replaced: the buildSrc plugin is not applied in the warmup project."
+      print "val patchedJar: (String, String) -> Any = { _: String, coordinates: String -> coordinates }"
+      swap = 1
+      next
+    }
+    swap && /^[[:space:]]*\}[[:space:]]*$/ { swap = 0; next }
+    swap { next }
+    { print }
+  ' "$script" > "$script.cnb-rewrite"
+  mv "$script.cnb-rewrite" "$script"
+  grep -q '^val patchedJar: (String, String) -> Any = { fileName' "$script" \
+    && { echo "[warmup] ERROR: could not neutralize the patchedJar factory" >&2; exit 1; }
+  echo "[warmup] patchedJar factory neutralized; patched jars resolve by coordinate"
+}
+
 # --- 先把 SDK / namespace 读出来 --------------------------------------------
 # 见 MAGIC-WARMUP-READVAL
 read_val() { sed -n "s/^[[:space:]]*extra\[\"$1\"\][[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"[:space:]]*\)\"\{0,1\}[[:space:]]*$/\1/p" build.gradle.kts | head -1; }
@@ -247,12 +320,15 @@ SETTINGS
 
 # --- 两遍执行 ---------------------------------------------------------------
 # 顺序不能换，理由见各自函数的注释：
-#   1. prepare_runtime_layout → disable_buildsrc_plugin → cold_build
+#   1. prepare_runtime_layout → publish_patched_local_repo → disable_buildsrc_plugin
+#      → neutralize_patched_factory → rewrite_root_script → cold_build
 #      （仓库原样，联网，失败即整层失败）
 #   2. simplify_* → warm_build（最小工程，失败只打 WARNING）
 echo "[warmup] pass 1/2: repository as-is (app/build.gradle.kts + app/libs)"
 prepare_runtime_layout
+publish_patched_local_repo
 disable_buildsrc_plugin
+neutralize_patched_factory
 rewrite_root_script
 if cold_build > /tmp/cnb-warmup.log 2>&1; then
   echo "[warmup] pass 1 OK: repository as-is"
