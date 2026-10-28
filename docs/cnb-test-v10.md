@@ -75,17 +75,22 @@ CNB 这份流水线的定位是「同一套构建与静态检查，在 CNB 上�
 供同一流水线的后续 stage 复用；卷随流水线销毁，**不跨流水线复用**
 （原工作流也一样：CI 缓存从不命中，`build-native-android.sh` 每次都全量编译）。
 
-Gradle 缓存保持关闭语义：`/gradle-home` 只是 data 卷，不设跨流水线缓存。
+Gradle 缓存保持关闭语义：`/root/.gradle` 只是 data 卷，不设跨流水线缓存。
 
 **任务间产物共享**：CNB 只跨 job 共享 `CNB_BUILD_WORKSPACE` 与文件顶层声明的 `volumes`，
 所以 `native-build`（原生归档）与 `gradle-home`（`/root/.gradle`）都用 `data` 类型卷声明。
 
-**代理**：CNB 会把 Runner 宿主机的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 同步进容器，
-但 Gradle 的 JVM 不读这些环境变量，依赖解析会绕过代理直连外网（表现为插件
-「not found in any of the following sources」）。因此所有 gradle 调用改走
-`scripts/cnb/gradle.sh`，它带上 `scripts/cnb/gradle-proxy.init.gradle.kts`，
-在 daemon 启动、插件解析之前把代理桥接成 JVM 属性。没有代理变量时该脚本不做任何事，
-本地开发不加这个参数即可。
+**代理与限流**：两件不同的事，都不会让判据变松。
+
+- 代理：CNB 会把 Runner 宿主机的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 同步进容器，
+  但 Gradle 的 JVM 不读这些环境变量。所有 gradle 调用因此走 `scripts/cnb/gradle.sh`，
+  它带上 `scripts/cnb/gradle-proxy.init.gradle.kts`，在 daemon 启动、插件解析之前
+  把它们桥接成 JVM 属性。没有（或 host 为空）的代理变量时不做任何事，本地开发不加这个参数即可。
+- 限流：`repo1.maven.org` 对同一出口 IP 有共享的请求上限，CI 冷启动要拉几十个 POM，撞上 HTTP 429
+  是常态。Gradle 默认把 429 当成不可重试，报出来的却是
+  「Plugin [id: '...', version: '...'] was not found」——版本明明存在。`gradle.properties` 里
+  `org.gradle.internal.repository.max.retries=8` + `initial.backoff=1000` 让 429/5xx 变成可重试。
+  这一条不是平台差异，本地同样生效。
 
 ## 无法逐字等价的项
 
