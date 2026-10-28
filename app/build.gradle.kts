@@ -408,6 +408,10 @@ configurations.configureEach {
     exclude(group = "com.github.zhkl0228", module = "unidbg-api")
     exclude(group = "com.github.zhkl0228", module = "capstone")
     exclude(group = "com.github.zhkl0228", module = "keystone")
+    // 同一份构件的第二个 group（JitPack 的 user.repo 布局）。逐模块点名挡不住
+    // 传递依赖带回来的那几个（unidbg-dynarmic / -hypervisor / -ios 等），
+    // 所以整个 group 一起排。
+    exclude(group = "com.github.zhkl0228.unidbg")
 }
 
 // 真正不看时序的判据：在依赖解析那一刻直接删掉上游坐标，与 exclude 何时设置、
