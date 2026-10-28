@@ -24,13 +24,25 @@
  *     - unidbg-android-0.9.9-android-patched.jar
  *     - com.github.zhkl0228.unidbg:unidbg-android:0.9.9
  *
- * 做法：**给 patched jar 一个比上游高的版本号，让它走正常的冲突解析**。
- *  1. 本文件在 `<project>/build/patched-jars-repo` 生成一个最小 Maven 布局：
- *     `<group>/<module>/<version>/<module>-<version>.jar` + 同名 `.pom`，
- *     jar 从 `app/libs/` 复制，version 取表里的 `x.y.z.1`（高于上游 `x.y.z`）。
- *  2. `settings.gradle.kts` 把这个仓库放在依赖仓库的**最后**：上游版本照样从前面的
- *     仓库解析，`x.y.z.1` 只有这里有，找到即用；同名模块两个版本进了图，
- *     Gradle 按「高版本胜出」只留我们这份，上游那份**从图上消失**。
+ * 做法分两半，缺一不可：
+ *
+ *  A. **声明层替换**：`implementation(files("libs/xxx-patched.jar"))` 这类依赖在**被
+ *     声明的那一刻**换成普通坐标依赖（`ConfigurationDependencies.whenObjectAdded`）。
+ *     file 依赖根本不进图，于是上游那份没有东西跟它并存。
+ *
+ *  B. **让坐标能解析到 patched 内容**：`<project>/build/patched-jars-repo` 生成一个
+ *     最小 Maven 布局（`<group>/<module>/<version>/<module>-<version>.jar|.pom`），
+ *     jar 从 `app/libs/` 复制、version 取表里的 `x.y.z.1`；`settings.gradle.kts`
+ *     把这个仓库排在依赖仓库的**第一位**（`.1` 只有这里有，命中即停）。
+ *     上游那份若仍从别的路径（POM 传递依赖）进图，两个版本按「高版本胜出」
+ *     冲突解析，patched 的 `.1` 胜出。
+ *     POM 里的传递依赖由 `somcpPatchedPomDependencies` 逐条照抄上游 —— 在 Gradle
+ *     眼里 `x.y.z.1` 是一个全新模块，不抄就等于把上游的依赖列表整片丢掉（capstone
+ *     / keystone 在坐标世界里没有第二个声明方，丢了两边的 jna 就没了）。
+ *
+ * 为什么是「声明时」而不是「解析后」：见下面三条死路。解析期和配置缓存的纠缠
+ * 一次也躲不过，而 `whenObjectAdded` 发生在解析之前，读的是**声明里那个文件**，
+ * 既不用去翻解析结果，也不会在配置缓存序列化时被重新求值。
  *
  * 版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 的版本比较是分段的，
  * `patched` 这种非数字段按字符串排在数字段**之前**，于是 `0.9.9.patched < 0.9.9`，
@@ -40,32 +52,6 @@
  * Gradle 9 已经不再认它 —— 声明里的 artifact url 在解析时不生效，只会去仓库找那个
  * 不存在的 `patched` 版本，报 `Could not find com.x:api:2.0.patched`（本地实测）。
  *
- * 为什么不「解析后从 classpath 上摘文件」（两条路都踩过）：
- *  * `configuration.artifacts.remove(...)`：改的是解析结果。配置缓存把任务图连同解析
- *    结果一起序列化，而 `JavaCompile.classpath` 这类输入是从解析结果反查出来的 ——
- *    被摘掉的构件在反向索引里已经没了，序列化当场抛
- *
- *      field `importDirs` of task `:app:compileDebugAidl` ...: error writing value of
- *      type '...ResolutionBackedFileCollection'
- *      > Could not get unknown property 'resolvedArtifacts' for dependencies
- *        ':app:debugCompileClasspath'
- *
- *    于是每次构建都是「配置阶段过了、存缓存崩了」，`scripts/cnb/gradle.sh` 重跑三次
- *    全挂在同一个地方，真正的检查一步都没跑到（`cnb-d7c-1k623dl4d` 的 Android Lint）。
- *
- *  * `FileCollection.filter { }`：Gradle 9 的 `Configuration` 不再继承
- *    `ConfigurableFileCollection`（没有 `setFrom` / `filter` / `minus`），
- *    `ArtifactCollection` 也没有 `remove` / `filter`。唯一能改文件视图的 filter 一旦被
- *    任务 `inputs.files(...)` 引用，就成了任务输入「file collection 结构」里的包装层，
- *    配置缓存存它时拿不到被包装的 `ResolutionBackedFileCollection`，报同一句错误。
- *
- *  * `incoming.beforeResolve { dependencies.removeAll(...) }`：看着最干净，实测无效 ——
- *    `files()` 依赖在 selector 集合里的 `name` 是 `unspecified`，按模块名判「有没有
- *    patched jar」永远判不出来；要判只能读 `dep.files`，那会在 beforeResolve 里触发
- *    解析，把自己绕回去。
- *
- * 一句话：必须让上游那份**根本不进图**，而不是在最后一步把它藏起来。
- *
  * 不变量，改之前先读：
  *   1. `somcpPatchedJars` 是唯一口径表：文件名 ↔ 上游坐标，改 jar 必须两边一起改。
  *      表外的一律不处理 —— `unicorn:1.0.15` 是 `unicorn.*` 唯一的来源（见
@@ -73,9 +59,20 @@
  *      `ClassNotFoundException`。
  *   2. 版本号必须写成 `<上游版本>.1`（纯数字追加段），否则要么被冲突解析挤掉，
  *      要么替掉错的分支 —— 见上面 `.patched` 那条实测。
- *   3. 生成仓库必须在 `settings.gradle.kts` 的仓库列表里、且排在真仓库之后；
- *      缺了它解析不到 `x.y.z.1`，报的会是「找不到依赖」而不是这里的问题。
+ *   3. 生成仓库必须在 `settings.gradle.kts` 的仓库列表里；缺了它解析不到
+ *      `x.y.z.1`，报的会是「找不到依赖」而不是这里的问题。
+ *   4. `somcpPatchedPomDependencies` 与上游 POM 的 `<dependencies>` 一一对应（不含
+ *      test scope）。上游升级时两张表一起改，漏抄的那条运行期才会以
+ *      `ClassNotFoundException` 的形式出现。
  */
+
+def parseCoordinates = { String coordinates ->
+    def parts = coordinates.split(':')
+    if (parts.length != 3) {
+        throw new GradleException("bad coordinate '${coordinates}' in somcpPatchedJars")
+    }
+    return parts as List<String>
+}
 
 def somcpPatchedJars = [
     'unidbg-api-0.9.9-android-patched.jar': 'com.github.zhkl0228:unidbg-api:0.9.9.1',
@@ -84,12 +81,63 @@ def somcpPatchedJars = [
     'keystone-0.9.7-android-patched.jar': 'com.github.zhkl0228:keystone:0.9.7.1',
 ]
 
+// 本地仓库里那份 POM 要带上的传递依赖。**空的会坏事**：
+// capstone / keystone 在坐标世界里没有任何别的声明方（`unidbg-unicorn2` 里那两条
+// exclude 就是证据），patched 版本的 POM 一旦是空壳，它们带来的
+// `jna` / `native-lib-loader` / `commons-codec` 就整片消失 —— 编译或许还过，
+// 运行期 `System.loadLibrary` 与 JNA 那几条路径直接找不到类。
+//
+// 内容是上游 POM 的 `<dependencies>` 里那些**非 test scope** 的条目，逐条照抄
+// （版本也一样）。`unidbg-api` / `unidbg-android` 互相引用那两条按 `x.y.z.1` 写，
+// 指向 patched 版本自己 —— 写 `x.y.z` 会从图上带出一份和 patched 同名的上游 jar。
+// test scope 一律不抄：那是上游自己跑测试用的。
+//
+// 唯一的裁剪是 `com.github.zhkl0228:unicorn`（上游 `unidbg-api` 的传递依赖）：
+// `app/build.gradle.kts` 里 `unidbg-unicorn2` 那几条 exclude 把上游坐标排掉之后，
+// 才是靠一条显式 `implementation("com.github.zhkl0228:unicorn:1.0.15")` 把它拉回来的
+// （那里有完整理由）。这张表只抄，不改判据。
+def somcpPatchedPomDependencies = [
+    'com.github.zhkl0228:unidbg-api:0.9.9.1': [
+        'com.github.zhkl0228:capstone:3.1.8.1',
+        'com.github.zhkl0228:keystone:0.9.7.1',
+        'commons-codec:commons-codec:1.21.0',
+        'org.apache.commons:commons-collections4:4.5.0',
+        'commons-io:commons-io:2.21.0',
+        'com.alibaba:fastjson:1.2.83',
+        'com.github.zhkl0228:demumble:1.0.4',
+    ],
+    'com.github.zhkl0228:unidbg-android:0.9.9.1': [
+        'com.github.zhkl0228:unidbg-api:0.9.9.1',
+        'net.dongliu:apk-parser:2.6.10',
+    ],
+    'com.github.zhkl0228:capstone:3.1.8.1': [
+        'net.java.dev.jna:jna:5.10.0',
+        'org.scijava:native-lib-loader:2.3.5',
+    ],
+    'com.github.zhkl0228:keystone:0.9.7.1': [
+        'net.java.dev.jna:jna:5.10.0',
+    ],
+]
+
 // 生成仓库的位置：跟着 build 目录走，配置缓存与 clean 都不会留下脏状态。
 def somcpPatchedRepo = new File(project.layout.buildDirectory.get().asFile, 'patched-jars-repo')
 
-// 谁在这里被 replace：patched jar 是上游同名模块的**替代品**而非重复品，所以整份
-// 替换掉；按文件名判，表里没有的一律不碰（不变量 1）。
-def pomFor = { String group, String module, String version ->
+// 本地仓库里那份 POM。**必须带 dependencies**：见 somcpPatchedPomDependencies 的注释，
+// 空壳 POM 会让 capstone / keystone 的传递依赖整片消失，而它们在坐标世界里没有
+// 第二个声明方。Gradle 的世界里 `x.y.z.1` 与 `x.y.z` 是两个互不相干的模块，上游
+// POM 的依赖不会自动搬过来 —— 这份 POM 就是那份元数据的本地副本。
+def pomTextFor = { String coordinates ->
+    def (group, module, version) = parseCoordinates(coordinates)
+    def deps = somcpPatchedPomDependencies[coordinates] ?: []
+    def depsXml = deps.collect { String dep ->
+        def (depGroup, depModule, depVersion) = parseCoordinates(dep)
+        """    <dependency>
+      <groupId>${depGroup}</groupId>
+      <artifactId>${depModule}</artifactId>
+      <version>${depVersion}</version>
+    </dependency>
+"""
+    }.join('')
     """<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
@@ -97,51 +145,114 @@ def pomFor = { String group, String module, String version ->
   <artifactId>${module}</artifactId>
   <version>${version}</version>
   <packaging>jar</packaging>
+  <dependencies>
+${depsXml}  </dependencies>
 </project>
 """
 }
 
-somcpPatchedJars.each { fileName, coordinates ->
-    def parts = coordinates.split(':')
-    if (parts.length != 3) {
-        throw new GradleException("bad coordinate '${coordinates}' in somcpPatchedJars")
+/**
+ * patched jar 的 file 依赖 -> 普通坐标依赖。
+ *
+ * `app/build.gradle.kts` 里的四条依赖写成
+ *
+ *     implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
+ *
+ * 也就是「一个 file 依赖 + 一个没人读的坐标」。真正让 `x.y.z.1` 进图的是这里：
+ * 在同名文件依赖**声明的那一刻**把它换成坐标依赖。为什么必须在声明时换，见文件
+ * 开头「为什么不…」那段 —— 简言之，任何「解析之后再摘文件」的做法都会把配置缓存
+ * 和变体视图搅乱，而声明层是唯一一次干净的机会。
+ */
+def patchedCoordinatesFor = { Object dependency ->
+    if (!(dependency instanceof org.gradle.api.artifacts.FileCollectionDependency)) {
+        return null
     }
-    def (group, module, version) = parts
-    def source = new File(project.projectDir, "libs/${fileName}")
+    Set<String> wanted
+    try {
+        wanted = dependency.files.files.collect { it.name } as Set
+    } catch (Exception e) {
+        // `files()` 里写了不存在的路径时这里会抛。不是本插件该管的事：原样报出去，
+        // 免得把「文件缺失」误当成「不是 patched jar」而静默放行。
+        throw new GradleException("cannot read the file dependency ${dependency}: ${e.message}", e)
+    }
+    if (wanted.isEmpty()) {
+        return null
+    }
+    def hits = somcpPatchedJars.findAll { fileName, coordinates -> wanted.contains(fileName) }
+    if (hits.isEmpty()) {
+        return null
+    }
+    if (hits.size() != 1 || wanted.size() != 1) {
+        throw new GradleException(
+            "patched jar dependency ${wanted} must point at exactly one file from somcpPatchedJars " +
+                "(matched ${hits.keySet()}); see buildSrc/src/main/groovy/somcp.patched-local-jars.gradle"
+        )
+    }
+    def (group, module, version) = parseCoordinates(hits.values().first())
+    def source = new File(project.projectDir, "libs/${hits.keySet().first()}")
     if (!source.isFile()) {
         throw new GradleException(
             "missing patched jar ${source}. app/libs must be checked out next to the build " +
-                'script; the CNB warmup project never applies this plugin, so it does not need it.'
+                'script; the CNB warmup project only ever resolves, it never replaces.'
         )
     }
     def targetDir = new File(somcpPatchedRepo, "${group.replace('.', '/')}/${module}/${version}")
     targetDir.mkdirs()
     def targetJar = new File(targetDir, "${module}-${version}.jar")
-    // 内容没变就不重写：这个目录是任务输入的一部分，时间戳乱动会让下游反复重跑。
+    // 内容没变就不重写：这个目录是解析输入的一部分，时间戳乱动会让下游反复重跑。
     if (!targetJar.isFile() || targetJar.length() != source.length()) {
         targetJar.bytes = source.bytes
     }
     def targetPom = new File(targetDir, "${module}-${version}.pom")
-    def pomText = pomFor(group, module, version)
-    if (!targetPom.isFile() || targetPom.text != pomText) {
-        targetPom.text = pomText
+    def pom = pomTextFor((String) hits.values().first())
+    if (!targetPom.isFile() || targetPom.text != pom) {
+        targetPom.text = pom
     }
-    logger.lifecycle("[patched-jars] ${coordinates} -> ${targetJar}")
+    logger.lifecycle("[patched-jars] ${hits.keySet().first()} -> ${hits.values().first()}")
+    return hits.values().first()
+}
+
+// 只动 `files()` 这一种声明：普通坐标依赖、platform、project 依赖原样通过。
+// `configureEach` 保证后声明的 configuration（AGP 建的 debug*/release*/test* 等）
+// 也挂得上钩子。
+//
+// `whenObjectAdded` 在 `add` 里也可能被触发（本插件自己就 add 了一次），所以换完
+// 的坐标依赖必须再过一遍 `patchedCoordinatesFor` 时立刻返回 null。它返回 null 的
+// 依据是「不是 FileCollectionDependency」，与「是不是我加的」无关 —— 判据落在
+// 类型上，不靠状态位，重入也不会自己咬自己。
+project.configurations.configureEach { configuration ->
+    configuration.dependencies.whenObjectAdded { dependency ->
+        def coordinates = patchedCoordinatesFor(dependency)
+        if (coordinates == null) {
+            return
+        }
+        configuration.dependencies.remove(dependency)
+        configuration.dependencies.add(project.dependencies.create((String) coordinates))
+        logger.info("[patched-jars] ${configuration.name}: file dependency -> ${coordinates}")
+    }
 }
 
 // `app/build.gradle.kts` 里用 `patchedJar(fileName, coordinates)` 取依赖；返回普通
-// `Dependency`，可直接塞进 `implementation(...)`。只做「文件在表里 + 坐标三段式」
+// `Dependency`（file 依赖，由上面的钩子换成坐标）。只做「文件在表里 + 坐标三段式」
 // 的校验，别的一概不管。
 ext.patchedLocalJarDependency = { String fileName, String patchedCoordinates ->
-    def parts = patchedCoordinates.split(':')
-    if (parts.length != 3) {
-        throw new IllegalArgumentException("expected group:name:version, got '${patchedCoordinates}'")
-    }
     if (!somcpPatchedJars.containsKey(fileName)) {
         throw new IllegalArgumentException(
             "unknown patched jar '${fileName}'; add it to somcpPatchedJars in " +
                 'buildSrc/src/main/groovy/somcp.patched-local-jars.gradle'
         )
     }
-    project.dependencies.create(patchedCoordinates)
+    def declared = parseCoordinates(patchedCoordinates)
+    def expected = parseCoordinates(somcpPatchedJars[fileName])
+    if (declared[0] != expected[0] || declared[1] != expected[1] || declared[2] != expected[2]) {
+        throw new IllegalArgumentException(
+            "patched jar '${fileName}' declared as '${patchedCoordinates}' but the table says " +
+                "'${somcpPatchedJars[fileName]}'; the table is the single source of truth"
+        )
+    }
+    def jar = new File(project.projectDir, "libs/${fileName}")
+    if (!jar.isFile()) {
+        throw new GradleException("missing patched jar ${jar} (app/libs must be checked out with the build script)")
+    }
+    return project.dependencies.create(project.files(jar))
 }
