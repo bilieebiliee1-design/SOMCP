@@ -50,6 +50,7 @@ internal object AgentKernel {
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(120, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .withCompromisedCaBlocklist()
         .build()
 
     fun engine(settings: SettingsStore): RikkaAgentEngine = RikkaAgentEngine(

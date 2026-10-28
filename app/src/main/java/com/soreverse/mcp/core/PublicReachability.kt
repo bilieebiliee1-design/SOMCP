@@ -10,6 +10,7 @@ object PublicReachability {
     private val client = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.SECONDS)
+        .withCompromisedCaBlocklist()
         .build()
 
     fun probe(url: String, zh: Boolean, callback: (String) -> Unit) {
