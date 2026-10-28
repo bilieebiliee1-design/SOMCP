@@ -210,9 +210,14 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
   插件版本、仓库声明与 Maven 重试参数
 
-这三个构建脚本在 Dockerfile 里必须用**相对路径**（`/build.gradle.kts`）读。
-写 `/workspace/build.gradle.kts` 不行：`WORKDIR /workspace` 虽然在文件末尾，
-但镜像里没有源码。
+在 `by` 里声明只解决「进上下文」，不解决「进镜像」：Dockerfile 里必须再 `COPY`
+一次，否则 `RUN` 阶段根本看不到它们（曾因此失败在
+`sed: can't read /build.gradle.kts: No such file or directory`）。
+`COPY` 的源是上下文根、按仓库相对路径写，不能带 `../`；目标用绝对路径，
+不依赖当时的工作目录。三个文件被拷到 `/tmp/cnb-warmup/` 后就地改写成最小工程
+（清空 `settings.gradle.kts`、只留 `plugins {}` 给 `build.gradle.kts`），
+再用裸 `gradle help` 预热 —— 不用 `--build-file` / `--settings-file`，
+Gradle 9 已经把这两个参数删掉了。
 
 `versionBy` 仍只写 Dockerfile。被 `by` 额外带进上下文的文件只解决「可见性」，
 不该让缓存版本跟着漂移；预热本身吃 `RUN` 层缓存，构建脚本变了 Gradle 会自己重解析。
