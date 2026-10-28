@@ -164,10 +164,17 @@ def pomTextFor = { String coordinates ->
     def deps = somcpPatchedPomDependencies[coordinates] ?: []
     def depsXml = deps.collect { String dep ->
         def (depGroup, depModule, depVersion) = parseCoordinates(dep)
+        // `jna` 必须跟着 aar 走：`:app` 自己声明的是 `jna:5.10.0@aar`（classifier aar），
+        // POM 里不带 type 的那条会另外解析出一份 jar —— 两份都上 classpath，
+        // `checkDebugDuplicateClasses` 当场报几百条 `com.sun.jna.*`：
+        //   jna-5.10.0.aar -> jna-5.10.0-runtime and jna-5.10.0.jar
+        // 上游 POM 的 `<packaging>aar</packaging>` 只描述模块自身，传不到传递依赖上，
+        // 所以 patched 的 capstone / keystone POM 里显式写 `<type>aar</type>`。
+        def typeTag = (depModule == 'jna') ? '\n      <type>aar</type>' : ''
         """    <dependency>
       <groupId>${depGroup}</groupId>
       <artifactId>${depModule}</artifactId>
-      <version>${depVersion}</version>
+      <version>${depVersion}</version>${typeTag}
     </dependency>
 """
     }.join('')
