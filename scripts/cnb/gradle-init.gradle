@@ -31,6 +31,13 @@
 //   * 版本、依赖图、产物字节完全一致（镜像里是同一份构件）；
 //   * 真不存在的版本照样失败（Gradle 只在 404 时才继续试下一个仓库）。
 //
+// 第二个职责是**把「只看缓存」的复核脚本投放到运行期真正的用户目录**（见文件末尾的
+// deployCacheOnlyScript）。镜像把该脚本 COPY 到 `/opt/gradle-user-home`，而运行期
+// 的用户目录是 data 卷 `/root/.gradle`。首次挂载是空目录，由
+// scripts/cnb/setup-build-env.sh 从镜像内那份 `cp -a` 过来 —— 少搬一个文件就要在
+// 那里加一条断言，两处判据各自演化迟早对不上。交给 init script 自己投放，
+// 「用户在哪个目录」这件事只剩一个出口。
+//
 // 只在 CI 里介入（本地没有 CNB_BUILD_ID 时什么都不做）。
 
 // 依赖解析用：Maven Central 的镜像（Kotlin / AndroidX 等普通依赖都在这里）。
@@ -217,4 +224,44 @@ if (System.getenv('CNB_BUILD_ID') != null) {
     settingsEvaluated { settings ->
         jitpackFirst(settings.dependencyResolutionManagement.repositories)
     }
+}
+
+// 把复核脚本放进「当前这次构建真正的」用户目录。
+//
+// 为什么不在 init script 里比一比目录、把两者绑定起来？因为 system property 在
+// init script 求值之后才被应用，`System.getProperty` 此刻读到的还是启动时的旧值；
+// 而 `user.home` 根本不随 GRADLE_USER_HOME 变。所以只能按约定找：
+// `GRADLE_USER_HOME` 与 `user.home/.gradle` 两处都放一份（image 构建时那两处恰好
+// 是同一个路径，去重后只写一次）。
+//
+// 幂等（按长度判断要不要重写），预热、复核、每个 stage 各跑一次也没关系。
+// 失败只打 warning：真正的判据是复核那一步，缺了它会当场报出来，不在这里重复判死。
+def deployCacheOnlyScript = {
+    def source = new File('/opt/gradle-user-home/cnb-cache-only.gradle')
+    if (!source.isFile()) {
+        return
+    }
+    def candidates = [
+        System.getenv('GRADLE_USER_HOME') ? new File(System.getenv('GRADLE_USER_HOME'), 'cnb-cache-only.gradle') : null,
+        new File(System.getProperty('user.home'), '.gradle/cnb-cache-only.gradle'),
+    ]
+    def seen = [] as Set
+    candidates.findAll { it != null }.each { target ->
+        if (!seen.add(target.canonicalPath)) {
+            return
+        }
+        try {
+            if (target.isFile() && target.length() == source.length()) {
+                return
+            }
+            target.parentFile.mkdirs()
+            target.bytes = source.bytes
+        } catch (Exception e) {
+            logger.warn("[cnb-init] could not deploy cnb-cache-only.gradle to ${target}: ${e.message}")
+        }
+    }
+}
+
+if (System.getenv('CNB_BUILD_ID') != null) {
+    deployCacheOnlyScript()
 }

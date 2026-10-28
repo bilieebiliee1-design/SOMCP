@@ -425,3 +425,31 @@ url 算 hash 分索引**，预热下在 Google / MavenRepo / JitPack / 两个 `c
 
 这个文件不是公开 API，所以做了兜底说明：万一将来 Gradle 不再读它，复核会退化成
 「全部未命中」—— **偏严的失败**，不会误放行；届时按日志里 `Searched in` 的清单改。
+
+空目录建在 `$GRADLE_USER_HOME` 下，不写死 `~/.gradle`：镜像里那两者恰好是同一个
+路径（都是 `/root`），但预热用的是 `/tmp/cnb-warmup-home`，任务容器也不保证
+`HOME` 等于它。写死只会把目录生成在别处。
+
+## 复核脚本本身也要落到用户目录
+
+预热段第一次跑通之后（`[warmup] gradle help OK`，27s），紧接着那次复核在 2 秒内
+失败，报的却是「脚本缺失」：
+
+```
+cnbCacheOnlyCheck requested but /root/.gradle/cnb-cache-only.gradle is missing
+```
+
+镜像把它 COPY 到 `/opt/gradle-user-home`，预热跑在 `/tmp/cnb-warmup-home`、运行期跑
+在 data 卷 `/root/.gradle` —— init script 读的是后两者，镜像里那份从来没有出现在它们
+中间。位置不对，报错却指向「预热没做完」，很容易往错的方向查。
+
+两条腿一起补齐：
+
+- **预热段**（`image/cnb-tools.Dockerfile`）在开跑前把它复制进 `/tmp/cnb-warmup-home`；
+- **运行期**由 `scripts/cnb/gradle-init.gradle` 的 `deployCacheOnlyScript` 从
+  `/opt/gradle-user-home` 投放到 `$GRADLE_USER_HOME` 与 `user.home/.gradle`
+  （按长度判断，幂等，失败只打 warning）。
+
+`gradle-proxy.init.gradle.kts` 也改成两段查找：`$GRADLE_USER_HOME` 优先、
+`user.home/.gradle` 兜底。**init script 里没法自省「我在哪个用户目录」** ——
+system property 是在 init script 求值之后才应用的，此刻读到的还是启动时的旧值。
