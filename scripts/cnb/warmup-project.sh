@@ -23,7 +23,23 @@ set -euo pipefail
 DIR="${1:-/tmp/cnb-warmup}"
 cd "$DIR"
 
-# --- build.gradle.kts：只留 plugins {} -------------------------------------
+# --- 先把 SDK / namespace 读出来 --------------------------------------------
+# 见 MAGIC-WARMUP-READVAL
+read_val() { sed -n "s/^[[:space:]]*extra\[\"$1\"\][[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"[:space:]]*\)\"\{0,1\}[[:space:]]*$/\1/p" build.gradle.kts | head -1; }
+
+# --- MAGIC-WARMUP-READVAL：必须留在改写根脚本**之前** ------------------------
+WARMUP_NAMESPACE="$(read_val somcpNamespace)"
+WARMUP_COMPILE_SDK="$(read_val somcpCompileSdk)"
+WARMUP_MIN_SDK="$(read_val somcpMinSdk)"
+[ -n "$WARMUP_NAMESPACE" ] || { echo "[warmup] ERROR: no namespace in root build.gradle.kts" >&2; exit 1; }
+[ -n "$WARMUP_COMPILE_SDK" ] || { echo "[warmup] ERROR: no compileSdk in root build.gradle.kts" >&2; exit 1; }
+[ -n "$WARMUP_MIN_SDK" ] || { echo "[warmup] ERROR: no minSdk in root build.gradle.kts" >&2; exit 1; }
+
+# --- 根 build.gradle.kts：只留 plugins {} ----------------------------------
+# 只保留**根**工程的插件声明，`plugins {}` 块之外的任何一行都不进预热工程：
+# 根脚本里那些 `configurations.configureEach { ... }` / `tasks.withType<...>` 在
+# 预热工程里没有对应的插件与子工程，求值会直接抛异常；而把 `dependencies { ... }`
+# 整块搬过去更糟 —— warmup 工程里没有 libs/ 下的 jar，也没有仓库能补回来。
 awk '
   /^plugins[[:space:]]*\{/ { inblock = 1 }
   inblock { print }
@@ -32,6 +48,47 @@ awk '
 grep -q 'com.android.application' build.gradle.kts.new \
   || { echo "[warmup] ERROR: no plugins {} block in build.gradle.kts" >&2; exit 1; }
 mv build.gradle.kts.new build.gradle.kts
+
+# --- app/build.gradle.kts：生成一个只声明插件的模块脚本 ----------------------
+# **绝不能把仓库里 app 的脚本整份留下来**。预热工程的 app 模块只是为了触发
+# AGP 配置（拿插件 marker、AGP、lint、:app 的运行时依赖图），而 app 脚本里那些
+# 依赖与配置在最小工程里根本不成立：
+#   * `implementation(files("libs/*-patched.jar"))` 指向的文件不在预热上下文里
+#     （.cnb.yml 的 docker:cache.by 只带构建脚本，不带 libs/）；
+#   * `configurations.configureEach { ... }` / 自定义 task 依赖仓库里其余源码；
+#   * 更要命的是任何一句 Kotlin DSL 编译不过的写法（历史例子：
+#     `implementation(module("g:a:v"))`，Dependencies.module 只收三个参数）——
+#     脚本一编译失败，整次预热就以 BUILD FAILED 收场，镜像里一个依赖都没落下，
+#     而报错点看起来跟依赖图毫无关系。
+# 所以这里干脆**不读**仓库的 app 脚本（它也不在构建上下文里），直接生成一份
+# 只剩 `plugins {}` 的模块脚本：:app 用了哪些插件，从根 build.gradle.kts 的
+# plugins 块里认（本仓库的 :app 用的就是根里 apply false 的那两个）。
+grep -q 'com.android.application' build.gradle.kts \
+  || { echo "[warmup] ERROR: root build.gradle.kts has no com.android.application plugin" >&2; exit 1; }
+{
+  echo 'plugins {'
+  echo '    id("com.android.application")'
+  grep -q 'org.jetbrains.kotlin.plugin.compose' build.gradle.kts \
+    && echo '    id("org.jetbrains.kotlin.plugin.compose")'
+  echo '}'
+} > app/build.gradle.kts
+
+# app 脚本只剩 plugins {} 之后，AGP 建模块级模型还缺 namespace / compileSdk /
+# minSdk，缺了会在配置阶段就报 "Namespace not specified"。值从仓库自己的
+# 根 build.gradle.kts 里读（本仓库 app 的 compileSdk 36 / minSdk 26 与根里的
+# 插件版本同源，都随仓库走），读不到就判失败 —— 预热必须跟着仓库的 SDK 版本，
+# 否则镜像里预热的是 A、运行期用 B，缓存里就差一份 platform 的依赖。
+cat >> app/build.gradle.kts <<APPBLOCK
+
+// 由 scripts/cnb/warmup-project.sh 生成；值取自仓库根 build.gradle.kts。
+android {
+    namespace = "${WARMUP_NAMESPACE}"
+    compileSdk = ${WARMUP_COMPILE_SDK}
+    defaultConfig {
+        minSdk = ${WARMUP_MIN_SDK}
+    }
+}
+APPBLOCK
 
 # --- settings.gradle.kts：pluginManagement + 预热工程自己的依赖仓库 ----------
 # 上半段（pluginManagement）决定插件去哪解析，必须保留。下半段
@@ -80,4 +137,5 @@ mv settings.gradle.kts.new settings.gradle.kts
 
 echo "[warmup] project rewritten in $DIR:"
 sed 's/^/[warmup]   /' build.gradle.kts
+sed 's/^/[warmup]   /' app/build.gradle.kts
 sed 's/^/[warmup]   /' settings.gradle.kts
