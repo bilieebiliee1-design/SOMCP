@@ -59,4 +59,30 @@ RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
       "platforms;android-34" "cmake;3.22.1" \
  && sdkmanager --list_installed
 
+# ---------------------------------------------------------------------------
+# Gradle 用户目录预热
+# ---------------------------------------------------------------------------
+# gradle/actions/setup-gradle 帮上游做的事（配好源、把依赖拉好）在 CNB 上没有
+# 对应动作，只能在镜像里预先做掉：
+#   * scripts/cnb/gradle-init.gradle —— 用户级 init script，给仓库列表追加 Maven
+#     Central 镜像（原仓库一个不动），解决 429 限流被误报成「plugin not found」；
+#   * warmup 构建 —— 把插件 marker、AGP、lint 等构建期依赖一次下完。
+# 运行期 /root/.gradle 是 data 卷，首次挂载为空，由 scripts/cnb/setup-build-env.sh
+# 从 /opt/gradle-user-home 搬进去；镜像层保留原件，卷随流水线销毁。
+COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
+
+# 预热用的最小工程：插件版本与仓库声明都从仓库自己的构建脚本里读，不另抄一份。
+RUN set -eu; \
+    cp -a /opt/gradle-user-home /root/.gradle; \
+    mkdir -p /tmp/cnb-warmup; \
+    cd /tmp/cnb-warmup; \
+    sed -n '/^plugins {/,/^}/p' /workspace/build.gradle.kts > build.gradle.kts; \
+    sed -n '/^pluginManagement {/,/^}/p' /workspace/settings.gradle.kts > settings.gradle.kts; \
+    printf 'rootProject.name = "cnb-warmup"\n' >> settings.gradle.kts; \
+    grep -q 'org.jetbrains.kotlin.android' build.gradle.kts; \
+    gradle --no-daemon --console=plain help; \
+    cd /; rm -rf /tmp/cnb-warmup /root/.gradle/daemon /root/.gradle/.tmp; \
+    rm -rf /root/.gradle; \
+    du -sh /opt/gradle-user-home
+
 WORKDIR /workspace
