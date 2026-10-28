@@ -17,7 +17,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
-    // 把 app/libs/*-patched.jar 发布成带 module 元数据的依赖（buildSrc）。
+    // 把 app/libs/*-patched.jar 按「上游坐标 + 高版本号」发布进本地 Maven 仓库（buildSrc）。
     id("somcp.patched-local-jars")
 }
 
@@ -321,6 +321,14 @@ val buildUnidbgNative = tasks.register<UnidbgNativeBuildTask>("buildUnidbgNative
 // Populate jniLibs before compiling/packaging so the libs land in every APK.
 tasks.named("preBuild") { dependsOn(buildUnidbgNative) }
 
+
+// buildSrc 的 somcp.patched-local-jars 把工厂挂在 project.ext 上（见该文件的注释）。
+// Kotlin DSL 访问 ext 属性必须走 extraProperties，所以这里包一层。
+val patchedJar: (String, String) -> Any = { fileName: String, coordinates: String ->
+    (extensions.extraProperties.properties["patchedLocalJarDependency"] as groovy.lang.Closure<*>)
+        .call(fileName, coordinates)
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.06.01"))
     implementation("androidx.activity:activity-compose:1.13.0")
@@ -337,15 +345,17 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
     implementation("org.jsoup:jsoup:1.22.2")
-    // 这四个是上游同名模块的重打包版本。files() 本身不参与冲突检测，上游那份
-    // （经 unidbg-api 的 POM 传递依赖自动进来）会与它们并存；由
-    // somcp.patched-local-jars 在依赖解析之前把上游的 unidbg-api / unidbg-android
-    // 从 selector 集合里摘掉（capstone / keystone 上游是替代品，不动）。
-    // 见 buildSrc 里那份脚本插件的注释。
-    implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
-    implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
-    implementation(files("libs/capstone-3.1.8-android-patched.jar"))
-    implementation(files("libs/keystone-0.9.7-android-patched.jar"))
+    // 这四个是上游同名模块的重打包版本，按**上游坐标 + 高版本号**声明：files() 不带
+    // 坐标，Gradle 就认不出「这份 patched jar 顶替的是哪个模块」，上游那份（经
+    // unidbg-api 的 POM 传递依赖自动进来）会与它并存，于是
+    // checkDebugDuplicateClasses / mergeDebugJavaResource 报同名 class。
+    // 版本号 `<上游版本>.1` 让冲突解析按「高版本胜出」挑走我们这份（`.patched` 不行：
+    // Gradle 按字符串比版本，`0.9.9.patched` 排在 `0.9.9` 之前）；
+    // 真正的 jar 内容由 buildSrc/somcp.patched-local-jars 发布到本地 Maven 仓库。
+    implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
+    implementation(patchedJar("unidbg-android-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-android:0.9.9.1"))
+    implementation(patchedJar("capstone-3.1.8-android-patched.jar", "com.github.zhkl0228:capstone:3.1.8.1"))
+    implementation(patchedJar("keystone-0.9.7-android-patched.jar", "com.github.zhkl0228:keystone:0.9.7.1"))
     implementation("net.java.dev.jna:jna:5.10.0@aar")
     implementation("commons-codec:commons-codec:1.21.0")
     implementation("org.apache.commons:commons-collections4:4.5.0")

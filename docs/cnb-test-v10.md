@@ -642,67 +642,74 @@ buildSrc 是 **included build**：不继承 `settings.gradle.kts` 的 `pluginMan
 
 ### 现在的做法
 
-判据从「让冲突解析替我们选」改成「上游那份根本不进图」：
+判据从「事后从 classpath 上摘文件」改成「**让上游那份根本不进图**」：
 `buildSrc/src/main/groovy/somcp.patched-local-jars.gradle`（预编译脚本插件，Gradle 自带的
-`groovy-gradle-plugin`，零外部插件依赖）在 `configuration.incoming.beforeResolve { }` 里
-把上游坐标从待解析的 selector 集合里 `removeAll` 掉。上游那份因此**根本不会被解析**，
-也就不会被任何消费者合并进 classpath，重复类无从发生。
+`groovy-gradle-plugin`，零外部插件依赖）在 `app/build/patched-jars-repo` 生成一个最小
+Maven 仓库，把 `app/libs/*-patched.jar` 按**上游坐标 + 高版本号**发布：
 
-判据是「这个配置里有没有同名 patched jar」（看 `allDependencies` 的构件名，不触发解析），
-与「谁把上游 jar 带进来的」无关 —— 逐个 `exclude` 堵来路已经试过一次：带上游 jar 进来的
-路径不止一条，排掉一条，换条路径又漏回来。
+| patched jar | 坐标 |
+| --- | --- |
+| `unidbg-api-0.9.9-android-patched.jar` | `com.github.zhkl0228:unidbg-api:0.9.9.1` |
+| `unidbg-android-0.9.9-android-patched.jar` | `com.github.zhkl0228:unidbg-android:0.9.9.1` |
+| `capstone-3.1.8-android-patched.jar` | `com.github.zhkl0228:capstone:3.1.8.1` |
+| `keystone-0.9.7-android-patched.jar` | `com.github.zhkl0228:keystone:0.9.7.1` |
 
-**为什么不是「解析完再删」** —— 这条坑踩了三回，全死在 configuration cache 上，
-`gradle.properties` 里 `org.gradle.configuration-cache=true`，所以别再试。核心区别只有
-一句：**解析结果只能在解析前用「待解析的 selector」表达，不能反过来在解析后用「已解析
-的产物」去删** —— 后者一定会在存缓存那一步被重新求值。
+`settings.gradle.kts` 里这个仓库排在 google / mavenCentral / jitpack **之后**。上游版本照样
+从前面的仓库解析，`0.9.9.1` 只有本地仓库有；同名模块两个版本都进了图，Gradle 按
+「高版本胜出」只留 patched 那份 —— `unidbg-api:0.9.9 -> 0.9.9.1`，上游那份从图上消失。
 
-1. `incoming.afterResolve { resolvedArtifacts }` + 从 `configuration.artifacts` 删：
-   解析能过，但存缓存时会重放闭包、重新求值那个惰性属性，那时解析已结束
-   （`cnb-d7c-1k623dl4d` 的 Android Lint）：
+版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 分段比版本，`patched` 这种非数字段
+排在数字段**之前**，实测 `0.9.9.patched < 0.9.9`，上游反而胜出。
 
-   ```
-   Configuration cache state could not be cached: field `importDirs` of task
-   `:app:compileDebugAidl` of type `com.android.build.gradle.tasks.AidlCompile`:
-   error writing value of type
-   'org.gradle.api.internal.artifacts.configurations.ResolutionBackedFileCollection'
-   > Could not get unknown property 'resolvedArtifacts' for dependencies
-     ':app:debugCompileClasspath'
-   ```
+### 三条走不通的路（都实测过）
 
-2. 改成具名参数 `afterResolve { it.resolvedArtifacts }`：报错文字变了，病理没变，
-   同一个地方照样红（`cnb-5qa-1k623v3ir`）。**闭包里读解析结果这件事本身**就不能放在
-   `afterResolve` 里，换写法只是换报错。
+这才是这次红点的真正来源：前两版都在「解析完之后动 classpath」，而
+`cnb-d7c-1k623dl4d` 的 Android Lint 死在配置缓存写入上。
 
-3. `incoming.artifactView { beforeResolve { ... } }`：`ArtifactView.ViewConfiguration`
-   上根本没有 `beforeResolve`（`cnb-o45-1k6242bj7`）：
+```
+Configuration cache state could not be cached: field `importDirs` of task
+`:app:compileDebugAidl` of type `com.android.build.gradle.tasks.AidlCompile`:
+error writing value of type
+'org.gradle.api.internal.artifacts.configurations.ResolutionBackedFileCollection'
+> Could not get unknown property 'resolvedArtifacts' for dependencies
+  ':app:debugCompileClasspath'
+```
 
-   ```
-   Could not find method beforeResolve() ... on object of type
-   DefaultResolutionOutputs$DefaultArtifactViewConfiguration
-   ```
+`gradle.sh` 重跑三次，三次都挂在同一处 —— 真正的检查一步都没跑到。
 
-   `beforeResolve` 长在 `ResolvableDependencies` 上，属于 configuration 层；
-   artifact view 层只有 `componentFilter` / `lenient` / `withVariantReselection`，
-   过滤出来的是「视图」，替不掉 `configuration.incoming.files` 本身。
+1. **`incoming.afterResolve { configuration.artifacts.remove(...) }`**：改的是解析结果。
+   配置缓存把任务图连同各配置的解析结果一起序列化，而 `JavaCompile.classpath` 这类任务
+   输入是从解析结果反查出来的；被摘掉的构件在那份反向索引里已经不在了，序列化当场抛。
+2. **`FileCollection.filter { }`（只过滤文件、不动图）**：Gradle 9 的 `Configuration` 不再
+   继承 `ConfigurableFileCollection`（没有 `setFrom` / `filter` / `minus`），
+   `ArtifactCollection` 也没有 `remove` / `filter`。唯一能改文件视图的 `filter` 一旦被任务
+   `inputs.files(...)` 引用，就成了任务输入「file collection 结构」里的包装层，配置缓存存
+   它时拿不到被包装的 `ResolutionBackedFileCollection`，报同一句错误（本地最小工程复现）。
+3. **`incoming.beforeResolve { dependencies.removeAll(...) }`**：看着最干净，实测**无效** ——
+   `files()` 依赖在 selector 集合里的 `name` 是 `unspecified`，按模块名判「有没有 patched
+   jar」永远判不出来；要判只能读 `dep.files`，那会在 beforeResolve 里触发解析，绕回问题 1。
 
-`componentSelection.reject()` 也能达到同样效果（图解析阶段拒掉候选，同样不碰已解析
-产物），但 `beforeResolve` 更直白：拿到的是 `ResolvableDependencies.dependencies`，
-就是即将被解析的那张 selector 集合，`removeAll` 即可，顺手还能把被摘掉的坐标打进日志
-（`[patched-jars] <configuration>: drop upstream <坐标>`）。
+另外，「声明依赖时把 artifact 换成 `file:` url」（`dep.artifact { url = ... }`）在 Gradle 9 上
+也已经不生效：声明里的 artifact url 解析时被忽略，只会去仓库找那个不存在的版本，报
+`Could not find com.x:api:2.0.patched`（本地实测）。
+
+一句话：**必须让上游那份根本不进图**，而不是在最后一步把它藏起来。
 
 三条不变量写在插件头部注释里，改之前先读：
 
-1. 只对 `unidbg-api` / `unidbg-android` 生效。`unicorn` / `capstone` / `keystone` 的上游
-   jar 不是重复品而是**替代品**（`unicorn:1.0.15` 是 `unicorn.*` 唯一的来源），剔了会在
-   `session_open` 时 `ClassNotFoundException`。
-2. 同一配置里必须同时看到 patched jar 才动，否则说明该配置压根不需要它。
-3. 副作用看得见：拒绝理由写进 `ComponentSelection.reject(...)`，`dependencyInsight` 里
-   显示为 `rejected by rule` —— 依赖图被动过，日志里得看得见。
+1. `somcpPatchedJars` 是唯一口径表：文件名 ↔ 上游坐标，改 jar 必须两边一起改。表外的一律
+   不处理 —— `unicorn:1.0.15` 是 `unicorn.*` 唯一的来源（见 `app/build.gradle.kts` 里那段
+   注释），谁替掉它 `session_open` 就 `ClassNotFoundException`。
+2. 版本号必须是 `<上游版本>.1`（纯数字追加段）。
+3. 生成仓库必须在 `settings.gradle.kts` 的仓库列表里、且排在真仓库之后。
 
 **buildSrc 的插件选择因此被限制住了**：只能用 `groovy-gradle-plugin`，不能用 `kotlin-dsl`。
 后者要从 Portal 拿 marker，而 `--offline` 复核读的是预热出来的用户目录，那里没有它。
 `scripts/cnb/setup-build-env.sh` 里那条复核的注释记着这件事。
+
+**预热工程不受影响**：它不 apply 这个插件、也不 COPY `app/libs/`，所以 `settings.gradle.kts`
+里那条 `somcpPatchedLocal` 仓库指向的目录不存在 —— Gradle 对不存在的本地仓库只会跳过，
+不会报错。
 
 **顺带补的一处**：镜像预热工程会生成一个一次性 keystore
 （`release/keystore.properties` + `keytool -genkeypair`）。`:app` 的配置阶段要读
