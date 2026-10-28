@@ -35,13 +35,13 @@ val appChannelOverride = ((findProperty("appChannel") as String?) ?: System.gete
     ?.takeIf { it.isNotEmpty() }
 
 android {
-    namespace = "com.soreverse.mcp"
-    compileSdk = 36
+    namespace = rootProject.extra["somcpNamespace"] as String
+    compileSdk = rootProject.extra["somcpCompileSdk"] as Int
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.soreverse.mcp"
-        minSdk = 26
+        minSdk = rootProject.extra["somcpMinSdk"] as Int
         targetSdk = 36
         versionCode = 24
         versionName = "1.0.23"
@@ -335,17 +335,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
     implementation("org.jsoup:jsoup:1.22.2")
-    // patched jar 只用于 unidbg-api / unidbg-android / capstone / keystone 四个坐标：
-    // 它们的上游 artifact 会被 unidbg-unicorn2 当传递依赖带进来，与 files() 的
-    // patched jar 在 classpath 上撞成重复类，所以上游坐标一律排掉（见文件末尾
-    // configurations.configureEach）。
-    //
-    // 两个 -patched.jar 与上游的差别只有两个类，且都是 Android 上必需的：
-    //   * unidbg-api  AbstractEmulator: ManagementFactory.getRuntimeMXBean().getName()
-    //     取 pid → 改成反射调 android.os.Process.myPid()（Android 上 rt.jar 的管理
-    //     MBean 不可用，留着会在 emulator 构造时就抛异常）；
-    //   * unidbg-android BaseVM.printMemoryInfo(): MemoryMXBean → Runtime 内存数。
-    // 因此不能直接换成上游坐标，只能把「上游坐标」从依赖图里排掉。
     implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
     implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
     implementation(files("libs/capstone-3.1.8-android-patched.jar"))
@@ -357,72 +346,27 @@ dependencies {
     implementation("com.alibaba:fastjson:1.2.83")
     implementation("com.github.zhkl0228:demumble:1.0.4")
     implementation("net.dongliu:apk-parser:2.6.10")
-    // unidbg-* 上游坐标的排除写在文件末尾的 configurations.configureEach，
-    // 这里刻意不写 exclude：依赖块里的 exclude 只作用于本依赖这一条传递路径，
-    // 漏一条上游坐标就又会撞成重复类。
-    //
-    // 用字符串记法，不要写 module("g:a:v")：Kotlin DSL 里 Dependencies.module 只接受
-    // 三个参数，传单串会以「receiver type mismatch」直接编译失败（脚本都跑不起来，
-    // 与依赖图无关）。排除时序问题由文件末尾的 withDependencies 负责，与这里的写法无关。
-    implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9")
-    // unicorn2 后端（Unicorn2Backend → 反射注册的 Unicorn2Factory）来自上面这个
-    // 坐标，两个 patched jar 里都没有它 —— 删掉这条，应用再也注册不到后端工厂，
-    // 只剩 BackendFactory.createBackend 兜底的 UnicornBackend。
-    // patched unidbg-api 仍带着 BackendFactory + UnicornBackend，字节码引用
-    // unicorn.Unicorn / UnicornConst / UnicornException（Unicorn2Backend 也一样），
-    // 这些类来自 com.github.zhkl0228:unicorn，它本是 unidbg-api 的传递依赖，排掉
-    // unidbg-api 后就没来源了。缺了它 UnicornBackend 会以
-    // ClassNotFoundException: unicorn_Unicorn 死在 session_open。
-    // 全局 exclude 只排 unidbg-api / unidbg-android / capstone / keystone 四个坐标，
-    // 不碰 unicorn，所以这条必须留着 —— 它是 unicorn.* 唯一的来源。
+    implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9") {
+        exclude(group = "com.github.zhkl0228", module = "unidbg-api")
+        exclude(group = "com.github.zhkl0228", module = "capstone")
+        exclude(group = "com.github.zhkl0228", module = "keystone")
+    }
+    // The patched unidbg-api jar still ships BackendFactory + UnicornBackend whose
+    // bytecode references unicorn.Unicorn / unicorn.UnicornConst / unicorn.UnicornException
+    // (and Unicorn2Backend in unidbg-unicorn2 references unicorn.UnicornConst /
+    // unicorn.UnicornException as well). Those classes come from
+    // com.github.zhkl0228:unicorn, which is a transitive of unidbg-api and therefore
+    // drops out of the classpath the moment we exclude unidbg-api above. Without
+    // this direct dependency, BackendFactory.createBackend() falls back from
+    // Unicorn2Backend to UnicornBackend and then dies with
+    //   ClassNotFoundException: unicorn_Unicorn
+    // during session_open on every architecture. Pulling the original unicorn
+    // artifact in explicitly restores the unicorn.* classes without re-introducing
+    // unidbg-api (which would conflict with our patched jar).
     implementation("com.github.zhkl0228:unicorn:1.0.15")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 
     // Argon2 key derivation for encrypted backup/restore
     implementation("com.lambdapioneer.argon2kt:argon2kt:1.6.0")
-}
-
-// upstream unidbg-* 必须从**整个依赖图**里排掉。
-//
-// 这些 jar 的 patched 版本走 files()（libs/*-patched.jar），maven 没有对应的
-// 坐标，所以只能把上游坐标排干净：com.github.zhkl0228:unidbg-unicorn2:0.9.9 会把
-// unidbg-api / unidbg-android 当传递依赖带进来，同一批 com.github.unidbg.* 类出现两次
-// （unicorn2 本身要留着，它提供 Unicorn2Factory / Unicorn2Backend 这两个工厂类）：
-//   > Task :app:checkDebugDuplicateClasses FAILED
-//     Duplicate class com.github.unidbg.AbstractEmulator found in modules
-//       unidbg-api-0.9.9-android-patched.jar and unidbg-api-0.9.9.jar
-//   > Task :app:mergeDebugJavaResource FAILED
-//     2 files found with path 'android/sdk23/system/usr/share/zoneinfo/.../tzdata'
-//
-// 写在 configuration 上而不是某个依赖块里：同一坐标可能有多条传递路径，
-// 逐块写 exclude 只能挡住自己那一条，漏掉的那条照样把重复类带回来。
-//
-// 但这段代码前两版都没生效，报错一模一样（332 条 Duplicate class 加 tzdata 同名
-// 文件）：exclude 是在 dependencies {} **之后**才设到配置上的，而此时依赖已经解析
-// 成 Dependency 对象，是否吃到这条 exclude 取决于它是以什么形式绑上去的 ——
-// 写在 dependencies 里的字符串依赖不吃，所以上面那条 unidbg-unicorn2 改成了
-// module(...)。真正不看时序的判据是下面那段 withDependencies。
-configurations.configureEach {
-    exclude(group = "com.github.zhkl0228", module = "unidbg-android")
-    exclude(group = "com.github.zhkl0228", module = "unidbg-api")
-    exclude(group = "com.github.zhkl0228", module = "capstone")
-    exclude(group = "com.github.zhkl0228", module = "keystone")
-    // 同一份构件的第二个 group（JitPack 的 user.repo 布局）。逐模块点名挡不住
-    // 传递依赖带回来的那几个（unidbg-dynarmic / -hypervisor / -ios 等），
-    // 所以整个 group 一起排。
-    exclude(group = "com.github.zhkl0228.unidbg")
-}
-
-// 真正不看时序的判据：在依赖解析那一刻直接删掉上游坐标，与 exclude 何时设置、
-// 依赖以什么顺序加入都无关。
-// unidbg-api / unidbg-android 的上游 POM 还会把 capstone 3.1.8 / keystone 0.9.7 /
-// unicorn 1.0.15 / demumble 1.0.4 带进来（capstone / keystone 的 patched jar 走
-// files()，unicorn 同时是 unicorn2 后端的 JNI 类来源，两条都已有显式声明），
-// 所以四个模块一起删。
-val upstreamUnidbgModules = listOf("unidbg-api", "unidbg-android", "capstone", "keystone")
-configurations.configureEach {
-    withDependencies {
-        removeAll { it.group == "com.github.zhkl0228" && it.name in upstreamUnidbgModules }
-    }
 }

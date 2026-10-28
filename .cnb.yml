@@ -96,6 +96,10 @@ main:
             #   * build.gradle.kts / settings.gradle.kts / gradle.properties ——
             #     warmup 从里面读插件版本与仓库声明，并让重试参数也生效；
             #     这三个只进上下文，Dockerfile 里另有 COPY 才会进镜像。
+            #   * app/build.gradle.kts **不进上下文**：镜像把 :app 的脚本砍到只剩
+            #     plugins {} 才能安全预热（dependencies 里的 files("libs/...") 不在
+            #     上下文里，`module("g:a:v")` 连脚本编译都过不了）。只要 plugins {}，
+            #     而它与根脚本是同一份声明 —— 多带一个文件只会多一个能让预热失败的点。
             by:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -105,7 +109,6 @@ main:
               - build.gradle.kts
               - settings.gradle.kts
               - gradle.properties
-              - app/build.gradle.kts
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
             # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
             # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
@@ -122,7 +125,6 @@ main:
               - build.gradle.kts
               - settings.gradle.kts
               - gradle.properties
-              - app/build.gradle.kts
             sync: true
           exports:
             name: BUILD_ENV_IMAGE
