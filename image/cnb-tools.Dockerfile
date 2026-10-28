@@ -102,11 +102,17 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 #     缺省的 gradlePluginPortal，而 AGP 的 marker 在 Google，预热解析
 #     `com.android.application:9.2.1` 永远拿不到（镜像层只留 warning，
 #     运行期的「只看缓存」复核随后报「warmup cache is incomplete」）；
+#   * 预热跑的不只是 `help`：`help` 只做配置，不解析 :app 的运行时依赖，androidx /
+#     compose / ktor / okhttp 一个都进不了缓存，运行期照样现场冲网。多带一条
+#     `:app:dependencies --configuration releaseRuntimeClasspath`，把 :app 真正用到的
+#     那份依赖图解析一遍（实测同一份用户目录：只跑 help 时 androidx 目录不存在，
+#     带上这条之后 androidx.core / androidx.compose.ui / io.ktor / okhttp 都在）。
 #   * gradle.properties 必须一起进预热工程 —— 仓库级重试参数
 #     （org.gradle.internal.repository.max.tentatives / initial.backoff）与
 #     network.retries 都从这份属性文件读，而冷启动最吃重试的正是预热这一次解析；
 #     少设一次就是「预热下的东西运行期用不上」，白跑。
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
+COPY app/build.gradle.kts /tmp/cnb-warmup/app/
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
 # 曾因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
@@ -139,8 +145,9 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #     的目标就是它，不给的话 `gradle help` 与 `cp -a` 会指向同一个目录，
 #     预热下的依赖会被后面的 `rm -rf /root/.gradle` 一起删掉，等于白预热。
 #   * 超时兜底：CI 的代理变量在无网时会变成黑洞（连上去就不说话），Gradle 的
-#     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。联网预热给 10 分钟、
+#     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。联网预热给 15 分钟、
 #     只看缓存的复核给 5 分钟上限，kill 之后落到 ERROR 分支 —— 预热不完整就不出镜像。
+#     （联网那次比复核重：除了 `help` 还要解析 :app 的整张运行时依赖图。）
 #   * 预热失败时除日志尾巴外，先把「网络层证据」单独捞出来（Could not GET/HEAD、
 #     429、proxy、Connection、timed out）—— 默认日志只有一句 `BUILD FAILED`，
 #     够不到「哪个仓库、什么状态码」，而这一层是整轮里最贵的一次构建。
@@ -163,15 +170,16 @@ RUN set -eu; \
     cd /tmp/cnb-warmup; \
     bash -x /opt/cnb/warmup-project.sh; \
     printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
-    if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 600 \
+    if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 900 \
          /opt/gradle/bin/gradle --no-daemon --console=plain --info \
          --init-script /opt/cnb/gradle-init.gradle \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
          -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
-         help > /tmp/cnb-warmup.log 2>&1; then \
-      echo "[warmup] gradle help OK"; \
+         help :app:dependencies --configuration releaseRuntimeClasspath \
+         > /tmp/cnb-warmup.log 2>&1; then \
+      echo "[warmup] gradle help + :app:dependencies OK"; \
     else \
-      echo "[warmup] ERROR: gradle help failed; the dependency cache could not be" >&2; \
+      echo "[warmup] ERROR: gradle help / :app:dependencies failed; the cache could not be" >&2; \
       echo "[warmup] ERROR: populated. Network-layer evidence first, then the tail:" >&2; \
       grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup.log | tail -n 40 >&2 || true; \
       tail -n 60 /tmp/cnb-warmup.log >&2 || true; \
@@ -183,7 +191,8 @@ RUN set -eu; \
          --init-script /opt/cnb/gradle-init.gradle \
          --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
          -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
-         help > /tmp/cnb-warmup-offline.log 2>&1; then \
+         help :app:dependencies --configuration releaseRuntimeClasspath \
+         > /tmp/cnb-warmup-offline.log 2>&1; then \
       echo "[warmup] cache-only recheck OK: the cache is self-sufficient"; \
       cp -a /tmp/cnb-warmup-home/. /opt/gradle-user-home/; \
     else \
