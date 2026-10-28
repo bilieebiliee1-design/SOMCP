@@ -10,32 +10,26 @@
  * the Free Software Foundation.
  */
 
-// 只为了让 buildSrc/src/main/kotlin/SomcpPatchedLocalJarsPlugin.kt 能被编译：
-// `kotlin-dsl` 会带上 Kotlin 编译器与 stdlib（插件本身是普通的 Plugin<Project>
-// 实现，不是预编译脚本插件 —— 脚本插件那份写法在这里拿不到 apply 主体）。
+// 只放一个预编译脚本插件（src/main/groovy），用来把 app/libs 下打补丁的 jar
+// 当成上游同名模块的替代品挂进依赖图。
 //
-// 版本必须**写死**，不能让它跟着 Gradle 的缺省值走：`kotlin-dsl` 的 marker
-// 版本是 gradle-kotlin-dsl-<Gradle 版本>-<发布时间戳>，形如 6.6.4-20260114.081327-6，
-// Gradle 每次都去 plugins 的**那个**时间戳找构件。同一个 Gradle 版本在不同时间
-// 运行可能读到不同的 marker（缺省值里带时间戳），缓存里存下的键与下一次请求的
-// 键对不上 —— 表现是「明明预热过，却报 kotlin-dsl 找不到」。
+// 这里**不能**用 `kotlin-dsl`。它要从 Gradle Plugin Portal 解析自己的插件 marker，
+// 而 buildSrc 是 included build：既不继承 settings.gradle.kts 的 pluginManagement，
+// `--init-script` 传进去的仓库对它也不生效，只能靠本文件下面那三行去拿。实测三行
+// 齐了、版本钉死了，仍然会在 CNB 的 `--offline` 复核里报
 //
-// 挑一个固定版本还顺带把下面的仓库收窄成一件事：查什么、去哪查，都写在这儿。
+//   Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+//   Searched in the following repositories: Gradle Central Plugin Repository
+//
+// —— marker 从没进过镜像预热出来的那份用户目录（预热工程里没有 buildSrc），
+// 复核又是全程离线的。为一个二十行的依赖修补去改预热的判据不划算。
+// Gradle 自带的 `groovy-gradle-plugin` 零外部插件依赖，功能上完全够。
 plugins {
-    id("org.gradle.kotlin.kotlin-dsl") version "6.6.4"
+    `groovy-gradle-plugin`
 }
 
-// buildSrc 不会继承 settings.gradle.kts 的仓库声明，必须自己写一份，
-// 否则 kotlin-stdlib / kotlin-reflect 解析不到（报 "no repositories are defined"）。
-//
-// 顺序与 settings.gradle.kts 一致：CNB 的 init script 只会往这个列表**前面**插镜像，
-// 本地开发则直连。
-//
-// 这份列表也是 `kotlin-dsl` 插件 marker 唯一的来源：Gradle 编译 buildSrc 发生在
-// 配置根工程之前，`settings.gradle.kts` 的 pluginManagement 与镜像传的
-// `--init-script` 都管不到这儿（详见 docs/cnb-test-v10.md「buildSrc 必须自带
-// 插件仓库」）。缺 gradlePluginPortal() 就直接是
-//   Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+// buildSrc 不继承 settings.gradle.kts 的仓库，必须自己声明；否则连
+// `groovy-gradle-plugin` 自身要用的 Groovy 都解析不到（"no repositories are defined"）。
 repositories {
     google()
     mavenCentral()
