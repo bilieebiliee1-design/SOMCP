@@ -47,13 +47,30 @@ def gradleUserHome = new File(System.getenv('GRADLE_USER_HOME') ?: System.getPro
 
 def mirrorLayers = []
 
+// 有状态：同一个 URL 在多次回调里必须落进**同一个**目录。这个脚本被 apply
+// 两次（预热期一次、运行期的 init script 一次），而 `all {}` 回调还会随仓库增删
+// 重复触发 —— 用 `indexOf` 在每次都重建的临时列表里找位置，同一份构件的缓存
+// 索引会被写到两个不同目录下，复核报出来的就成了「预热没下过这份构件」
+// （偏严的误判，但排错方向会被带偏）。所以按 url 记住第一次分配的下标。
+def layerSlots = [:] as Map
+def slotFor = { String layer, String url ->
+    def slots = layerSlots.computeIfAbsent(layer) { [:] }
+    def index = slots[url]
+    if (index == null) {
+        index = slots.size()
+        slots[url] = index
+    }
+    return index
+}
+
 def restrict = { repositories, layer ->
     def originals = repositories.collect { repo -> [repo.name, repo.url.toString()] }
     repositories.clear()
-    originals.eachWithIndex { original, i ->
+    originals.each { original ->
         def name = original[0]
         def url = original[1]
-        def repoDir = new File(gradleUserHome, "cnb-cache-only/${layer}/${i}")
+        def slot = slotFor(layer, url)
+        def repoDir = new File(gradleUserHome, "cnb-cache-only/${layer}/${slot}")
         repoDir.mkdirs()
         repositories.maven { repo ->
             repo.name = "${name}-cache-only"
@@ -81,10 +98,10 @@ def restrict = { repositories, layer ->
         def infoDir = new File(repoDir, '.gradle')
         infoDir.mkdirs()
         new File(infoDir, 'repo-info.json').text = "{\"url\": ${groovy.json.JsonOutput.toJson(url)}, \"type\": \"maven\"}\n"
-        if (name.startsWith('cnb-') && name.contains('mirror')) {
-            mirrorLayers << "${layer}[${i}] ${name}"
+        if (name.startsWith('cnb-') && name.contains('mirror') && !mirrorLayers.contains("${layer}[${slot}] ${name}")) {
+            mirrorLayers << "${layer}[${slot}] ${name}"
         }
-        println "[cnb-cache-only] ${layer}[${i}] ${name} (${url}) -> local cache index"
+        println "[cnb-cache-only] ${layer}[${slot}] ${name} (${url}) -> local cache index"
     }
 }
 

@@ -96,10 +96,13 @@ main:
             #   * build.gradle.kts / settings.gradle.kts / gradle.properties ——
             #     warmup 从里面读插件版本与仓库声明，并让重试参数也生效；
             #     这三个只进上下文，Dockerfile 里另有 COPY 才会进镜像。
-            #   * app/build.gradle.kts **不进上下文**：镜像把 :app 的脚本砍到只剩
-            #     plugins {} 才能安全预热（dependencies 里的 files("libs/...") 不在
-            #     上下文里，`module("g:a:v")` 连脚本编译都过不了）。只要 plugins {}，
-            #     而它与根脚本是同一份声明 —— 多带一个文件只会多一个能让预热失败的点。
+            #   * app/build.gradle.kts 与 app/libs/ **都要进上下文**：预热的
+            #     **第一遍按仓库原样跑**，:app 的真实脚本要求值一次，才能把
+            #     androidx / compose / ktor / okhttp 与 files("libs/*-patched.jar")
+            #     解析掉。第二遍才换成 warmup-project.sh 生成的最小脚本（只含
+            #     plugins {} + 最小 android {}），那时它们已不影响结果。
+            #     历史教训：怕「脚本编译不过就闷杀整层预热」而干脆不带 app 脚本，
+            #     结果就是 :app 的运行时依赖一个都没预热，运行期照样现场冲网。
             #   * buildSrc/ **整目录带上**（build.gradle.kts 与 src/ 下的插件源码）：
             #     预热工程要把它**删掉**再跑（Gradle 一旦看见 buildSrc/ 就会先编译它，
             #     而 buildSrc 是 included build —— 不继承 settings.gradle.kts 的
@@ -122,6 +125,8 @@ main:
               - build.gradle.kts
               - settings.gradle.kts
               - gradle.properties
+              - app/build.gradle.kts
+              - app/libs
               - buildSrc/build.gradle.kts
               - buildSrc/src/main/groovy
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
@@ -131,10 +136,10 @@ main:
             # 校验代码准备里报 warmup cache is incomplete —— 改了半天脚本，
             # 跑的还是老镜像。代价是这些文件改动会触发一次完整重建，
             # 但它们本来就只在准备镜像时才改。
-            # buildSrc/ 也要进 versionBy，尽管预热工程里它会被删掉：删掉只是
-            # 预热工程的决定，运行期每个 stage 都要真的编译它。改它的插件写法
-            # 却沿用旧镜像，就会出现「镜像里的缓存与源码对不上」，而报错落在
-            # 校验代码准备那句含糊的 warmup cache is incomplete 上。
+            # app/ 与 buildSrc/ 也要进 versionBy：它们直接决定镜像里预热了哪些
+            # 依赖（:app 的运行时依赖图、buildSrc 编译要用的东西）。改了却沿用
+            # 旧镜像，就会「镜像里的缓存与源码对不上」，而报错落在校验代码准备
+            # 那句含糊的 warmup cache is incomplete 上。
             versionBy:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -144,6 +149,8 @@ main:
               - build.gradle.kts
               - settings.gradle.kts
               - gradle.properties
+              - app/build.gradle.kts
+              - app/libs
               - buildSrc/build.gradle.kts
               - buildSrc/src/main/groovy
             sync: true

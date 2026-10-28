@@ -117,14 +117,17 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 #     （org.gradle.internal.repository.max.tentatives / initial.backoff）与
 #     network.retries 都从这份属性文件读，而冷启动最吃重试的正是预热这一次解析；
 #     少设一次就是「预热下的东西运行期用不上」，白跑。
-# app/build.gradle.kts 刻意**不** COPY：预热工程的 :app 脚本由 warmup-project.sh
-# 生成（只含 plugins {} + 最小 android {}），见上面的改写判据。
+# app/build.gradle.kts 与 app/libs/ 必须一起进上下文：预热的**第一遍**按仓库原样
+# 跑，:app 的真实脚本要求值一次 —— 只有这样才能把 androidx / compose / ktor /
+# okhttp 与 files("libs/*-patched.jar") 解析掉。第二遍才换成 warmup-project.sh
+# 生成的最小脚本（只含 plugins {} + 最小 android {}），那时它们已不影响结果。
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
-# app/ 只是个空目录：:app 的脚本由 warmup-project.sh 生成，仓库那份不 COPY 也不
-# 出现在构建上下文里，所以这里得先把目录建出来。
-RUN mkdir -p /tmp/cnb-warmup/app
+COPY app/build.gradle.kts /tmp/cnb-warmup/app/build.gradle.kts
+COPY app/libs/ /tmp/cnb-warmup/app/libs/
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
-# 构建上下文里带进来的 buildSrc/ 一律不要，理由见上面关于 buildSrc 的那段。
+# 构建上下文里带进来的 buildSrc/ 一律不要：预热工程用不到它（:app 脚本由
+# warmup-project.sh 生成），而 Gradle 只要看见 buildSrc/ 就会先编译它一遍 ——
+# 那属于运行期的事，不该由预热来判。删的是 /tmp/cnb-warmup 里的副本。
 # 单独一层：预热段是镜像里最贵的一层，补丁不应让它整体重建。
 RUN rm -rf /tmp/cnb-warmup/buildSrc
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
@@ -199,7 +202,6 @@ RUN rm -rf /tmp/cnb-warmup/buildSrc
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
-    bash -x /opt/cnb/warmup-project.sh; \
     mkdir -p release; \
     printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
         /tmp/cnb-warmup-signing.jks warmup-only warmup-only warmup-only > release/keystore.properties; \
@@ -208,22 +210,7 @@ RUN set -eu; \
         -keyalg RSA -keysize 2048 -validity 1 \
         -storepass warmup-only -keypass warmup-only -dname 'CN=warmup' > /dev/null 2>&1; \
     printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
-    if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 900 \
-         /opt/gradle/bin/gradle --no-daemon --console=plain --info \
-         --no-configuration-cache \
-         --init-script /opt/cnb/gradle-init.gradle \
-         --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
-         -Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle \
-         help :app:dependencies --configuration releaseRuntimeClasspath \
-         > /tmp/cnb-warmup.log 2>&1; then \
-      echo "[warmup] gradle help + :app:dependencies OK"; \
-    else \
-      echo "[warmup] ERROR: gradle help / :app:dependencies failed; the cache could not be" >&2; \
-      echo "[warmup] ERROR: populated. Network-layer evidence first, then the tail:" >&2; \
-      grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out" /tmp/cnb-warmup.log | tail -n 40 >&2 || true; \
-      tail -n 60 /tmp/cnb-warmup.log >&2 || true; \
-      exit 1; \
-    fi; \
+    bash -x /opt/cnb/warmup-project.sh; \
     if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 300 \
          /opt/gradle/bin/gradle --offline --no-daemon --console=plain --info \
          --no-configuration-cache \
@@ -240,7 +227,7 @@ RUN set -eu; \
       echo "[warmup] ERROR: successful because the network was reachable; the cache is" >&2; \
       echo "[warmup] ERROR: NOT self-sufficient, and later stages resolve offline." >&2; \
       grep -E "Could not (GET|HEAD|resolve)|rate limit|429|proxy|Connection|timed out|Searched in the following locations" /tmp/cnb-warmup-offline.log | tail -n 40 >&2 || true; \
-      tail -n 60 /tmp/cnb-warmup-offline.log >&2 || true; \
+      tail -n 80 /tmp/cnb-warmup-offline.log >&2 || true; \
       if grep -qE "cnb-(plugin-)?(central-)?mirror-" /tmp/cnb-warmup-offline.log; then \
         echo "[warmup] HINT: a cnb-mirror-* repository is in the rejection list. Load-bearing" >&2; \
         echo "[warmup] HINT: downloads during the ONLINE warmup can go through the Maven Central" >&2; \
@@ -252,7 +239,7 @@ RUN set -eu; \
       fi; \
       exit 1; \
     fi; \
-    rm -f /tmp/cnb-warmup.log /tmp/cnb-warmup-offline.log; \
+    rm -f /tmp/cnb-warmup.log /tmp/cnb-warmup-2.log /tmp/cnb-warmup-offline.log; \
     cd /; rm -rf /tmp/cnb-warmup /tmp/cnb-warmup-home /tmp/cnb-warmup-signing.jks /root/.gradle; \
     du -sh /opt/gradle-user-home
 
