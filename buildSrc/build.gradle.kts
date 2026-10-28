@@ -32,6 +32,27 @@ plugins {
 // `groovy-gradle-plugin` 自身要用的 Groovy 都解析不到（"no repositories are defined"）。
 repositories {
     google()
+    // Plugin Portal 的 Maven 端点，排在这里而不是只靠末尾的 gradlePluginPortal()。
+    //
+    // `kotlin-dsl` 的 marker 解析发生在 buildSrc 这一层，而 buildSrc 不继承
+    // settings.gradle.kts 的 pluginManagement，init script 的镜像也管不到它 ——
+    // 这个列表就是全部来源。`gradlePluginPortal()` 自己也是 Maven 端点
+    // （plugins.gradle.org/m2），但它排在 mavenCentral() 之后，而 marker 的
+    // **传递依赖**（kotlin-gradle-plugin-api / kotlin-gradle-plugins-bom 等）
+    // 在 Maven Central 上一片 429：本地实测 39 次 429、耗时 9 分 42 秒才勉强解析完，
+    // 而镜像预热的「只看缓存」复核是离线的，一旦那次联网预热没把这些构件下全，
+    // 复核就报
+    //   Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+    //     Searched in the following repositories:
+    //       Gradle Central Plugin Repository
+    // 提到前面之后同一场景 429 不再挡路（plugins.gradle.org 那边是 200）。
+    //
+    // 与 google() / mavenCentral() 并列而不是替换：从 Portal 取不到时照样轮到
+    // 后面两个，失败语义不变；本地开发命中同一个端点，字节也一致。
+    maven {
+        name = "gradlePluginPortalMaven"
+        url = uri("https://plugins.gradle.org/m2")
+    }
     mavenCentral()
     gradlePluginPortal()
 }
