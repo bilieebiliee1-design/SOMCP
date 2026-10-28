@@ -23,6 +23,9 @@
 // 会用一个假 200 挡住 Google 上真实存在的 AGP marker；而 google 镜像里又没有
 // Kotlin 的插件 marker。
 //
+// 但「只追加」对 JitPack 这类**没有公共镜像**的仓库是致命的，见 noMirror 与
+// addCentralOnlyMirror 的注释 —— 假 200 与 429 都能让它在镜像那里就走不下去。
+//
 // 只追加、不删除、不替换原仓库：
 //   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，解析顺序不变；
 //   * 版本、依赖图、产物字节完全一致（镜像里是同一份构件）；
@@ -56,7 +59,8 @@ def PLUGIN_MIRROR_URLS = [
     'https://maven.aliyun.com/repository/gradle-plugin',
 ]
 
-// 插件侧还需要一个 Maven Central 镜像，而它必须排在**最后**。
+// 插件侧还需要一个 Maven Central 镜像，而它必须排在**最后**（且通常不会真的被用到，
+// 见 addCentralOnlyMirror）。
 // marker（`*.gradle.plugin`）只是入口，插件自身的传递依赖 —— asm、jaxb-runtime、
 // javapoet、kotlin-build-statistics 等 —— 都从 MavenRepo 取，同样会吃 429。
 // 实测预热就倒在
@@ -69,6 +73,32 @@ def PLUGIN_CENTRAL_MIRROR_URLS = [
     'https://maven.aliyun.com/repository/public',
 ]
 
+// 哪些原仓库不能用 Maven Central 的镜像兜。
+//
+// `maven.aliyun.com/repository/public` 对不存在的构件不是 404，而是 **200 + 一张
+// 「该资源不存在」的 HTML 页**（见上面的假 200 一节）。对「原仓库能命中」的构件无妨：
+// 原仓库排在前面，镜像轮不到。但对**原仓库里根本没有、只在别处有**的构件，这就是灾难 ——
+// Gradle 读到 200 原地失败，**不会再去试后面的原仓库**；限流时同一个位置给的是
+// 429，同样当场判死 —— 而真正的源（JitPack）就在下一行、好好的。
+//
+// 实测（本仓库 app/build.gradle.kts 的 com.github.rikkahub:markdown:d79a97cc8e）：
+//   Google                    未命中
+//   repo.maven.apache.org     404（这个坐标本来就不在 Maven Central）
+//   .../repository/public     404 / 429 / 200 空壳（限流时给 429，换几次又给空壳）
+//   jitpack.io                200，jar 的 sha1 与 .module 声明一致
+// 于是 `:app:lintDebug` 挂在 debugCompileClasspath 解析上，红点离根因很远。
+//
+// 判据是「这个仓库里的东西不会出现在 Maven Central 镜像里」，现在按 URL 认：
+//   * JitPack（`jitpack.io`）：从 GitHub 现场构建，Central 不可能有；
+//   * 任何本地 / 文件仓库（`file:`，含 -PcnbCacheOnlyCheck 换出来的那个空 marketplace）：
+//     镜像语义对它毫无意义，而且必须保证它排第一时的独占性。
+// 新加仓库时如果它也不在 Central，记得往这里补一条 —— 少补的代价是「加了镜像之后
+// 反而解析不到」，而且报错指向镜像而不是这里。
+def noMirror = { repo ->
+    def url = repo.url?.toString() ?: ''
+    url.contains('jitpack.io') || url.startsWith('file:')
+}
+
 // 追加镜像。`all {}` 会在每次往仓库列表里新增仓库后被回调，所以这个闭包会被
 // 重复调用：用 findByName 挡住重复添加。
 //
@@ -77,6 +107,8 @@ def PLUGIN_CENTRAL_MIRROR_URLS = [
 // pluginManagement 里只剩 `cnb-plugin-mirror-0` 与 `cnb-plugin-central-mirror-0`，
 // `/gradle-plugin` 那条镜像根本没出现。改成让 `addMirrors` 自己循环到干不动为止：
 // `all {}` 负责起头，`addMirrors` 负责加完，任何一方先退出都不影响结果。
+//
+// 顺序仍然是「追加在末尾」，不做插队：原仓库先试，镜像只兜它们的缺货。
 def addMirrors = { repositories, urls, prefix ->
     urls.eachWithIndex { url, i ->
         def name = prefix + i
@@ -89,6 +121,43 @@ def addMirrors = { repositories, urls, prefix ->
     }
 }
 
+// 依赖侧真正的坑：**JitPack 的坐标会被 Maven Central 镜像直接接走。**
+//
+// 依赖仓库列表是 google() / mavenCentral() / jitpack 加末尾的 cnb-mirror-0。
+// 本仓库的 com.github.rikkahub:markdown 只有 JitPack 有（Maven Central 上
+// 404，Google 上 404），前两个仓库老实放过它，轮到 cnb-mirror-0 时：
+// 没被限流就是 200 + 一张「资源不存在」的 HTML 页，被限流就是 429 ——
+// 两种都让 Gradle 原地判死，**JitPack 明明在最后一行却永远走不到**。
+//
+// 试过的另一条路是给镜像加 content 过滤（只放行 Central 上确实存在的 group），
+// 靠 group 级 maven-metadata.xml 判断。实测在 aliyun 上不可靠：
+// 冷门 group 一律 404（androidx / io.reactivex / okhttp3 / gson 都 404），
+// 于是 `com*` 这种宽前缀会把 com.github.rikkahub 一起放进来，窄前缀又会把
+// Central 的冷门依赖挡在外面 —— 两头不讨好，放弃。
+//
+// 所以改成按**坐标**认：JitPack 的坐标是 `com.github.<owner>:<repo>` 与
+// `com.github.<owner>.<repo>:<artifact>`，这个形状 Maven Central 上永远不会出现
+// （Central 的 com.github 下没有 <owner> 这一层）。把前缀交给镜像的 content
+// 过滤器排掉，JitPack 就在镜像那里被放过、继续走到真正的 jitpack.io。
+//
+// 注意这只解决「镜像接走」；JitPack 本身 429 时仍然会失败，那是 JitPack 的
+// 限额，重试参数（gradle.properties）与重跑兜着。
+def CENTRAL_ONLY_EXCLUDES = ['com.github.rikkahub.*']
+
+def addCentralOnlyMirror = { repositories ->
+    def name = 'cnb-mirror-central-only'
+    if (repositories.findByName(name)) {
+        return
+    }
+    repositories.maven { repo ->
+        repo.name = name
+        repo.url = 'https://maven.aliyun.com/repository/public'
+        repo.content { content ->
+            CENTRAL_ONLY_EXCLUDES.each { content.excludeGroupByRegex(it) }
+        }
+    }
+}
+
 if (System.getenv('CNB_BUILD_ID') != null) {
     // 必须在 `all {}` 里追加，不能只在 beforeSettings 里加一次：settings 脚本
     // 的 `repositories { ... }` 块是整体替换而不是追加，beforeSettings 阶段加进去的
@@ -97,10 +166,22 @@ if (System.getenv('CNB_BUILD_ID') != null) {
     beforeSettings { settings ->
         def pluginRepos = settings.pluginManagement.repositories
         def depRepos = settings.dependencyResolutionManagement.repositories
+        // 一个回调只跑一次（见 addMirrors 的注释），所以这里只负责起头；
+        // 跳过 noMirror 的仓库（JitPack 这类），否则镜像会把它们遮死。
         pluginRepos.all {
-            addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-')
-            addMirrors(pluginRepos, PLUGIN_CENTRAL_MIRROR_URLS, 'cnb-plugin-central-mirror-')
+            if (!noMirror(it)) {
+                addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-')
+                addMirrors(pluginRepos, PLUGIN_CENTRAL_MIRROR_URLS, 'cnb-plugin-central-mirror-')
+            }
         }
-        depRepos.all { addMirrors(depRepos, MIRROR_URLS, 'cnb-mirror-') }
+        // 被排除的坐标（JitPack）只会落到 addCentralOnlyMirror 那个过滤过的镜像上，
+        // 不会跑回 cnb-mirror-0，所以两者谁先谁后无所谓；排后面是为了对
+        // 非 JitPack 的解析路径零影响。
+        depRepos.all {
+            if (!noMirror(it)) {
+                addMirrors(depRepos, MIRROR_URLS, 'cnb-mirror-')
+                addCentralOnlyMirror(depRepos)
+            }
+        }
     }
 }

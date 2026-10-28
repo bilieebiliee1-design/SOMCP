@@ -349,3 +349,63 @@ Dockerfile 走，Dockerfile 一改 `docker:cache` 的 key 就变，overlay 从�
 | 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
 
 `GRADLE_WARMUP_CHECK=0` 可以关掉运行期复核（只用于排查，正常流水线不要关）。
+
+## JitPack 的坐标会被 Maven Central 镜像接走
+
+`Android Lint` 在 `:app:debugCompileClasspath` 上挂掉：
+
+```
+Could not resolve com.github.rikkahub:markdown:d79a97cc8e.
+  > Could not GET 'https://repo.maven.apache.org/maven2/com/github/rikkahub/
+     markdown/d79a97cc8e/markdown-d79a97cc8e.pom'.
+     Received status code 429 from server: Too Many Requests
+```
+
+印在报错里的是 Maven Central，看着像限流，其实是**仓库列表被镜像接管了**。
+四个源实测（同一时刻）：
+
+| 源 | 结果 |
+| --- | --- |
+| `google()` | 未命中（这个坐标就不在 Google） |
+| `repo.maven.apache.org` | 404 —— 该坐标本来就不在 Maven Central |
+| `.../repository/public` | 404 / 429 / 200 空壳，换着来 |
+| `jitpack.io` | 200，jar 的 sha1 与 `.module` 声明一致 |
+
+`settings.gradle.kts` 里 `jitpack()` 排在最后，而 `gradle-init.gradle` 把 Maven
+Central 镜像**追加在文件末尾** —— 于是 JitPack 的坐标先落到镜像上。镜像没被限流
+就返回 `200` + 一张「资源不存在」的 HTML，被限流就是 `429`，两种都让 Gradle 原地
+判死，**真正的 jitpack.io 永远走不到**。这与上面「插件侧不能用 Central 镜像」
+是同一个假 200，只是这次撞在依赖解析上。
+
+修法（`scripts/cnb/gradle-init.gradle`）：
+
+- `noMirror`：给 JitPack（`jitpack.io`）和任何 `file:` 仓库（含复核用的空仓库）
+  打标记，追加镜像是跳过它们；
+- `addCentralOnlyMirror`：额外追加一个带着内容过滤的镜像，
+  `excludeGroupByRegex('com.github.rikkahub.*')` —— JitPack 的坐标是
+  `com.github.<owner>:<repo>` 与 `com.github.<owner>.<repo>:<artifact>`，
+  这个形状 Maven Central 上永远不会出现，于是在镜像那里被放过，继续走 jitpack.io。
+
+试过但**不用**的方案：按 group 级 `maven-metadata.xml` 判断「Central 上到底有没有
+这个 group」。实测在 aliyun 上不可靠 —— `androidx`、`io.reactivex`、`com.squareup.okhttp3`、
+`com.google.code.gson` 全部 404，`com*` 这种宽前缀会把 `com.github.rikkahub`
+一起放进来，窄前缀又会把 Central 的冷门依赖挡在外面。所以只排已知的非 Central 坐标。
+
+留个判据：**新增非 Maven Central 的仓库（JitPack 之外的）时，同时往
+`CENTRAL_ONLY_EXCLUDES` 补一条前缀**，否则镜像会把它接走，而报错只会指着镜像。
+
+## 复核的仓库列表必须与预热逐个对上
+
+`gradle-cache-only.gradle` 早先的做法是把仓库列表 `clear()` 掉，塞进唯一一个叫
+`cnb-cache-only` 的空仓库。这条路从一开始就不可能通过：Gradle 的模块缓存**按仓库
+url 算 hash 分索引**，预热下在 Google / MavenRepo / JitPack / 两个 `cnb-mirror-*`
+名下，复核却拿着一个谁都没预热过的空仓库去查，报出来必然是「每条都不命中」。
+镜像重建后它看起来「对」，只是因为那时缓存本来就是空的。
+
+现在改成**原位替换**：顺序与数量跟预热时一模一样，每个 url 换成本地空目录，
+再在这个目录里写一个 Gradle 自己的仓库信息文件
+（`<repoDir>/.gradle/repo-info.json`，内容 `{"url": "<原 url>", "type": "maven"}`），
+让空仓库的缓存索引指回原来那个 url。于是命中与否只取决于「预热有没有下过这份构件」。
+
+这个文件不是公开 API，所以做了兜底说明：万一将来 Gradle 不再读它，复核会退化成
+「全部未命中」—— **偏严的失败**，不会误放行；届时按日志里 `Searched in` 的清单改。
