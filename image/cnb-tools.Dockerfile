@@ -128,18 +128,12 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
 COPY app/build.gradle.kts /tmp/cnb-warmup/app/build.gradle.kts
 COPY app/libs/ /tmp/cnb-warmup/app/libs/
-# buildSrc **不参与编译**（上面那条 RUN 删的就是它），但它的口径表要读：
-# `somcpPatchedJars`（文件名 ↔ 上游坐标）是「patched jar 顶替哪个模块」的唯一来源，
-# 预热工程按它自己造一份本地仓库，第二遍的小工程才解析得到 `x.y.z.1`。
-# 只拷这一个文件，别把整个 buildSrc/ 拖进上下文 —— 只要目录里有 src/，
-# Gradle 就会先把它当 included build 编一遍，那是运行期的事。
-COPY buildSrc/src/main/groovy/somcp.patched-local-jars.gradle /tmp/cnb-warmup/buildSrc/src/main/groovy/
+# buildSrc 整个目录要进预热工程：预热第一遍按仓库原样跑（含真实 buildSrc），
+# 第二遍才换成占位 —— 理由见下面「buildSrc 必须被预热」那段。
+# 其中口径表 `somcpPatchedJars`（文件名 ↔ 上游坐标）另有用处：预热工程按它自己
+# 造一份本地仓库，第二遍的小工程才解析得到 `x.y.z.1`。
+COPY buildSrc/ /tmp/cnb-warmup/buildSrc/
 COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
-# 构建上下文里不该有 buildSrc/（.cnb.yml 的 by 已不声明它）。这一句是兜底：
-# 万一有人又声明回去，Gradle 会先把它编译一遍 —— 那属于运行期的事，不该由预热
-# 来判。删的是 /tmp/cnb-warmup 里的副本，仓库自己的 buildSrc/ 不动。
-# 单独一层：预热段是镜像里最贵的一层，补丁不应让它整体重建。
-RUN rm -rf /tmp/cnb-warmup/buildSrc
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
 # 曾因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
 #
@@ -184,25 +178,30 @@ RUN rm -rf /tmp/cnb-warmup/buildSrc
 #     报 `set: Illegal option -o pipefail` 以退出码 2 结束整层构建 —— 这一步
 #     在 if 之外，会让整层直接以退出码 2 结束。脚本自己的 shebang 是 bash，
 #     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
-#   * **预热工程里既没有 buildSrc/，也不能留下它的插件声明**。Gradle 只要在
+#   * **buildSrc 必须被预热，且预热的形状要与运行期一致**。Gradle 只要在
 #     settings 所在目录看到 buildSrc/，就会在配置任何工程之前先把它当 included
-#     build 编译一遍；而这次预热的**全部目的**就是「把插件下进用户目录」——
-#     插件还没下就要求它先在本地可用，标准鸡生蛋。
-#     反过来，删掉 buildSrc/ 却让 app 脚本继续 `id("somcp.patched-local-jars")`
-#     更糟：那句话在 plugins {} 里找不到实现，整个 app 脚本编译不过，而 :app 的
-#     dependencies {} 全写在 plugins {} 之后 —— androidx / compose / ktor / okhttp
-#     一行都求值不到，预热白跑（cnb-hkj-1k624u580 就是这么红的）。
-#     所以两件事一起做：COPY 之后立刻删掉 buildSrc/（删的是 /tmp/cnb-warmup 里的
-#     副本，仓库自己的 buildSrc/ 不动，运行期每个 stage 都会真的编译它），
-#     scripts/cnb/warmup-project.sh 再把 app 脚本里那行 id(...) 注释掉。
-#     buildSrc/ 因此不再需要进构建上下文 —— 没有谁去编译它，也没有谁去删它。
-#     注意别把这一条读成「buildSrc 不需要预热」：它需要，也确实被预热了，走的是
-#     运行期那条完整仓库（每个 stage 都联网/走镜像）。因此 buildSrc 的插件选择
-#     必须照顾到 `--offline` 复核 —— 复核读的是镜像预热出来的用户目录，那里
-#     没有 buildSrc 的插件。这就是 buildSrc 用 Gradle 自带的
-#     `groovy-gradle-plugin` 而不用 `kotlin-dsl` 的原因（后者的 marker 从
-#     Portal 来，永远进不了那份缓存）。详见 buildSrc/build.gradle.kts 与
-#     docs/cnb-test-v10.md。
+#     build 编译一遍；而它不继承 settings 的 pluginManagement，`--init-script`
+#     传的仓库对它也不生效，插件只能靠自己脚本里那几行去拿。
+#
+#     于是预热工程的两遍各管一头：
+#       - 第一遍按仓库原样跑，真实 buildSrc 连插件 marker 与传递依赖一起进缓存；
+#       - 第二遍换成**占位**（scripts/cnb/warmup-project.sh 的
+#         stage_buildsrc_placeholder），插件 id 从仓库那份读，只解析、不产出。
+#     注意「换成占位」不等于「删掉」：早先第二遍是 `rm -rf buildSrc`，于是预热
+#     的工程形状与运行期不同，运行期那份 buildSrc 的插件解析没人替它预热，
+#     「校验代码准备」的 `--offline` 复核连续几轮都倒在
+#       * Where: Build file '/workspace/buildSrc/build.gradle.kts' line: 23
+#       Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+#     只删 /tmp/cnb-warmup 里的副本，仓库自己的 buildSrc/ 一个字节不碰。
+#
+#     另一头是 app 脚本里那行 `id("somcp.patched-local-jars")`：第二遍的占位
+#     buildSrc 不产出这个插件，所以第二遍**之前**要把那行注释掉，否则 app 脚本
+#     编译不过，而 :app 的 dependencies {} 全写在 plugins {} 之后 —— androidx /
+#     compose / ktor / okhttp 一行都求值不到（cnb-hkj-1k624u580 就是这么红的）。
+#
+#     buildSrc 用 Gradle 自带的 `groovy-gradle-plugin` 而不用 `kotlin-dsl`：
+#     后者的 marker 要先从 Portal 下来，而占位里写的正是仓库那份的插件 id ——
+#     两边必须是同一个插件，预热下的那套才正好是运行期要的那套。
 #   * **预热命令关掉 configuration-cache**：运行期的 gradle.properties 开着它，
 #     预热工程每次只有一次执行机会，存下来的配置缓存毫无收益，却在
 #     「读:app 的依赖图」这类一次性工程上多一个可能失败的点。
