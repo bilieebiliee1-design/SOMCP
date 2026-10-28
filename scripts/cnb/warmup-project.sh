@@ -278,7 +278,7 @@ rewrite_root_script() {
 # 预热第一遍跑的是**真实的** app/build.gradle.kts，而它那四条 patched jar 依赖由
 # buildSrc 的 somcp.patched-local-jars 在**声明的那一刻**换成 `x.y.z.1` 坐标 ——
 # 换完的坐标要能解析，就得有一份「pom + jar」先躺在本地仓库里（那份仓库就是
-# `app/build/patched-jars-repo`，`settings.gradle.kts` 里排在第一位）。
+# `app/libs/build/patched-jars-repo`，`settings.gradle.kts` 里排在第一位）。
 #
 # 这里按口径表把四个 `.1` 发布出去，判据与运行期完全一致（同样的相对路径、同样的
 # pom 结构）。**必须在 cold_build 之前**：第一遍是真构建的形状，`.1` 解析不到，
@@ -335,7 +335,7 @@ pom_for() {
 
 publish_patched_local_repo() {
   local table=buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
-  local target_dir=app/build/patched-jars-repo
+  local target_dir=app/libs/build/patched-jars-repo
   [ -f "$table" ] \
     || { echo "[warmup] ERROR: $table is not in the build context; the patched x.y.z.1 coordinates cannot be published" >&2; exit 1; }
   # 只认口径表里那种「一个文件名 -> 一个三段式坐标」的行，别的一概不碰。
@@ -370,6 +370,10 @@ publish_patched_local_repo() {
     # 而它们在上游那边唯一的声明方正是已经 `.1` 化（且上游坐标被 exclude 掉）的
     # 那份 POM，于是 Kotlin 编译报 `Unresolved reference 'capstone' / 'keystone'`。
     # 预热下的图必须与运行期是同一张，否则预热本身就是错的。
+    #
+    # 反过来也要对齐：表里 capstone / keystone 那两条**不能**抄进 `unidbg-api` 的
+    # POM —— `:app` 自己声明了它们，再多一条 POM 传递就等于把上游同名模块吊回图里。
+    # 这里不另立判据，照口径表读，表怎么写就怎么发。
     pom_for "$coordinates" > "${dir}/${module}-${version}.pom"
     published=$((published + 1))
   done <<< "$rows"
