@@ -172,20 +172,20 @@ RUN rm -rf /tmp/cnb-warmup/buildSrc
 #     在 if 之外，会让整层直接以退出码 2 结束。脚本自己的 shebang 是 bash，
 #     按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
 #   * **预热工程里不能有 buildSrc**：Gradle 只要在 settings 所在目录看到
-#     buildSrc/，就会在配置任何工程之前先把它当 included build 编译一遍，用的是
-#     buildSrc/build.gradle.kts 自己那份 `kotlin-dsl` 插件声明与仓库声明。而这次
+#     buildSrc/，就会在配置任何工程之前先把它当 included build 编译一遍。而这次
 #     预热的**全部目的**就是「把插件下进用户目录」—— 插件还没下就要求它先在本地
-#     可用，标准鸡生蛋。预热工程里也没有 libs/、没有插件源码，编译它毫无收益：
-#     它只在**运行期**把 app/libs/*-patched.jar 复制成带元数据的本地仓库。
+#     可用，标准鸡生蛋。预热工程里也没有 libs/、没有插件源码，编译它毫无收益。
 #     所以 COPY 之后立刻删掉 —— 删的是 /tmp/cnb-warmup 里的副本，仓库自己的
 #     buildSrc/ 不动（运行期每个 stage 都会真的编译它）。
 #     scripts/cnb/warmup-project.sh 里有同一道（幂等），两边都留是为了
 #     「容器里那份是上次留下的」这种情况也不会漏。
 #     注意别把这一条读成「buildSrc 不需要预热」：它需要，也确实被预热了，走的是
-#     运行期那条完整仓库。真正要修的是 buildSrc 自己的脚本 —— 版本必须钉住
-#     （不带版本的 kotlin-dsl marker 里嵌着时间戳），仓库必须自带
-#     gradlePluginPortal()（那两条 --init-script 管不到 included build 的
-#     pluginManagement）。详见 buildSrc/build.gradle.kts 与 docs/cnb-test-v10.md。
+#     运行期那条完整仓库（每个 stage 都联网/走镜像）。因此 buildSrc 的插件选择
+#     必须照顾到 `--offline` 复核 —— 复核读的是镜像预热出来的用户目录，那里
+#     没有 buildSrc 的插件。这就是 buildSrc 用 Gradle 自带的
+#     `groovy-gradle-plugin` 而不用 `kotlin-dsl` 的原因（后者的 marker 从
+#     Portal 来，永远进不了那份缓存）。详见 buildSrc/build.gradle.kts 与
+#     docs/cnb-test-v10.md。
 #   * **预热命令关掉 configuration-cache**：运行期的 gradle.properties 开着它，
 #     预热工程每次只有一次执行机会，存下来的配置缓存毫无收益，却在
 #     「读:app 的依赖图」这类一次性工程上多一个可能失败的点。

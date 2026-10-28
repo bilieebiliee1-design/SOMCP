@@ -47,29 +47,12 @@ def gradleUserHome = new File(System.getenv('GRADLE_USER_HOME') ?: System.getPro
 
 def mirrorLayers = []
 
-// 本地 patched jar 仓库必须**原样保留**：它不是缓存，而是 buildSrc 在配置期
-// 生成的产物（app/libs/*-patched.jar 的带元数据版本）。换成空目录等于把本地那份
-// 打补丁的 unidbg 抽走，复核会去缓存里找上游同版本 —— 而它本来就不该被用到。
-def isLocalPatchedJarRepo = { repo ->
-    (repo.url?.toString() ?: '').contains('patched-jar-repository')
-}
-
 def restrict = { repositories, layer ->
-    def originals = repositories.collect { repo ->
-        [repo.name, repo.url.toString(), isLocalPatchedJarRepo(repo)]
-    }
+    def originals = repositories.collect { repo -> [repo.name, repo.url.toString()] }
     repositories.clear()
     originals.eachWithIndex { original, i ->
         def name = original[0]
         def url = original[1]
-        if (original[2]) {
-            repositories.maven { repo ->
-                repo.name = name
-                repo.url = url
-            }
-            println "[cnb-cache-only] ${layer}[${i}] ${name} (${url}) kept as-is (local patched jars)"
-            return
-        }
         def repoDir = new File(gradleUserHome, "cnb-cache-only/${layer}/${i}")
         repoDir.mkdirs()
         repositories.maven { repo ->
