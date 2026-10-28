@@ -72,43 +72,76 @@ RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
 #   * scripts/cnb/gradle-init.gradle —— 用户级 init script，给仓库列表追加 Maven
 #     Central 镜像（原仓库一个不动），解决 429 限流被误报成「plugin not found」；
 #   * warmup 构建 —— 把插件 marker、AGP、lint 等构建期依赖一次下完。
+#   * scripts/cnb/gradle-proxy.init.gradle.kts —— 内存里见代理变量就桥接成 JVM
+#     代理属性（运行期由 scripts/cnb/gradle.sh 显式传 --init-script），预热也要。
 # 运行期 /root/.gradle 是 data 卷，首次挂载为空，由 scripts/cnb/setup-build-env.sh
 # 从 /opt/gradle-user-home 搬进去；镜像层保留原件，卷随流水线销毁。
 COPY scripts/cnb/gradle-init.gradle /opt/gradle-user-home/init.d/cnb-init.gradle
+COPY scripts/cnb/gradle-proxy.init.gradle.kts /opt/cnb/gradle-proxy.init.gradle.kts
+COPY scripts/cnb/gradle-init.gradle /opt/cnb/gradle-init.gradle
 
-# 预热用的最小工程：插件版本与仓库声明都从仓库自己的构建脚本里读，不另抄一份。
+# 预热用的最小工程：插件版本与仓库声明都从仓库自己的构建脚本里读，不另抄一份
+# （settings 里手写 google() / mavenCentral() 就等于绕开 settings.gradle.kts，
+# 仓库换了源预热也不会跟着换）。
 # build.gradle.kts / settings.gradle.kts / gradle.properties 由 .cnb.yml 的
 # docker:cache.by 带进构建上下文（docker:cache 只复制 Dockerfile 与 by 声明的
 # 文件），因此这三个文件必须显式 COPY 进来 —— 光在 `by` 里声明不会让它们
 # 自动出现在镜像里。COPY 的源是上下文根、按仓库相对路径写，不能带 `../`。
+#
+# 改写的判据（下面那条 RUN 逐条对应）：
+#   * build.gradle.kts 只留 `plugins {}` —— 原文件的其余内容（仓库声明、
+#     allprojects 等）在只有插件块的最小工程里求值会失败；
+#   * settings.gradle.kts 去掉 `rootProject.name` / `include`，只留
+#     `pluginManagement { repositories { ... } }` —— **仓库声明必须保留**：
+#     早先的做法是把 settings 清空成一行 rootProject.name，Gradle 于是只剩
+#     缺省的 gradlePluginPortal，而 AGP 的 marker 在 Google，预热解析
+#     `com.android.application:9.2.1` 永远拿不到（镜像层只留 warning，
+#     运行期的 --offline 复核随后报「warmup cache is incomplete」）；
+#   * gradle.properties 必须一起进预热工程 —— 仓库级重试参数
+#     （org.gradle.internal.repository.max.tentatives / initial.backoff）与
+#     network.retries 都从这份属性文件读，而冷启动最吃重试的正是预热这一次解析；
+#     少设一次就是「预热下的东西运行期用不上」，白跑。
 COPY build.gradle.kts settings.gradle.kts gradle.properties /tmp/cnb-warmup/
+COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 # 注意：RUN 里的续行不能夹注释 —— 行尾 `\` 会把注释行当成命令的一部分传给下一行，
-# 上一轮就是因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
+# 曾因此报 `sed: can't read /build.gradle.kts`。注解一律写在这里。
 #
 # 预热失败必须看得见，但不能让镜像作废：镜像里除了这份缓存还有 JDK / Gradle /
 # SDK/NDK（光 sdkmanager 就 3 分钟），为了一次网络抖动重建整个镜像不划算。
 # 所以 —— 失败时把日志尾部打到 stderr（Gradle 从 stdout 走，不打出来就只剩一行
 # "BUILD FAILED"），然后退出码归零；运行期由 scripts/cnb/setup-build-env.sh
 # 以 `gradle --offline` 复核预热结果，缓存不完整就在 stage 里明确失败并指向这里。
+#
+# 预热必须替运行期把东西下全：两个 init script 都显式传（gradle-init.gradle
+# 追加 Maven 镜像，gradle-proxy.init.gradle.kts 桥接代理），CNB_BUILD_ID 走
+# 同一条分支。预热与运行期唯一允许的差异是「不给 --offline」（预热的整件工作
+# 就是联网）与「用 /opt 下的副本而不是 $GRADLE_USER_HOME/init.d 里的那份」，
+# 后者是为了不让 init.d 里那份被重复应用 —— 内容取自同一个文件。
+#   * GRADLE_USER_HOME 必须显式给：镜像 ENV 里是 /root/.gradle，而下面 `cp -a`
+#     的目标就是它，不给的话 `gradle help` 与 `cp -a` 会指向同一个目录，
+#     预热下的依赖会被后面的 `rm -rf /root/.gradle` 一起删掉，等于白预热。
+#   * 超时兜底：CI 的代理变量在无网时会变成黑洞（连上去就不说话），Gradle 的
+#     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。给 10 分钟上限，
+#     kill 之后落到下面的 warning 分支，工具链照常产出。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
-    sed -n '/^plugins {/,/^}/p' build.gradle.kts > warmup.gradle.kts.tmp; \
-    mv warmup.gradle.kts.tmp build.gradle.kts; \
-    grep -q 'org.jetbrains.kotlin.android' build.gradle.kts; \
-    sed -n '/^pluginManagement {/,/^}/p' settings.gradle.kts > warmup-settings.tmp; \
-    printf 'rootProject.name = "cnb-warmup"\n' >> warmup-settings.tmp; \
-    mv warmup-settings.tmp settings.gradle.kts; \
-    if CNB_BUILD_ID=warmup gradle --no-daemon --console=plain help > /tmp/cnb-warmup.log 2>&1; then \
+    sh -x /opt/cnb/warmup-project.sh; \
+    printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
+    if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 600 \
+         /opt/gradle/bin/gradle --no-daemon --console=plain \
+         --init-script /opt/cnb/gradle-init.gradle \
+         --init-script /opt/cnb/gradle-proxy.init.gradle.kts \
+         help > /tmp/cnb-warmup.log 2>&1; then \
       echo "[warmup] gradle help OK"; \
+      cp -a /tmp/cnb-warmup-home/. /opt/gradle-user-home/; \
     else \
       echo "[warmup] WARNING: gradle help failed, image keeps the toolchain but the" >&2; \
       echo "[warmup] WARNING: dependency cache is incomplete; see tail below." >&2; \
       tail -n 60 /tmp/cnb-warmup.log >&2 || true; \
     fi; \
     rm -f /tmp/cnb-warmup.log; \
-    cd /; rm -rf /tmp/cnb-warmup /root/.gradle/daemon /root/.gradle/.tmp; \
-    rm -rf /root/.gradle; \
+    cd /; rm -rf /tmp/cnb-warmup /tmp/cnb-warmup-home /root/.gradle; \
     du -sh /opt/gradle-user-home
 
 WORKDIR /workspace
