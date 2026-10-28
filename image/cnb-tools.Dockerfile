@@ -106,12 +106,17 @@ COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/gradle-cache-only.gradle
 #     收场，镜像里一个依赖都没落下，改仓库源码里的写法也救不回来（那本就是
 #     运行期的语法问题，不该由预热来判）。改写后由 warmup-project.sh 从原文件
 #     读 namespace / compileSdk / minSdk 补一个最小 android {} 块给 :app；
-#   * settings.gradle.kts 去掉 `rootProject.name` / `include`，只留
-#     `pluginManagement { repositories { ... } }` —— **仓库声明必须保留**：
+#   * settings.gradle.kts 只留 `pluginManagement { repositories { ... } }` +
+#     `dependencyResolutionManagement { repositories { ... } }` +
+#     `rootProject.name` / `include` —— **仓库声明必须保留**：
 #     早先的做法是把 settings 清空成一行 rootProject.name，Gradle 于是只剩
 #     缺省的 gradlePluginPortal，而 AGP 的 marker 在 Google，预热解析
 #     `com.android.application:9.2.1` 永远拿不到（镜像层只留 warning，
 #     运行期的「只看缓存」复核随后报「warmup cache is incomplete」）；
+#     模块脚本（app/build.gradle.kts）里另起的 `repositories {}` 也要合并进来，
+#     并去掉 `repositoriesMode.set(FAIL_ON_PROJECT_REPOS)` —— 那条模式会拦住
+#     合并进来的模块级仓库声明。只抄 settings 那一份时，模块声明的仓库一个都
+#     不进预热工程，第二遍（唯一真解析依赖图的一遍）于是解析不全；
 #   * 预热跑的不只是 `help`：`help` 只做配置，不解析 :app 的运行时依赖，androidx /
 #     compose / ktor / okhttp 一个都进不了缓存，运行期照样现场冲网。多带一条
 #     `:app:dependencies --configuration releaseRuntimeClasspath`，把 :app 真正用到的

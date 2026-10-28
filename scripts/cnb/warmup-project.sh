@@ -185,6 +185,11 @@ stage_buildsrc_placeholder() {
   [ -n "$plugin_line" ] \
     || { echo "[warmup] ERROR: no backtick plugin id in buildSrc/build.gradle.kts; the placeholder needs the same plugin as the real buildSrc" >&2; exit 1; }
 
+  # 截取的是 `repositories { … }` 这一块本身（缩进原样保留），所以下面写进占位
+  # 时必须原样 `cat`，**不能加缩进**：加一层空格后那一行就不再以 `repositories`
+  # 开头，而是落在 `plugins {}` 块里 —— Kotlin DSL 报
+  #   Unresolved reference 'repositories'
+  # 而且是配置阶段就失败，整遍预热一分依赖都没下。
   awk '
     /^pluginManagement[[:space:]]*\{/ { inpm = 1; next }
     !inpm { next }
@@ -211,6 +216,7 @@ stage_buildsrc_placeholder() {
     echo ''
     echo '// 取自仓库 settings.gradle.kts 的 pluginManagement：buildSrc 是 included'
     echo '// build，主工程的仓库声明与 --init-script 的仓库对它都不生效。'
+    echo '// 这一段按原文件缩进照抄，不重新缩进 —— 见 stage_buildsrc_placeholder 的注释。'
     cat buildsrc-repositories.tmp
   } > buildSrc/build.gradle.kts
   rm -f buildsrc-repositories.tmp
@@ -339,6 +345,43 @@ simplify_settings_script() {
     || { echo "[warmup] ERROR: dependencyResolutionManagement not found in settings.gradle.kts" >&2; exit 1; }
   printf '\n' >> settings.gradle.kts.new
   cat dependency-resolution.tmp >> settings.gradle.kts.new
+  # 模块脚本里另起的 `repositories {}` 也要一并搬进来，否则改写后的工程少掉那几个仓库。
+  # 本仓库正好是这种形状：仓库级仓库列表在 `settings.gradle.kts` 的
+  # dependencyResolutionManagement 里，而模块级只在 `app/build.gradle.kts` 里 ——
+  # 只抄 settings 那一份，预热工程就会少掉模块声明的那几个仓库；第二遍是两遍里
+  # 唯一真解析依赖图的一遍，少一个仓库就等于那块依赖没人预热。
+  #
+  # `repositoriesMode.set(FAIL_ON_PROJECT_REPOS)` 会拦住任何模块级仓库声明（合并进来的
+  # 那几条也算），所以合并之后把它从预热工程里删掉：第二遍的 :app 脚本里已经没有任何
+  # repositories {}，这条模式没有别的作用。判据落在最终文件上（见下），不靠「sed 命中
+  # 了哪一行」—— 文件名与行号一旦对不上，这里就会静默放行一个带模式的工程。
+  #
+  # 只是照抄，不判断也不去重：预热要覆盖的正是「运行期可能用到的每一个仓库」。
+  local module_repos=""
+  rm -f module-repositories.tmp
+  if [ -f app/build.gradle.kts ]; then
+    awk '
+      /^repositories[[:space:]]*\{/ { inrepo = 1; depth = 0 }
+      inrepo {
+        depth += gsub(/\{/, "{")
+        depth -= gsub(/\}/, "}")
+        print
+        if (depth == 0) { exit }
+      }
+    ' app/build.gradle.kts > module-repositories.tmp
+  fi
+  if [ -s module-repositories.tmp ]; then
+    cat module-repositories.tmp >> settings.gradle.kts.new
+    module_repos="app"
+  fi
+  sed -i '/repositoriesMode\.set([[:space:]]*RepositoriesMode\.FAIL_ON_PROJECT_REPOS)/d' settings.gradle.kts.new
+  # 判据落在最终文件上，不依赖 sed 是否命中：模式还在，模块级声明就被拦。
+  ! grep -q 'FAIL_ON_PROJECT_REPOS' settings.gradle.kts.new \
+    || { echo "[warmup] ERROR: repositoriesMode still FAIL_ON_PROJECT_REPOS in the warmup settings" >&2; exit 1; }
+  rm -f module-repositories.tmp
+  if [ -n "$module_repos" ]; then
+    echo "[warmup] repositories from ${module_repos}/build.gradle.kts merged (FAIL_ON_PROJECT_REPOS dropped)"
+  fi
   cat >> settings.gradle.kts.new <<'SETTINGS'
 
 rootProject.name = "cnb-warmup"
