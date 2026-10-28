@@ -265,11 +265,12 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 - `scripts/cnb/warmup-project.sh` —— 把下面几个文件改写成最小工程
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
   插件版本、仓库声明与重试参数
-- `buildSrc/` —— **不在 `by` 里**。预热工程既不能有 `buildSrc/`（Gradle 看见它就会
-  先编译一遍，插件还没下就先要求它可用），也不能留下 `:app` 里那行
-  `id("somcp.patched-local-jars")`（找不到实现，整个 app 脚本编译不过，而它的
-  `dependencies {}` 全写在 `plugins {}` 之后）。两件事都由
-  `scripts/cnb/warmup-project.sh` 处理，容器里不需要看见这个目录
+- `buildSrc/` —— **整目录进上下文**。预热第一遍按仓库原样跑，真实 `buildSrc` 连插件
+  marker 一起下进缓存（运行期每个 stage 都要真的编译它，`--offline` 复核读的就是
+  这份缓存）；第二遍才换成占位，插件 id 与仓库列表都从这份源码读出来。其中
+  `src/main/groovy/somcp.patched-local-jars.gradle` 还有第二个用途：口径表
+  （jar 文件名 ↔ 上游坐标）在里面，`warmup-project.sh` 按它自己造一份 `x.y.z.1`
+  的本地仓库
 - `app/build.gradle.kts` 与 `app/libs/` —— 预热**第一遍按仓库原样跑**，`:app` 的真实
   脚本要求值一次，才能把 androidx / compose / ktor / okhttp 与
   `files("libs/*-patched.jar")` 解析掉。第二遍才换成生成的
@@ -348,7 +349,7 @@ warning、镜像照常产出」的兜底都进不去 —— 一段本该降级�
 运行期那边一直是 `bash scripts/cnb/...`，两边入口不一致才留下这个洞。现在改成
 `bash -x`，与脚本 shebang、与 `.cnb.yml` 里所有 stage 的调用方式对齐。
 
-### `buildSrc` 的 `kotlin-dsl` 必须钉版本、自带插件仓库
+### `buildSrc` 必须被预热，且第二遍要换成占位
 
 `buildSrc/` 在 Gradle 里是个 included build：只要 settings 所在目录有它，Gradle 就会在
 **配置任何工程之前**先把它编译一遍。它既不继承 `settings.gradle.kts` 的
@@ -381,14 +382,28 @@ Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found in a
 的缺省仓库，不是脚本里写的 `gradlePluginPortal()`。看到这一行就说明那一刻连
 `buildSrc` 脚本都还没读完，问题在「插件从哪来」，不在依赖图。
 
-**预热工程里则必须没有 `buildSrc/`**：预热的目的就是把插件下进用户目录，
-预热工程里没有源码也没有 `libs/`，编译 `buildSrc` 毫无意义，只会把「插件还没下」
-变成「插件必须先可用」。`warmup-project.sh` 一进目录就删，Dockerfile 里还有一条
-`rm -rf` 兜底。删的都是 `/tmp/cnb-warmup` 里的副本，仓库自己的 `buildSrc/`
-一个字节不碰。
+**但预热工程也不能没有 `buildSrc/`**，更不能两遍用不同形状。运行期每个 stage 都会
+真的编译它，而「校验代码准备」的 `--offline` 复核读的正是镜像预热出来的缓存 ——
+早先第二遍直接 `rm -rf buildSrc`，于是复核连续几轮都倒在：
 
-删掉目录只断了一半。`buildSrc` 里那几个**只躺在 `src/` 里、不在 `plugins {}` 里
-带版本声明**的插件（本仓库的 `somcp.patched-local-jars`）还有另一半：
+```
+* Where: Build file '/workspace/buildSrc/build.gradle.kts' line: 23
+Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
+  Searched in the following repositories: Gradle Central Plugin Repository
+```
+
+钉版本、补 `gradlePluginPortal()`、把 Portal 提到 `mavenCentral()` 之前，都只是治
+「下不下来」，治不了「没人去下」。现在的分法是：
+
+- **第一遍**按仓库原样跑，真实 `buildSrc` 连插件 marker 一起进缓存；
+- **第二遍**换成占位（`stage_buildsrc_placeholder`）：插件 id 从仓库那份
+  `buildSrc/build.gradle.kts` 读（两边必须同一个插件，靠人记同步迟早对不上），
+  仓库列表只取 `pluginManagement` 里那层 `repositories`（**不能整块复制**
+  `pluginManagement` —— 那是 settings 才有的 DSL，放进 build 脚本会报
+  `Unresolved reference 'pluginManagement'`），没有 `src/`：只解析、不产出。
+
+`buildSrc` 里那几个**只躺在 `src/` 里、不在 `plugins {}` 里带版本声明**的插件
+（本仓库的 `somcp.patched-local-jars`）另有一半要断：
 
 | 预热工程里的状态 | 结果 |
 | --- | --- |
@@ -399,11 +414,16 @@ Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found in a
 一行都求值不到（`val releaseKeystoreProperties` 就在 `plugins {}` 后面），
 androidx / compose / ktor / okhttp 全没进缓存，而日志只看得到一句插件找不到。
 
-所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 把两边一起断：删目录 +
+所以 `warmup-project.sh` 的 `disable_buildsrc_plugin()` 只断「声明」这一半：
 把那行 `id("somcp.patched-local-jars")` **行尾注释掉**（`// [cnb-warmup] disabled: …`，
 行首、缩进、行号一律不动），随后 grep 断言行首已经不是 `id(...)`；改了仓库写法让
-sed 失配时报错退出，不静默放行。这个插件干的是「用 `app/libs` 下的 jar 顶掉上游
-同坐标模块」，而预热工程里那些上游坐标本来就不出现，去掉它不影响依赖图的完整性。
+sed 失配时报错退出，不静默放行。目录这一半不能断 —— 第一遍正需要它被编译。
+
+停用插件之后 patched jar 还得能解析，所以另有两条：`neutralize_patched_factory()`
+把 `patchedJar(...)` 工厂换成「直接返回坐标字符串」（工厂挂在 `project.ext` 上，
+只有插件 apply 时才挂），`publish_patched_local_repo()` 按 `somcpPatchedJars` 口径表
+自己造一份 `app/build/patched-jars-repo`，第二遍才解析得到 `x.y.z.1`。后者必须排在
+换占位**之前** —— 口径表就住在 `buildSrc/src` 里。
 
 ## 预热分两遍：第一遍按仓库原样跑
 
@@ -416,11 +436,11 @@ sed 失配时报错退出，不静默放行。这个插件干的是「用 `app/l
 
 所以拆成两遍（`scripts/cnb/warmup-project.sh`）：
 
-1. **第一遍，仓库原样**（联网）：`app/build.gradle.kts` 在、`app/libs/` 在
-   （只把 `buildSrc` 那个插件的 id 注释掉，见上一节）。这一遍把插件 marker、AGP、
-   lint 以及 `:app` 的整张运行时依赖图下进 `GRADLE_USER_HOME`。**失败即整层失败**
-   —— 缓存没建起来就不该出镜像。
-2. **第二遍，最小工程**（联网）：`:app` 换成生成的最小脚本、
+1. **第一遍，仓库原样**（联网）：`buildSrc/` 在、`app/build.gradle.kts` 在、
+   `app/libs/` 在（只把 `buildSrc` 那个插件的 id 注释掉，见上一节）。这一遍把插件
+   marker（含 `buildSrc` 的）、AGP、lint 以及 `:app` 的整张运行时依赖图下进
+   `GRADLE_USER_HOME`。**失败即整层失败** —— 缓存没建起来就不该出镜像。
+2. **第二遍，最小工程**（联网）：`buildSrc/` 换成占位、`:app` 换成生成的最小脚本、
    `settings` 只留 `pluginManagement` + 照抄的 `dependencyResolutionManagement`。
    这一遍失败**只打 WARNING**：依赖在第一遍已经下来了，缺的只是改写后那份工程的边角。
 
