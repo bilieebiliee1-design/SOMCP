@@ -83,76 +83,76 @@ warm_build() {
 #
 # **第一遍不能删 buildSrc**：预热的目的就是把它那份插件 marker 及其传递依赖下进
 # 用户目录；而运行期每个 stage 都要真的编译 buildSrc，`--offline` 复核读的正是
-# 这份缓存。早先第二遍直接 `rm -rf buildSrc`，预热工程里从来没有过它，于是复核
-# 连续几轮都倒在
-#   * Where: Build file '/workspace/buildSrc/build.gradle.kts' line: 23
-#   Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found
-#     Searched in the following repositories: Gradle Central Plugin Repository
-# 现在第一遍按仓库原样把它编译一遍（marker 进缓存），第二遍再换成占位
-# （stage_buildsrc_placeholder），保证「预热的工程形状 = 运行期的工程形状」。
+# 这份缓存。
+#
+# 要摘掉三处，缺一处第一遍就配置失败：
+#   * `id("somcp.patched-local-jars")` —— 插件声明；
+#   * `val patchedJar = ...patchedLocalJarDependency...` 工厂 —— 插件不 apply 时
+#     `project.ext` 上根本没有这个属性，取出来是 null，非空转换当场抛
+#     `null cannot be cast to non-null type groovy.lang.Closure<*>`
+#     （cnb-ooc-1k626h4rl，报错点落在那行 lambda，看着跟插件毫无关系）；
+#   * 调用它的 `implementation(patchedJar(...))`。
+#
+# 判据只用**锚点行**（`id(...)` / `val patchedJar` / `patchedJar(`），注释一行都不认：
+# 早先这里按注释原文逐条 sed（`/这四个是上游同名模块的重打包版本/d` 之类），
+# 先删工厂后删注释，注释措辞一改就只删掉一半 —— 留在原地的注释在讲一个已经不
+# 存在的工厂，接盘的人只能顺着注释去猜。整个函数最后再用 `patchedJar` 断言一次。
+#
+# **不能改成「保留工厂、换成同坐标字符串」**（`neutralize_patched_factory` 那一版）：
+# 那样第一遍解析的就是 `x.y.z.1`，而这份本地仓库要靠插件生成，插件又必须删掉 ——
+# 于是 `Searched in` 里一个仓库都不认 `.1`，报「找不到依赖」。
+#
+# 删掉这四条依赖不会让依赖图失真：patched jar 就是上游同名模块的重打包版本，
+# 上游 `unidbg-android:0.9.9` 会经 unidbg-unicorn2 的传递依赖自己进来，它带出的
+# 传递依赖（apk-parser / jna / demumble …）一条不少，与运行期只差「同名的那份
+# 字节」—— 而预热要的是坐标，不是字节。
 disable_buildsrc_plugin() {
   local script=app/build.gradle.kts
   grep -q 'somcp\.patched-local-jars' "$script" \
     || return 0
-  # 三处一起删，判据是「删完还能解析」而不是「删了哪几行」：
-  #   * `id("somcp.patched-local-jars")` —— 插件声明；
-  #   * `val patchedJar = ... patchedLocalJarDependency ...` 那段工厂 —— 插件不 apply
-  #     时 `project.ext` 上根本没有这个属性，取出来是 null，非空转换当场抛
-  #     `null cannot be cast to non-null type groovy.lang.Closure<*>`（报错点落在这行
-  #     lambda，看着跟插件毫无关系）；
-  #   * 调用它的那几行 `implementation(patchedJar(...))` —— 工厂没了就没人能认它们。
-  #
-  # **不能改成「保留工厂、换成同坐标字符串」**（`neutralize_patched_factory` 那一版）：
-  # 那样第一遍解析的就是 `x.y.z.1`，而这份本地仓库要靠插件生成，插件又必须删掉 ——
-  # 于是 `Searched in` 里一个仓库都不认 `.1`，报「找不到依赖」。
-  #
-  # 删掉这四条依赖不会让依赖图失真：patched jar 就是上游同名模块的重打包版本，
-  # 上游 `unidbg-android:0.9.9` 会经 unidbg-unicorn2 的传递依赖自己进来，它带出的
-  # 传递依赖（apk-parser / jna / demumble …）一条不少，与运行期只差「同名的那份
-  # 字节」—— 而预热要的是坐标，不是字节。
-  sed -i \
-    -e '/id("somcp\.patched-local-jars")/d' \
-    -e '/^[[:space:]]*implementation(patchedJar(/d' \
-    "$script"
 
-  # 工厂那一块连同它上面的注释一起吃掉：逐行删 `val patchedJar` 会留下孤立的注释
-  # 和没有主人的 `}`，Kotlin DSL 当场编译失败。按花括号配平整块删，另加一条判据：
-  # 被删的块只能有那两行 var（`val` + 注释），多一行就说明配方变了，收工报错比
-  # 静默留下半块强。
+  # 锚点只有两处：单行的插件声明 / 调用点，和 `val patchedJar` 到第一个顶格 `}`
+  # 的工厂整块（逐行删会留下没有主人的 `}`，Kotlin DSL 当场编译失败）。
+  # 注释里提到 patched jar 的那些行也一并丢掉 —— 它们解释的东西马上就要消失，
+  # 留着只会让后来的人顺着注释去找一个不存在的工厂。判据是关键词，不是注释原文。
   awk '
-    /^val patchedJar: \(String, String\)/ { in_factory = 1; depth = 0 }
+    /^val patchedJar[[:space:]]*:/ { in_factory = 1; ncomments = 0; next }
     in_factory {
-      depth += gsub(/\{/, "{") - gsub(/\}/, "}")
-      dropped++
-      if (depth <= 0) { in_factory = 0 }
+      if ($0 == "}") { in_factory = 0 }
       next
     }
-    { print }
-    END { if (in_factory) exit 3; if (dropped > 0 && dropped < 3) exit 4 }
+    /^[[:space:]]*id\("somcp\.patched-local-jars"\)[[:space:]]*$/ { next }
+    /^[[:space:]]*implementation\(patchedJar\(/ { next }
+    /^[[:space:]]*\/\// {
+      # 讲 patched jar 的注释跟着工厂一起走，别的注释照常排队。
+      if ($0 ~ /patchedJar|patchedLocalJarDependency|patched-local-jars|patched-jars-repo|重打包版本/) { next }
+      comments[++ncomments] = $0
+      next
+    }
+    {
+      for (i = 1; i <= ncomments; i++) print comments[i]
+      ncomments = 0
+      print
+    }
+    END {
+      # 只收尾：`patchedJar` 工厂整块没有闭合的 `}` 时判失败（留下来的半块一定
+      # 编译不过）。工厂本身可以不在（已经只剩插件声明与调用点的那种写法），
+      # 最终判据交给下面那条 `patchedJar` 断言。
+      if (in_factory) exit 3
+      for (i = 1; i <= ncomments; i++) print comments[i]
+    }
   ' "$script" > "$script.cnb-strip" 2>/dev/null || {
     rm -f "$script.cnb-strip"
     echo "[warmup] ERROR: unexpected shape of the patchedJar factory in the app script" >&2
     exit 1
   }
   mv "$script.cnb-strip" "$script"
-  # 那几段说明注释放着没意义（读的人会去找一个已经不在的东西），一并删：
-  # 工厂上面两行、依赖块里解释 patchedJar 的那一段。
-  sed -i \
-    -e '/buildSrc 的 somcp\.patched-local-jars 把工厂挂在 project.ext 上/d' \
-    -e '/Kotlin DSL 访问 ext 属性必须走 extraProperties/d' \
-    -e '/这四个是上游同名模块的重打包版本/d' \
-    -e '/buildSrc 的 somcp\.patched-local-jars 会在它被声明的那一刻换成/d' \
-    -e '/「上游坐标 + 高版本号」（`x\.y\.z\.1`）：file 依赖不进图/d' \
-    -e '/unidbg-api 的 POM 传递依赖进来，冲突解析也只会留下高版本那份/d' \
-    -e '/checkDebugDuplicateClasses \/ mergeDebugJavaResource 不再报同名 class/d' \
-    -e '/换完之后的坐标依赖由 `<project>\/build\/patched-jars-repo` 提供/d' \
-    -e '/这里的坐标必须与 buildSrc 那张口径表逐字相同/d' \
-    -e '/在配置期报错）。/d' \
-    "$script"
-  # 断言：两类痕迹一行不剩，且脚本里的花括号仍然配平。`patchedJar` 这个词单独
-  # 不查 —— 上面那几行注释里出现过，查它等于把「注释删干净了」也当成失败。
-  if grep -nE 'somcp\.patched-local-jars|patchedLocalJarDependency|patchedJar\(' "$script"; then
-    echo "[warmup] ERROR: patched-jar leftovers above; the app script would not compile" >&2
+
+  # 断言：锚点一个不剩，且脚本花括号仍然配平。
+  if grep -nE 'somcp\.patched-local-jars|patchedLocalJarDependency|patchedJar' "$script"; then
+    echo "[warmup] ERROR: patched-jar leftovers above; the app script would not compile." >&2
+    echo "[warmup] ERROR: the strip matches anchor lines only -- update" >&2
+    echo "[warmup] ERROR: disable_buildsrc_plugin to match app/build.gradle.kts." >&2
     exit 1
   fi
   local balance
