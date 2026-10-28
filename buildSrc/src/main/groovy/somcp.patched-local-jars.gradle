@@ -308,6 +308,32 @@ project.configurations.configureEach { configuration ->
     //
     // 上游 `x.y.z` 不需要另外排：`.1` 与它同坐标，Gradle 的冲突解析按版本取高，
     // `.1` 必然胜出，上游那份连 artifact 都不会落地。实测依赖树里只剩 `0.9.9.1`。
+    //
+    // **但 `com.github.zhkl0228.unidbg` 那一份压不住**：JitPack 对同一个仓库给两种
+    // group 布局，`unidbg-unicorn2` 的 POM 从 `com.github.zhkl0228.unidbg` 吊回
+    // unidbg-api / unidbg-android / dynarmic / hypervisor / ios / kvm，而那是**另一个
+    // group**，与我们的 `com.github.zhkl0228:x:0.9.9.1` 不是同一个模块候选 —— 版本冲突
+    // 只在 group:module 完全相同之间发生，`.1` 够不着它。实测（插件的 exclude 撤掉、
+    // 声明层替换生效之后）两个 group 版本的 jar 同时落在 classpath 上：
+    //   unidbg-api-0.9.9.1.jar + unidbg-api-0.9.9.jar
+    // 逐类比对，patched jar 与这两个上游 jar 各有 300 个类完全重合 ——
+    // `checkDebugDuplicateClasses` 照样红，只是文件名不同、报错长相换了。
+    //
+    // 所以把 `.unidbg` 那一组的同名模块用解析期替换对齐到 `.1`：`eachDependency` 是
+    // **规则**不是 `exclude`，它改的是「选哪个模块」，不删任何候选，因此不会像
+    // exclude 那样把 `.1` 一起带走。
+    configuration.resolutionStrategy.eachDependency {
+        def requested = it.requested
+        if (requested.group != 'com.github.zhkl0228.unidbg') {
+            return
+        }
+        def target = somcpPatchedJars.values().find { String value ->
+            parseCoordinates(value)[1] == requested.name
+        }
+        if (target != null) {
+            it.useTarget((String) target)
+        }
+    }
 }
 
 // `app/build.gradle.kts` 里用 `patchedJar(fileName, coordinates)` 取依赖；返回普通
