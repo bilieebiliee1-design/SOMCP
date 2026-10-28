@@ -23,7 +23,7 @@
 // 用法（仅在流水线里显式传参，本地不加这个参数就完全不受影响）：
 //   gradle --init-script scripts/cnb/gradle-proxy.init.gradle.kts <task>
 //
-// 没有（有效的）代理变量时，本脚本不做任何事。
+// 没有（有效的）代理变量时，代理部分什么都不做；离线复核模式见下面 cnbCacheOnlyCheck。
 
 fun proxyParts(raw: String?): Pair<String, Int>? {
     // `:8080` 这类只有端口的值没有 host，转成 URI 后 host 为 null，直接放弃。
@@ -49,6 +49,32 @@ System.getenv("NO_PROXY")?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
     val list = raw.replace(",", "|")
     System.setProperty("http.nonProxyHosts", list)
     System.setProperty("https.nonProxyHosts", list)
+}
+
+// 「只看缓存」复核模式：--offline 只禁止联网，不禁止 Gradle 按仓库名去
+// $GRADLE_USER_HOME 里查缓存索引，于是「镜像预热没做完」和「仓库此刻不可达」
+// 分不开 —— 曾出现预热成功、运行期 --offline 复核却报
+//   was not found in any of the following sources: Google, cnb-plugin-mirror-0(...), ...
+// 把网络问题误判成缓存不完整。做法是把插件仓库与依赖仓库都换成同一个空的本地
+// 文件仓库（于是只剩已预热进 $GRADLE_USER_HOME 的构件可用），实现在
+// scripts/cnb/gradle-cache-only.gradle，由镜像放到
+// $GRADLE_USER_HOME/cnb-cache-only.gradle。
+// 只由 scripts/cnb/setup-build-env.sh 用 -PcnbCacheOnlyCheck 打开，其余场景不受影响。
+fun cnbHasProjectProperty(name: String): Boolean =
+    runCatching { gradle.startParameter.projectProperties.containsKey(name) }.getOrDefault(false)
+
+if (System.getenv("CNB_BUILD_ID") != null && cnbHasProjectProperty("cnbCacheOnlyCheck")) {
+    // 拆成独立脚本的理由：本文件是 .kts，`beforeSettings` 收的是 bridged 的
+    // org.gradle.api.Action，Kotlin 侧要额外的 SAM 适配才好写；那半段逻辑一次成型、
+    // 不值得把整个 init script 改成 Groovy（代理那段已经稳定）。
+    val cacheOnlyScript = File(System.getProperty("user.home"), ".gradle/cnb-cache-only.gradle")
+    if (!cacheOnlyScript.isFile) {
+        throw IllegalStateException(
+            "cnbCacheOnlyCheck requested but ${cacheOnlyScript} is missing; " +
+                "the image must COPY scripts/cnb/gradle-cache-only.gradle to \$GRADLE_USER_HOME/cnb-cache-only.gradle",
+        )
+    }
+    apply(from = cacheOnlyScript)
 }
 
 // 让日志能自证代理是否真的生效（不打印账号密码）。
