@@ -443,13 +443,21 @@ cnbCacheOnlyCheck requested but /root/.gradle/cnb-cache-only.gradle is missing
 在 data 卷 `/root/.gradle` —— init script 读的是后两者，镜像里那份从来没有出现在它们
 中间。位置不对，报错却指向「预热没做完」，很容易往错的方向查。
 
-两条腿一起补齐：
+于是先补了两条「投放」的腿：预热段在开跑前把它复制进 `/tmp/cnb-warmup-home`，运行期
+由 `gradle-init.gradle` 的 `deployCacheOnlyScript` 投放到 `$GRADLE_USER_HOME` 与
+`user.home/.gradle`。这条路上又踩了第二次：`COPY` 的落点从
+`/opt/gradle-user-home` 改成 `/opt/cnb` 之后，预热段那句 `cp` 就变成「从不存在的位置
+拷」，整层以 1 退出；报错是 `no such file`，而真正的判据是「缓存全不全」。
 
-- **预热段**（`image/cnb-tools.Dockerfile`）在开跑前把它复制进 `/tmp/cnb-warmup-home`；
-- **运行期**由 `scripts/cnb/gradle-init.gradle` 的 `deployCacheOnlyScript` 从
-  `/opt/gradle-user-home` 投放到 `$GRADLE_USER_HOME` 与 `user.home/.gradle`
-  （按长度判断，幂等，失败只打 warning）。
+所以现在的做法是**不留投放这一步**：
 
-`gradle-proxy.init.gradle.kts` 也改成两段查找：`$GRADLE_USER_HOME` 优先、
-`user.home/.gradle` 兜底。**init script 里没法自省「我在哪个用户目录」** ——
-system property 是在 init script 求值之后才应用的，此刻读到的还是启动时的旧值。
+- 脚本只放一个位置，`COPY scripts/cnb/gradle-cache-only.gradle /opt/cnb/`；
+- 预热与运行期都用 `-Dcnb.cacheOnlyScript=/opt/cnb/gradle-cache-only.gradle`
+  显式指过去（预热的两条 `gradle` 命令本来就带着它）；
+- `gradle-proxy.init.gradle.kts` 的查找顺序是 `-Dcnb.cacheOnlyScript` →
+  `$GRADLE_USER_HOME` → `user.home/.gradle` → `/opt/cnb`，找不到时把试过的路径
+  全打出来；运行期由 `gradle-init.gradle` 顺带投放一份到用户目录，失败只打 warning
+  （判据不依赖它）。
+
+**init script 里没法自省「我在哪个用户目录」** —— system property 是在 init script
+求值之后才应用的，此刻读到的还是启动时的旧值，所以路径只能靠显式参数给。
