@@ -78,6 +78,10 @@ main:
         # 准备阶段，这里把它连同 JDK / Gradle / SDK 的可用性一并断言下来。
         - name: 基础镜像与工具链（JDK 17 + Gradle 9.6.1 + Android SDK/NDK）
           type: docker:cache
+          # docker:cache 的构建耗时不受单次命令控制：apt-get 拉包、Gradle 预热
+          # 都可能长时间没有输出。CNB 的「无输出超时」与 job timeout 同步，
+          # 默认 10 分钟会把正在下载的镜像层直接 CANCELED，所以显式放宽。
+          timeout: 90m
           options:
             dockerfile: image/cnb-tools.Dockerfile
             # docker:cache 的构建上下文只包含 Dockerfile 和 by 声明的文件，

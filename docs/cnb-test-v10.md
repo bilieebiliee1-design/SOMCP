@@ -126,13 +126,63 @@ Gradle 对 429 **是**会重试的（`NetworkingIssueVerifier` 把它归入 tran
 这轮 404 与真正要拉的 POM 一起把 429 打出来。只调顺序、不增删仓库，镜像仍在末尾兜底。
 
 - **不删不改原仓库**：`google()`、`gradlePluginPortal()`、原 `mavenCentral()` 全在，
-  所以 AGP 的 marker 仍走 Google，解析顺序和失败语义不变；
+  解析顺序和失败语义不变；
 - **版本与产物不变**：镜像里是同一份构件（`group:artifact:version` 一致，字节相同），
   实测 `gradle-9.2.1.jar` 与 `kotlin-gradle-plugin-2.4.0-gradle813.jar` 都按声明解析到位；
 - **判据不变**：Gradle 只在 404 时才试下一个仓库，真不存在的版本照样失败。
 
 实测对比（同一台机器、空用户目录、冷启动）：不挂镜像 4 次里 1 次成功，
 挂上镜像 4 次全成功。
+
+### 插件解析与依赖解析不能用同一个镜像
+
+这条是两个坑踩出来的，都记在下面，免得下次「统一一下」。
+
+**坑一：Maven Central 镜像的假 200 会遮住 Google。** `repository/public` 是
+Maven Central 的镜像，它对不存在的构件不一定老实地返回 404（有时给一张 200 的
+提示页）。Gradle 只看状态码，见到 200 就认定该仓库命中、不再往下试：
+
+```
+Plugin [id: 'com.android.application', version: '9.2.1', apply: false] was not found
+  Searched in the following repositories:
+    cnb-mirror-0(https://maven.aliyun.com/repository/public)
+    Google
+    MavenRepo
+    Gradle Central Plugin Repository
+```
+
+「搜过 Google 还是没有」是假象 —— 它没走到 Google。AGP 9 从未发布到 Maven Central，
+`com.android.application` 的 marker 只在 Google 仓库里，在插件仓库列表里插一个
+Maven Central 镜像，等于把它遮死。
+
+**坑二：拿 google 镜像补插件仓库也不行。** `repository/google` 代理的是
+`dl.google.com/dl/android/maven2`，AGP 的 marker 在那儿有，Kotlin 的插件 marker
+没有 —— 实测 `org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.4.0` 在它那儿是
+404，于是换成它之后报错变成：
+
+```
+Plugin [id: 'org.jetbrains.kotlin.plugin.compose', version: '2.4.0', apply: false] was not found
+  Searched in: Google, cnb-plugin-mirror-0(.../repository/google), MavenRepo, Gradle Central Plugin Repository
+```
+
+现在的分工（两边都仍走 `all {}` 追加，见上一节）：
+
+| 用途 | 追加的镜像 | 代理的上游 |
+| --- | --- | --- |
+| 依赖解析 `dependencyResolutionManagement` | `.../repository/public` | Maven Central |
+| 插件解析 `pluginManagement` | `.../repository/gradle-plugin` | `plugins.gradle.org/m2` |
+
+实测三个 marker 在 `repository/gradle-plugin` 上的状态码：
+
+```
+com.android.application               404   仍由原列表的 google() 取
+org.jetbrains.kotlin.android          200
+org.jetbrains.kotlin.plugin.compose   200
+```
+
+插件侧只挂 Gradle Plugin Portal 镜像：Kotlin 那些 marker 就在 Portal 上，命中的是
+同一份 POM/JAR；AGP 的 marker 继续由原列表里的 `google()` 取。缺失时镜像返 404，
+不会遮住后面的仓库，失败语义与不挂镜像时一致。
 
 ## 无法逐字等价的项
 
@@ -270,6 +320,20 @@ sed: can't read /build.gradle.kts: No such file or directory
 `versionBy` 仍只写 Dockerfile。被 `by` 额外带进上下文的文件只解决「可见性」，
 不该让缓存版本跟着漂移；预热本身吃 `RUN` 层缓存，构建脚本变了 Gradle 会自己重解析。
 
+第二个坑在调用方式上：**预热脚本必须用 `bash` 跑，不能用 `sh`**。`scripts/cnb/*.sh`
+一律是 `#!/usr/bin/env bash` 且开头 `set -euo pipefail`，而 Docker 的 `RUN` 默认
+shell 是 `/bin/sh` → dash，不认 `pipefail`：
+
+```
+/opt/cnb/warmup-project.sh: 21: set: Illegal option -o pipefail
+ERROR: process "/bin/sh -c ..." did not complete successfully: exit code: 2
+```
+
+这行 `sh -x .../warmup-project.sh` 当时写在 `if` 之外，所以连「预热失败只打
+warning、镜像照常产出」的兜底都进不去 —— 一段本该降级的逻辑把整层构建判死。
+运行期那边一直是 `bash scripts/cnb/...`，两边入口不一致才留下这个洞。现在改成
+`bash -x`，与脚本 shebang、与 `.cnb.yml` 里所有 stage 的调用方式对齐。
+
 ## 预热失败与工具链失败的分界
 
 镜像里的预热段（`gradle help`）与工具链（JDK / Gradle / SDK / NDK）共用同一个
@@ -296,7 +360,10 @@ sed: can't read /build.gradle.kts: No such file or directory
 | 现象 | 归属 | 处理 |
 | --- | --- | --- |
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
-| `Plugin [id: '...', version: '...'] was not found` | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
+| `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
+| `Plugin [id: '...', version: '...'] was not found`，`Searched in` 里没有 Google | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
+| `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven Central 镜像的假 200 挡住 AGP marker | 插件侧改挂 Gradle Plugin Portal 镜像 |
+| `Plugin [id: 'org.jetbrains.kotlin.plugin.compose' ...] was not found`，`Searched in` 里有 google 镜像 | google 镜像里没有 Kotlin 插件 marker | 同上，见「插件解析与依赖解析不能用同一个镜像」 |
 | 预热全绿但运行期 `--offline` 复核失败 | 预热用的 `GRADLE_USER_HOME` 与运行期不是同一个 / 预热缺 init script | 见上一节，已修 |
 | 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
 
