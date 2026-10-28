@@ -238,16 +238,18 @@ object CompromisedCaBlocklist {
      *
      * Public so that tests can drive the exact rejection path a handshake takes, without
      * depending on whether the platform store happens to trust the chain being replayed.
+     *
+     * It must not log through AppLog: that object's initialiser constructs a
+     * `Handler(Looper.getMainLooper())`, so touching it from here would make the whole
+     * rejection path unusable anywhere the main looper is absent — including this class's
+     * own unit tests, which fail with `ExceptionInInitializerError`. The callers already
+     * record the thrown message, which names the certificate.
      */
     fun enforceNoCompromisedCert(chain: Array<X509Certificate>) {
         val blocked = chain.firstNotNullOfOrNull { matchedKey(it) } ?: return
-        AppLog.w(
-            "TLS: rejecting a certificate chain containing ${blocked.subjectCn}, " +
-                "whose private key is leaked (CVE-2026-111943)"
-        )
         throw CertificateException(
-            "Certificate chain contains ${blocked.subjectCn} " +
-                "(CVE-2026-111943 leaked intermediate key); refusing this connection"
+            "TLS: rejecting a chain containing ${blocked.subjectCn}, whose private key is " +
+                "leaked (CVE-2026-111943); refusing this connection"
         )
     }
 

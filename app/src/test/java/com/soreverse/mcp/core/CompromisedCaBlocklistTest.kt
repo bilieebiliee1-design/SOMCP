@@ -149,14 +149,14 @@ class CompromisedCaBlocklistTest {
 
     @Test
     fun enforceRejectsATaintedChainAndPassesACleanOne() {
-        var thrown: Exception? = null
-        try {
+        val rejection = runCatching {
             CompromisedCaBlocklist.enforceNoCompromisedCert(arrayOf(crossSignedByAaa, aaaRoot))
-        } catch (e: Exception) {
-            thrown = e
-        }
-        assertNotNull("a chain carrying a leaked-key certificate must be refused", thrown)
-        assertTrue(thrown!!.message, thrown!!.message!!.contains("EM DV TLS CA - G3B"))
+        }.exceptionOrNull()
+        assertTrue(
+            "expected a refusal naming the leaked certificate, got " +
+                "${rejection?.javaClass?.simpleName}: ${rejection?.message}",
+            rejection?.message?.contains("EM DV TLS CA - G3B") == true
+        )
 
         // the non-vacuity control: an unrelated valid chain must sail through
         CompromisedCaBlocklist.enforceNoCompromisedCert(arrayOf(aaaRoot))
