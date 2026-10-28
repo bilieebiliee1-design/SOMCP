@@ -811,7 +811,8 @@ error writing value of type
 
 `fce2fc8` 之后，patched jar 走的是「声明时换坐标」：`app/build.gradle.kts` 里那四条
 `implementation(patchedJar("x.jar", "x.y.z.1"))` 会被插件在**声明的那一刻**换成
-`x.y.z.1` 坐标依赖（`dependency.useTarget(...)`），jar 与 POM 由插件写进
+`x.y.z.1` 坐标依赖（`dependencies.remove` + `add`；`useTarget()` 只属于
+`ModuleDependency`，file 依赖上调用会抛 `No signature of method ... useTarget()`），jar 与 POM 由插件写进
 `app/libs/build/patched-jars-repo` —— 也就是 `settings.gradle.kts` 里 `somcpPatchedLocal`
 那个仓库的 url。**两边必须是同一个绝对路径**（见下面「路径」那一节）。
 
