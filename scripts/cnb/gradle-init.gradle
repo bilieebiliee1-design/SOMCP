@@ -104,7 +104,7 @@ def PLUGIN_CENTRAL_MIRROR_URLS = [
 // 反而解析不到」，而且报错指向镜像而不是这里。
 def noMirror = { repo ->
     def url = repo.url?.toString() ?: ''
-    url.contains('jitpack.io') || url.contains('patched-jar-repository') || url.startsWith('file:')
+    url.contains('jitpack.io') || url.startsWith('file:')
 }
 
 // 把镜像加进仓库列表，并且**插到最前面**，不是追加在末尾。
@@ -240,31 +240,8 @@ if (System.getenv('CNB_BUILD_ID') != null) {
             repositories.addFirst(jitpack)
         }
     }
-    // 本地 patched jar 仓库前置到**所有**仓库之前。
-    //
-    // `app/libs/*-patched.jar` 由 buildSrc 的 somcp.patched-local-jars 发布成
-    // 「与上游同版本的带元数据模块」，取代 Maven 上那份未打补丁的
-    // com.github.zhkl0228:unidbg-api / unidbg-android / capstone / keystone。
-    // 两边版本号相同，Gradle 的同版本冲突解析取「先见到的那个」—— 镜像预热
-    // 之后列表前面会多出几个 cnb-*-mirror-*，所以不能指望 settings 里的声明顺序
-    // 就够了，必须在这里再提到最前。
-    //
-    // 失败的代价很具体：退到上游那份 patched 之前的 jar，`com.github.unidbg.mcp`
-    // 整包消失，构建能过、运行期才炸（或反过来，与本地那份一起出现大量
-    // Duplicate class）。
-    def patchedJarsFirst = { repositories ->
-        def local = repositories.find { repo ->
-            repo instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository &&
-                repo.url.toString().contains('patched-jar-repository')
-        }
-        if (local != null && repositories.indexOf(local) != 0) {
-            repositories.remove(local)
-            repositories.addFirst(local)
-        }
-    }
     settingsEvaluated { settings ->
         jitpackFirst(settings.dependencyResolutionManagement.repositories)
-        patchedJarsFirst(settings.dependencyResolutionManagement.repositories)
     }
 }
 
