@@ -335,19 +335,17 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
     implementation("org.jsoup:jsoup:1.22.2")
-    // patched jar 一律走 files()，不用 maven 坐标，原因是排除要靠坐标匹配：
-    // com.github.zhkl0228:unidbg-unicorn2:0.9.9 会把上游 unidbg-api / unidbg-android
-    // 当传递依赖带进来，exclude 只对 maven 坐标生效（见下方 unicorn2 那段）。
-    // files() 与 coordinates 混用时就排不掉 —— 同一份 unidbg-android 出现两次，
-    // :app:checkDebugDuplicateClasses 报重复类，:app:mergeDebugJavaResource
-    // 还会在 android/sdk23/system/usr/share/zoneinfo/tzdata 上撞同名文件。
+    // patched jar 只用于 unidbg-api / unidbg-android / capstone / keystone 四个坐标：
+    // 它们的上游 artifact 会被 unidbg-unicorn2 当传递依赖带进来，与 files() 的
+    // patched jar 在 classpath 上撞成重复类，所以上游坐标一律排掉（见文件末尾
+    // configurations.configureEach）。
     //
-    // 而这两个 -patched.jar 的差别只有两个类，且都是 Android 上必需的：
+    // 两个 -patched.jar 与上游的差别只有两个类，且都是 Android 上必需的：
     //   * unidbg-api  AbstractEmulator: ManagementFactory.getRuntimeMXBean().getName()
     //     取 pid → 改成反射调 android.os.Process.myPid()（Android 上 rt.jar 的管理
     //     MBean 不可用，留着会在 emulator 构造时就抛异常）；
     //   * unidbg-android BaseVM.printMemoryInfo(): MemoryMXBean → Runtime 内存数。
-    // 因此不能直接换成上游坐标，只能把「上游坐标」从依赖图里彻底排掉。
+    // 因此不能直接换成上游坐标，只能把「上游坐标」从依赖图里排掉。
     implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
     implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
     implementation(files("libs/capstone-3.1.8-android-patched.jar"))
@@ -359,17 +357,20 @@ dependencies {
     implementation("com.alibaba:fastjson:1.2.83")
     implementation("com.github.zhkl0228:demumble:1.0.4")
     implementation("net.dongliu:apk-parser:2.6.10")
-    // unidbg-* 的排除统一写在文件末尾的 configurations.configureEach（全局生效），
+    // unidbg-* 上游坐标的排除统一写在文件末尾的 configurations.configureEach，
     // 这里刻意不写 exclude：依赖块里的 exclude 只作用于本依赖这一条传递路径，
     // 漏一条上游坐标就又会撞成重复类。
+    implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9")
+    // unicorn2 后端（Unicorn2Backend → 反射注册的 Unicorn2Factory）来自上面这个
+    // 坐标，两个 patched jar 里都没有它 —— 删掉这条，应用再也注册不到后端工厂，
+    // 只剩 BackendFactory.createBackend 兜底的 UnicornBackend。
     // patched unidbg-api 仍带着 BackendFactory + UnicornBackend，字节码引用
-    // unicorn.Unicorn / UnicornConst / UnicornException（unidbg-unicorn2 的
-    // Unicorn2Backend 也一样）。这些类来自 com.github.zhkl0228:unicorn，它本是
-    // unidbg-api 的传递依赖，排掉 unidbg-api 后就没来源了。缺了它
-    // BackendFactory.createBackend() 会从 Unicorn2Backend 退到 UnicornBackend，
-    // 然后以 ClassNotFoundException: unicorn_Unicorn 死在 session_open。
-    // 全局 exclude 只排 unidbg-* 四个坐标，不碰 unicorn，所以这条必须留着 ——
-    // 它是 unicorn.* 唯一的来源。
+    // unicorn.Unicorn / UnicornConst / UnicornException（Unicorn2Backend 也一样），
+    // 这些类来自 com.github.zhkl0228:unicorn，它本是 unidbg-api 的传递依赖，排掉
+    // unidbg-api 后就没来源了。缺了它 UnicornBackend 会以
+    // ClassNotFoundException: unicorn_Unicorn 死在 session_open。
+    // 全局 exclude 只排 unidbg-api / unidbg-android / capstone / keystone 四个坐标，
+    // 不碰 unicorn，所以这条必须留着 —— 它是 unicorn.* 唯一的来源。
     implementation("com.github.zhkl0228:unicorn:1.0.15")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
@@ -381,9 +382,9 @@ dependencies {
 // upstream unidbg-* 必须从**整个依赖图**里排掉。
 //
 // 这些 jar 的 patched 版本走 files()（libs/*-patched.jar），maven 没有对应的
-// 坐标，所以只能把上游坐标排干净：否则 com.github.zhkl0228:unidbg-unicorn2:0.9.9
-// 会把 unidbg-api / unidbg-android 当传递依赖带进来，同一批 com.github.unidbg.*
-// 类出现两次：
+// 坐标，所以只能把上游坐标排干净：com.github.zhkl0228:unidbg-unicorn2:0.9.9 会把
+// unidbg-api / unidbg-android 当传递依赖带进来，同一批 com.github.unidbg.* 类出现两次
+// （unicorn2 本身要留着，它提供 Unicorn2Factory / Unicorn2Backend 这两个工厂类）：
 //   > Task :app:checkDebugDuplicateClasses FAILED
 //     Duplicate class com.github.unidbg.AbstractEmulator found in modules
 //       unidbg-api-0.9.9-android-patched.jar and unidbg-api-0.9.9.jar
