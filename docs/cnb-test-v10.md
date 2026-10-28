@@ -137,6 +137,18 @@ Gradle 默认把 429 判成**不可重试**，于是一个限流响应被翻译�
 5. **不存在 `actions/checkout` 的 `fetch-depth` 参数**：CNB 代码准备阶段拉取完整历史，
    效果等同 `fetch-depth: 0`，但没有任何开关可以表达「浅克隆」。
 
+## 镜像补齐的宿主环境差异
+
+GitHub 的 `ubuntu-latest` 自带一批裸镜像没有的工具，缺了它们报错点会离根因很远，
+因此 `image/cnb-tools.Dockerfile` 显式补齐，并在 `setup-build-env.sh` 里断言：
+
+- `python`（`python-is-python3`）：`app/src/main/cpp/CMakeLists.txt` 用 `COMMAND python` 调
+  `app/generate_header.py`。缺它时 CMake 在 key-gen 处 `FATAL_ERROR`，而这一步发生在
+  原生编译（约 30 分钟）之后，症状是 Release 构建失败、Dex2C 找不到 APK。
+- `meson` / `ninja-build` / `cmake` / `gcc` / `g++` / `pkg-config`：原工作流用 `apt-get` 装，
+  这里前移到镜像（任务容器非 root）。
+- GNU 版 `find` / 常规 `coreutils`：`native-cache-key.sh` 的清理依赖 `-mindepth`。
+
 ## 需要维护者补齐的密钥
 
 `SOMCP/key` 私密仓库里需要新增 `android-signing.yml`
