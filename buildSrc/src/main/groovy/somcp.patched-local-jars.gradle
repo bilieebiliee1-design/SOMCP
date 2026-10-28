@@ -49,8 +49,13 @@ def somcpPatchedModules = [
 ] as Set
 
 configurations.configureEach { configuration ->
-    configuration.incoming.afterResolve {
-        def resolved = resolvedArtifacts.toList()
+    configuration.incoming.afterResolve { resolvableDependencies ->
+        // 具名参数而不是裸 `resolvedArtifacts`：后者在 afterResolve 的 Action 里
+        // 不是自动可用的，Gradle 9 的 configuration cache 序列化阶段会以
+        //   groovy.lang.MissingPropertyException: Could not get unknown property
+        //   'resolvedArtifacts' for dependencies ':app:debugCompileClasspath'
+        // 直接在「存缓存」那一步把构建判死（Android Lint 就是撞在这上面）。
+        def resolved = resolvableDependencies.resolvedArtifacts.toList()
         def patchedNames = resolved.findAll { it.file.name.contains('-patched') }*.file*.name as Set
 
         def dropped = resolved.findAll { artifact ->
