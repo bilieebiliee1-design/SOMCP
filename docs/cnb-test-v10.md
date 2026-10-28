@@ -136,11 +136,11 @@ Gradle 对 429 **是**会重试的（`NetworkingIssueVerifier` 把它归入 tran
 
 ### 插件解析与依赖解析不能用同一个镜像
 
-这条是两个坑踩出来的，都记在下面，免得下次「统一一下」。
+这条是踩出来的，写在这里免得下次「统一一下」：
 
-**坑一：Maven Central 镜像的假 200 会遮住 Google。** `repository/public` 是
-Maven Central 的镜像，它对不存在的构件不一定老实地返回 404（有时给一张 200 的
-提示页）。Gradle 只看状态码，见到 200 就认定该仓库命中、不再往下试：
+`maven.aliyun.com/repository/public`（Maven Central 镜像）对**不存在的构件**不返回
+404，而是 `200` + 一张「该资源不存在」的 HTML 页。Gradle 只看状态码，见到 200 就
+认定该仓库命中、不再往下试，于是 Google 上真实存在的 marker 永远取不到：
 
 ```
 Plugin [id: 'com.android.application', version: '9.2.1', apply: false] was not found
@@ -152,37 +152,18 @@ Plugin [id: 'com.android.application', version: '9.2.1', apply: false] was not f
 ```
 
 「搜过 Google 还是没有」是假象 —— 它没走到 Google。AGP 9 从未发布到 Maven Central，
-`com.android.application` 的 marker 只在 Google 仓库里，在插件仓库列表里插一个
+`com.android.application` 的 marker 只在 Google 仓库里，所以在插件仓库列表里插一个
 Maven Central 镜像，等于把它遮死。
-
-**坑二：拿 google 镜像补插件仓库也不行。** `repository/google` 代理的是
-`dl.google.com/dl/android/maven2`，AGP 的 marker 在那儿有，Kotlin 的插件 marker
-没有 —— 实测 `org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.4.0` 在它那儿是
-404，于是换成它之后报错变成：
-
-```
-Plugin [id: 'org.jetbrains.kotlin.plugin.compose', version: '2.4.0', apply: false] was not found
-  Searched in: Google, cnb-plugin-mirror-0(.../repository/google), MavenRepo, Gradle Central Plugin Repository
-```
 
 现在的分工（两边都仍走 `all {}` 追加，见上一节）：
 
-| 用途 | 追加的镜像 | 代理的上游 |
+| 用途 | 追加的镜像 | 说明 |
 | --- | --- | --- |
-| 依赖解析 `dependencyResolutionManagement` | `.../repository/public` | Maven Central |
-| 插件解析 `pluginManagement` | `.../repository/gradle-plugin` | `plugins.gradle.org/m2` |
+| 依赖解析 `dependencyResolutionManagement` | `.../repository/public` | Maven Central 镜像，Kotlin / AndroidX 等普通依赖在这 |
+| 插件解析 `pluginManagement` | `.../repository/google` | 代理 `dl.google.com/dl/android/maven2`，命中的是同一份构件 |
 
-实测三个 marker 在 `repository/gradle-plugin` 上的状态码：
-
-```
-com.android.application               404   仍由原列表的 google() 取
-org.jetbrains.kotlin.android          200
-org.jetbrains.kotlin.plugin.compose   200
-```
-
-插件侧只挂 Gradle Plugin Portal 镜像：Kotlin 那些 marker 就在 Portal 上，命中的是
-同一份 POM/JAR；AGP 的 marker 继续由原列表里的 `google()` 取。缺失时镜像返 404，
-不会遮住后面的仓库，失败语义与不挂镜像时一致。
+插件侧不挂 Maven Central 镜像：Kotlin 插件 marker 本身在 Maven Central 也在
+Gradle Plugin Portal，原仓库列表够用，不需要镜像。
 
 ## 无法逐字等价的项
 
@@ -278,6 +259,9 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
   与 `/opt/cnb/`（预热期显式 `--init-script` 用）
 - `scripts/cnb/gradle-proxy.init.gradle.kts` —— 预热期的代理桥接，与运行期
   `scripts/cnb/gradle.sh` 传的是同一个文件
+- `scripts/cnb/gradle-cache-only.gradle` —— 「只看缓存」复核用的 Groovy init
+  script，`COPY` 到 `$GRADLE_USER_HOME/cnb-cache-only.gradle`，由上面那份
+  Kotlin init script 在 `-PcnbCacheOnlyCheck` 时 `apply(from:)`
 - `scripts/cnb/warmup-project.sh` —— 把下面三个文件改写成最小工程
 - `build.gradle.kts` / `settings.gradle.kts` / `gradle.properties` —— 预热工程从里面读
   插件版本、仓库声明与重试参数
@@ -291,6 +275,8 @@ failed to calculate checksum of ref ...: "/scripts/cnb/gradle-init.gradle": not 
 
 - `build.gradle.kts` 只留 `plugins {}`；
 - `settings.gradle.kts` 只留 `pluginManagement { repositories { ... } }`，
+  再补一段本工程自己的 `dependencyResolutionManagement { google(); mavenCentral() }`
+  —— 插件 buildscript classpath 的解析走后者，缺了它只剩隐式 `MavenRepo`；
   **仓库声明必须保留**——早先的做法是清空成一行 `rootProject.name`，Gradle 于是
   只剩缺省的 `gradlePluginPortal`，而 AGP 的 marker 在 Google，预热解析
   `com.android.application:9.2.1` 永远拿不到；运行期则相反，只剩 Google/MavenCentral、
@@ -344,12 +330,22 @@ warning、镜像照常产出」的兜底都进不去 —— 一段本该降级�
 - **镜像层**：预热失败只打 warning（把 Gradle 日志尾部打到 stderr，否则只剩一行
   `BUILD FAILED`），镜像照常产出。这意味着镜像可能带着不完整的依赖缓存。
 - **运行期**：`scripts/cnb/setup-build-env.sh` 在第一个 stage 用
-  `bash scripts/cnb/gradle.sh --offline -q help` 复核 —— 走的是与后续每个 stage
-  完全相同的入口（同一个 proxy init script、同一份用户目录），离线跑得通才说明
-  插件与构建期依赖真的都在 `$GRADLE_USER_HOME` 里；跑不通当场失败，并指回
-  Dockerfile 的预热段。这里曾经是裸 `gradle --offline`：既不带 proxy init script
+  `bash scripts/cnb/gradle.sh --offline -q -PcnbCacheOnlyCheck help` 复核 ——
+  走的是与后续每个 stage 完全相同的入口（同一个 proxy init script、同一份用户目录）；
+  `-PcnbCacheOnlyCheck` 由 `scripts/cnb/gradle-cache-only.gradle` 把插件仓库与
+  依赖仓库都换成空的本地文件仓库，于是「能不能解析到」只取决于
+  `$GRADLE_USER_HOME` 里有没有，跟网络无关。跑不通当场失败，并指回 Dockerfile
+  的预热段。这里曾经是裸 `gradle --offline`：既不带 proxy init script
   （预热带代理、复核不带，两边不是同一个判据），也不是 `export` 出来的
   `GRADLE_USER_HOME`，复核读的其实是另一个目录。
+
+**为什么光有 `--offline` 不够**：`--offline` 只禁止联网，Gradle 仍然按仓库名去
+`caches/modules-2` 里查索引，远端连不上时报的也是
+`Plugin [id: ...] was not found in any of the following sources: Google, cnb-plugin-mirror-0(...)`，
+和「预热没做完」一字不差。2026-10 就踩过这个坑：镜像重建（`versionBy` 只跟
+Dockerfile 走，Dockerfile 一改 `docker:cache` 的 key 就变，overlay 从零开始）
+之后第一次运行，预热确实做过，复核却因为当时到 Google / Maven Central 的链路
+不可用而判红。换成空文件仓库后这层歧义消失：缓存里有就过，没有就是真没有。
 
 这样「缓存可用」这个判据一条没少，只是失败点从镜像构建挪到了第一个 stage，
 报错文字也从后面的 `Plugin [id: ..., version: ...] was not found` 提前成一句
@@ -362,9 +358,70 @@ warning、镜像照常产出」的兜底都进不去 —— 一段本该降级�
 | `sed: can't read /build.gradle.kts` | 上下文缺文件 / 续行夹注释 | 见上两节，已修 |
 | `set: Illegal option -o pipefail` | 用 `sh`（dash）跑 bash 脚本 | 预热段改 `bash -x`，已修 |
 | `Plugin [id: '...', version: '...'] was not found`，`Searched in` 里没有 Google | Maven Central 429 限流 | `gradle-init.gradle` 追加镜像；仍被限流时由运行期复核报错 |
-| `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven Central 镜像的假 200 挡住 AGP marker | 插件侧改挂 Gradle Plugin Portal 镜像 |
-| `Plugin [id: 'org.jetbrains.kotlin.plugin.compose' ...] was not found`，`Searched in` 里有 google 镜像 | google 镜像里没有 Kotlin 插件 marker | 同上，见「插件解析与依赖解析不能用同一个镜像」 |
+| `Plugin [id: 'com.android.application' ...] was not found`，`Searched in` 里 `cnb-mirror-*` 排在 Google 前 | Maven 镜像的 200 空壳挡住 AGP marker | 插件侧只挂 Google 镜像，见「插件解析与依赖解析不能用同一个镜像」 |
+| 镜像层预热 warning 里出现 `fus-statistics-gradle-plugin:2.4.0` 的 429 | 预热工程缺 `dependencyResolutionManagement`，插件 buildscript classpath 只剩隐式 `MavenRepo` | `scripts/cnb/warmup-project.sh` 补上该段，已修 |
+| 运行期复核报 `warmup cache is incomplete`，但 `Searched in` 里仓库地址指向外网 | 光靠 `--offline` 分不开「缓存空」和「网不通」 | 复核改用 `-PcnbCacheOnlyCheck`，仓库列表换成空文件仓库（`Searched in` 只剩 `cnb-cache-only`），已修 |
 | 预热全绿但运行期 `--offline` 复核失败 | 预热用的 `GRADLE_USER_HOME` 与运行期不是同一个 / 预热缺 init script | 见上一节，已修 |
 | 预热超时 / 镜像层被杀 | 网络 | 镜像照常产出，运行期复核给出明确失败 |
 
 `GRADLE_WARMUP_CHECK=0` 可以关掉运行期复核（只用于排查，正常流水线不要关）。
+
+## JitPack 的坐标会被 Maven Central 镜像接走
+
+`Android Lint` 在 `:app:debugCompileClasspath` 上挂掉：
+
+```
+Could not resolve com.github.rikkahub:markdown:d79a97cc8e.
+  > Could not GET 'https://repo.maven.apache.org/maven2/com/github/rikkahub/
+     markdown/d79a97cc8e/markdown-d79a97cc8e.pom'.
+     Received status code 429 from server: Too Many Requests
+```
+
+印在报错里的是 Maven Central，看着像限流，其实是**仓库列表被镜像接管了**。
+四个源实测（同一时刻）：
+
+| 源 | 结果 |
+| --- | --- |
+| `google()` | 未命中（这个坐标就不在 Google） |
+| `repo.maven.apache.org` | 404 —— 该坐标本来就不在 Maven Central |
+| `.../repository/public` | 404 / 429 / 200 空壳，换着来 |
+| `jitpack.io` | 200，jar 的 sha1 与 `.module` 声明一致 |
+
+`settings.gradle.kts` 里 `jitpack()` 排在最后，而 `gradle-init.gradle` 把 Maven
+Central 镜像**追加在文件末尾** —— 于是 JitPack 的坐标先落到镜像上。镜像没被限流
+就返回 `200` + 一张「资源不存在」的 HTML，被限流就是 `429`，两种都让 Gradle 原地
+判死，**真正的 jitpack.io 永远走不到**。这与上面「插件侧不能用 Central 镜像」
+是同一个假 200，只是这次撞在依赖解析上。
+
+修法（`scripts/cnb/gradle-init.gradle`）：
+
+- `noMirror`：给 JitPack（`jitpack.io`）和任何 `file:` 仓库（含复核用的空仓库）
+  打标记，追加镜像是跳过它们；
+- `addCentralOnlyMirror`：额外追加一个带着内容过滤的镜像，
+  `excludeGroupByRegex('com.github.rikkahub.*')` —— JitPack 的坐标是
+  `com.github.<owner>:<repo>` 与 `com.github.<owner>.<repo>:<artifact>`，
+  这个形状 Maven Central 上永远不会出现，于是在镜像那里被放过，继续走 jitpack.io。
+
+试过但**不用**的方案：按 group 级 `maven-metadata.xml` 判断「Central 上到底有没有
+这个 group」。实测在 aliyun 上不可靠 —— `androidx`、`io.reactivex`、`com.squareup.okhttp3`、
+`com.google.code.gson` 全部 404，`com*` 这种宽前缀会把 `com.github.rikkahub`
+一起放进来，窄前缀又会把 Central 的冷门依赖挡在外面。所以只排已知的非 Central 坐标。
+
+留个判据：**新增非 Maven Central 的仓库（JitPack 之外的）时，同时往
+`CENTRAL_ONLY_EXCLUDES` 补一条前缀**，否则镜像会把它接走，而报错只会指着镜像。
+
+## 复核的仓库列表必须与预热逐个对上
+
+`gradle-cache-only.gradle` 早先的做法是把仓库列表 `clear()` 掉，塞进唯一一个叫
+`cnb-cache-only` 的空仓库。这条路从一开始就不可能通过：Gradle 的模块缓存**按仓库
+url 算 hash 分索引**，预热下在 Google / MavenRepo / JitPack / 两个 `cnb-mirror-*`
+名下，复核却拿着一个谁都没预热过的空仓库去查，报出来必然是「每条都不命中」。
+镜像重建后它看起来「对」，只是因为那时缓存本来就是空的。
+
+现在改成**原位替换**：顺序与数量跟预热时一模一样，每个 url 换成本地空目录，
+再在这个目录里写一个 Gradle 自己的仓库信息文件
+（`<repoDir>/.gradle/repo-info.json`，内容 `{"url": "<原 url>", "type": "maven"}`），
+让空仓库的缓存索引指回原来那个 url。于是命中与否只取决于「预热有没有下过这份构件」。
+
+这个文件不是公开 API，所以做了兜底说明：万一将来 Gradle 不再读它，复核会退化成
+「全部未命中」—— **偏严的失败**，不会误放行；届时按日志里 `Searched in` 的清单改。

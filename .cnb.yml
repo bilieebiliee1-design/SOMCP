@@ -89,6 +89,8 @@ main:
             #   * scripts/cnb/gradle-init.gradle —— COPY 进 /opt/gradle-user-home；
             #   * scripts/cnb/gradle-proxy.init.gradle.kts —— 预热期的代理桥接，
             #     与运行期 scripts/cnb/gradle.sh 传的是同一个文件；
+            #   * scripts/cnb/gradle-cache-only.gradle —— 运行期复核用的「只看缓存」
+            #     模式，COPY 进 Gradle 用户目录后由 init script apply；
             #   * scripts/cnb/warmup-project.sh —— 把下面三个文件改写成最小工程，
             #     改写判据不在 Dockerfile 的续行里写（那条路上写错一次就多一轮构建）；
             #   * build.gradle.kts / settings.gradle.kts / gradle.properties ——
@@ -98,14 +100,26 @@ main:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
               - scripts/cnb/gradle-proxy.init.gradle.kts
+              - scripts/cnb/gradle-cache-only.gradle
               - scripts/cnb/warmup-project.sh
               - build.gradle.kts
               - settings.gradle.kts
               - gradle.properties
-            # 版本仍只跟 Dockerfile 走（与原先一致）：其余被 by 引入的文件只是
-            # 为了进构建上下文，不该让缓存版本跟着它们漂移。
+            # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
+            # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
+            # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
+            # 缓存失效，流水线继续复用那个「预热从未成功过」的旧镜像，然后在
+            # 校验代码准备里报 warmup cache is incomplete —— 改了半天脚本，
+            # 跑的还是老镜像。代价是这些文件改动会触发一次完整重建，
+            # 但它们本来就只在准备镜像时才改。
             versionBy:
               - image/cnb-tools.Dockerfile
+              - scripts/cnb/gradle-init.gradle
+              - scripts/cnb/gradle-proxy.init.gradle.kts
+              - scripts/cnb/warmup-project.sh
+              - build.gradle.kts
+              - settings.gradle.kts
+              - gradle.properties
             sync: true
           exports:
             name: BUILD_ENV_IMAGE
