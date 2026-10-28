@@ -100,14 +100,18 @@ main:
             #     plugins {} 才能安全预热（dependencies 里的 files("libs/...") 不在
             #     上下文里，`module("g:a:v")` 连脚本编译都过不了）。只要 plugins {}，
             #     而它与根脚本是同一份声明 —— 多带一个文件只会多一个能让预热失败的点。
-            #   * buildSrc/build.gradle.kts **必须进上下文**：Gradle 只要在 settings
-            #     所在目录看到 buildSrc/，就会在配置任何工程之前先编译它，用的是它
-            #     自己那份 `kotlin-dsl` 插件声明 —— 而预热的目的正是把这些插件下进
-            #     用户目录，插件没下就要求它先可用，必然
-            #     `Plugin [id: 'org.gradle.kotlin.kotlin-dsl', version: '6.6.4'] was not found`。
-            #     带进来是为了让镜像「看见」它并显式删掉（只看前缀，不会手滑）；
-            #     不带的话，有人往仓库里加了 buildSrc，上下文里没有它，
-            #     Dockerfile 里那句 rm 就是空操作，同一个坑会无声无息地回来。
+            #   * buildSrc/ **整目录带上**（build.gradle.kts 与 src/ 下的插件源码）：
+            #     预热工程要把它**删掉**再跑（Gradle 一旦看见 buildSrc/ 就会先编译它，
+            #     用它自己的 `kotlin-dsl` 声明去解析插件 —— 而预热的目的正是把这些插件
+            #     下进用户目录，插件还没下就先要求它可用）。删除是 Dockerfile 里那条
+            #     `rm -rf` 干的，它得先看得见东西；不带的话那句 rm 是空操作，同一个
+            #     坑会无声无息地回来。
+            #
+            #     **别把它理解成「buildSrc 需要预热」**：它需要，也确实被预热了 ——
+            #     但走的是运行期那条路（每个 stage 都用完整的仓库），预热工程里既没有
+            #     源码也没有 libs/，编译它毫无意义。早先版本只带 build.gradle.kts，
+            #     于是「删掉」这件事成立而「为什么删」被误解成「预热不需要 buildSrc」，
+            #     绕了一圈才在运行期复核上撞到同一个 kotlin-dsl 报错。
             by:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -118,6 +122,7 @@ main:
               - settings.gradle.kts
               - gradle.properties
               - buildSrc/build.gradle.kts
+              - buildSrc/src/main/kotlin
             # 版本必须跟着预热相关的源码一起走，不能只跟 Dockerfile：
             # docker:cache 的缓存键 = versionBy 里文件的内容，只列 Dockerfile 时，
             # 改预热脚本（warmup-project.sh / gradle-init.gradle / 代理桥接）不会让
@@ -125,9 +130,10 @@ main:
             # 校验代码准备里报 warmup cache is incomplete —— 改了半天脚本，
             # 跑的还是老镜像。代价是这些文件改动会触发一次完整重建，
             # 但它们本来就只在准备镜像时才改。
-            # buildSrc 那份脚本也要进 versionBy：它虽然是「要被删掉的东西」，
-            # 但「删不删得掉、上下文里有没有」正是这一层成败的关键，
-            # 改动它必须让镜像重建，否则沿用旧镜像、坑照旧。
+            # buildSrc/ 也要进 versionBy，尽管预热工程里它会被删掉：删掉只是
+            # 预热工程的决定，运行期每个 stage 都要真的编译它，而 `kotlin-dsl`
+            # 的 marker 版本正是从这里读的（钉住的 6.6.4）。改它必须让镜像重建，
+            # 否则沿用旧镜像、缓存里的 kotlin-dsl 与源码对不上。
             versionBy:
               - image/cnb-tools.Dockerfile
               - scripts/cnb/gradle-init.gradle
@@ -138,6 +144,7 @@ main:
               - settings.gradle.kts
               - gradle.properties
               - buildSrc/build.gradle.kts
+              - buildSrc/src/main/kotlin
             sync: true
           exports:
             name: BUILD_ENV_IMAGE
