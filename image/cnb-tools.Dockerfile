@@ -123,10 +123,15 @@ COPY scripts/cnb/warmup-project.sh /opt/cnb/warmup-project.sh
 #   * 超时兜底：CI 的代理变量在无网时会变成黑洞（连上去就不说话），Gradle 的
 #     仓库超时是「无限」，一次挂起就能把镜像构建卡到被平台杀。给 10 分钟上限，
 #     kill 之后落到下面的 warning 分支，工具链照常产出。
+#   * warmup-project.sh 必须用 bash 跑，不能 `sh -x`：Docker 的默认 shell 是
+#     dash，而脚本第 21 行是 `set -euo pipefail`，dash 不认 pipefail，直接
+#     报 `set: Illegal option -o pipefail` 以退出码 2 结束整层构建 —— 这一步
+#     在 if 之外，所以「预热失败只告警」的兜底根本没机会生效。脚本自己的
+#     shebang 是 bash，按 shebang 执行即可（镜像基于 ubuntu，bash 恒在）。
 RUN set -eu; \
     cp -a /opt/gradle-user-home /root/.gradle; \
     cd /tmp/cnb-warmup; \
-    sh -x /opt/cnb/warmup-project.sh; \
+    bash -x /opt/cnb/warmup-project.sh; \
     printenv | grep -i '_proxy=' || echo "[warmup] no *_proxy in environment"; \
     if CNB_BUILD_ID=warmup GRADLE_USER_HOME=/tmp/cnb-warmup-home timeout 600 \
          /opt/gradle/bin/gradle --no-daemon --console=plain \
