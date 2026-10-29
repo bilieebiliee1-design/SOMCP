@@ -347,15 +347,14 @@ dependencies {
     implementation("commons-codec:commons-codec:1.21.0")
     implementation("org.apache.commons:commons-collections4:4.5.0")
     implementation("commons-io:commons-io:2.21.0")
-    // No com.alibaba:fastjson here on purpose. unidbg's patched jars reference
-    // fastjson types (McpTools#dispatchTool takes a fastjson JSONObject, and
-    // several classes call fastjson.util.IOUtils.close), but the classes are only
-    // touched on demand; UnidbgMcpJsonBridge supplies a Map for the argument and
-    // a proxy for the result, so nothing loads fastjson at runtime. Keeping the
-    // artifact out removes the autoType/deserialization surface entirely
-    // (com.alibaba:fastjson:1.2.83 -> CVE-2026-16723). Note 1.2.84 is not a
-    // drop-in replacement either: it drops JSONObject#toJSONString(), which
-    // McpTools calls on the returned object.
+    // 1.2.84 is the upstream fix release for CVE-2026-16723 (CWE-502, the
+    // autoType deserialization gadget chain reported against 1.2.83). unidbg's
+    // patched jars name fastjson types in their signatures and call
+    // fastjson.util.IOUtils.close on the shutdown path, so the artifact has to
+    // stay; bumping it is the whole fix. 1.2.84 keeps the API unidbg relies on:
+    // JSONObject(Map), and toJSONString() -- inherited from JSON in both
+    // releases, so McpTools#pollEvents has nothing to break on.
+    implementation("com.alibaba:fastjson:1.2.84")
     implementation("com.github.zhkl0228:demumble:1.0.4")
     implementation("net.dongliu:apk-parser:2.6.10")
     implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9") {
