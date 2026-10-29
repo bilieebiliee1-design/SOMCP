@@ -131,7 +131,7 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
                 if (exitCode != 0 || errorCode.isNotBlank()) {
                     val exitFailure = nativeExitFailure(exitCode)
                     finishFailure(
-                        errorCode.ifBlank { exitFailure?.first ?: "RUNNER_FAILED" },
+                        resolvedErrorCode(errorCode, exitFailure),
                         message.ifBlank {
                             exitFailure?.second ?: "Blutter runner exited with code $exitCode"
                         },
@@ -316,11 +316,25 @@ internal class BlutterEmbeddedBackend(private val context: Context, private val 
         fun nativeExitFailure(exitCode: Int): Pair<String, String>? = when (exitCode) {
             3 -> "RUNNER_CANCELLED" to "The Blutter runner stopped before producing a result"
             5 -> "RUNNER_OUTPUT_FAILED" to "The Blutter runner could not write its result"
-            6 -> "RUNNER_NATIVE_FAILED" to
-                "The Blutter runner aborted while deserializing the Dart snapshot. On tight-heap " +
-                "devices a large libapp.so can exhaust the native heap; check the snapshot fingerprint " +
-                "(engine revision, Dart version, compressed pointers) before retrying."
+            6 ->
+                "RUNNER_NATIVE_FAILED" to
+                    "The Blutter runner aborted while deserializing the Dart snapshot. On tight-heap " +
+                    "devices a large libapp.so can exhaust the native heap; check the snapshot fingerprint " +
+                    "(engine revision, Dart version, compressed pointers) before retrying."
             else -> null
+        }
+
+        /**
+         * The runner service reports its own codes (`CANCELLED`, `RUNNER_EXCEPTION`) and a coarse
+         * `RUNNER_FAILED` for every non-zero exit, so the exit code table only wins when the
+         * service had nothing more specific to say.
+         */
+        fun resolvedErrorCode(errorCode: String, exitFailure: Pair<String, String>?): String {
+            if (exitFailure == null) return errorCode.ifBlank { "RUNNER_FAILED" }
+            return when (errorCode) {
+                "", "RUNNER_FAILED" -> exitFailure.first
+                else -> errorCode
+            }
         }
     }
 }
