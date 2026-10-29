@@ -66,6 +66,17 @@ Dart VM 反序列化 `libapp.so` 快照时必须先建出完整对象图，这�
 
 `MemoryGuard` 只管主进程的 ART 堆：`ensureAnalysisMemory` 只出现在 APK 整份 `readFile` 的兜底路径（`inspect` / `analyze` 的 `workDirectory` 分支）和 `runner-result.json` 的解析校验处。走 `File` / APK 提取路径时 `libapp.so` 是通过 `ParcelFileDescriptor` 交给隔离进程的，**主进程闸门全程不参与**。所以 15 MB `libapp.so` 的失败不会得到 `INSUFFICIENT_MEMORY`。
 
+全部调用点一览（输入侧闸的是整份 `readFile`，结果侧闸的是 `org.json` 解析需要的「文本 + 对象树」两份）：
+
+| 调用点 | 闸的对象 | 所属阶段 |
+| --- | --- | --- |
+| `BlutterCoordinator.kt:98` | APK 整份 `readFile`，`inspect` 的 `workDirectory` 兜底 | 输入侧 |
+| `BlutterCoordinator.kt:365` | APK 整份 `readFile`，`analyze` 的 `workDirectory` 兜底 | 输入侧 |
+| `BlutterEmbeddedBackend.kt:164` | `runner-result.json` 的解析校验 | 结果侧 |
+| `BlutterResultStore.kt:201` | 读 blutter 结果文件前的闸门（`readResult`） | 结果侧 |
+
+四者都在主进程。输入侧只有「整份读入」这一条回退路径会过闸，`ParcelFileDescriptor` 路径不经过；结果侧两处都在解析 `runner-result.json` 之前，与本文件「结果侧闸门」一节同源。
+
 隔离进程侧的实际表现是可以区分的：
 
 | 现象 | 含义 |
