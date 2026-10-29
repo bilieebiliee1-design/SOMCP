@@ -443,11 +443,17 @@ dependencies {
 //   jna 5.6.0（lint 工具）  -> jna-5.6.0.jar，原样放行
 configurations.configureEach {
     resolutionStrategy.eachDependency {
-        if (it.requested.group == "net.java.dev.jna" && it.requested.name == "jna" &&
-            it.requested.version == "5.10.0"
+        // Kotlin DSL 的 eachDependency / artifactSelection 都是**带接收者**的 lambda
+        // （DependencyResolveDetails / ArtifactSelectionDetails），作用域里没有 `it`。
+        // 写成 `it.requested...` 是 Groovy 的语法，在 .kts 里是编译期错误：
+        //   e: Unresolved reference 'it'
+        // 而预热第一遍就是按仓库原样编译这个脚本，编译不过则整层预热一分依赖不下
+        // （cnb-ql2-1k62gkso0）。
+        if (requested.group == "net.java.dev.jna" && requested.name == "jna" &&
+            requested.version == "5.10.0"
         ) {
-            it.artifactSelection {
-                it.selectArtifact("aar", "aar", null)
+            artifactSelection {
+                selectArtifact("aar", "aar", null)
             }
         }
     }
