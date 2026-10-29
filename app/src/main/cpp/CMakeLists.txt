@@ -151,28 +151,15 @@ else()
     message(STATUS "[reporting-key] LRP_API_KEY not set; reports will be sent without an API key")
 endif()
 
-# The interpreter is resolved here, not inside execute_process: given a bare
-# `python` whose executable is missing, execute_process does not fail with
-# "not found" - it returns a non-zero code and an EMPTY stderr, so the failure
-# reads as "[key-gen] generation failed. Check generate_header.py output." with
-# nothing to check. find_program fails loudly instead.
-find_program(PYTHON_EXECUTABLE NAMES python python3)
-if(NOT PYTHON_EXECUTABLE)
-    message(FATAL_ERROR
-        "[key-gen] no Python interpreter found (tried: python, python3). "
-        "app/generate_header.py needs one; on CI the base image provides it.")
-endif()
 execute_process(
-  COMMAND "${PYTHON_EXECUTABLE}" "${GEN_SCRIPT}"
+  COMMAND python "${GEN_SCRIPT}"
       --key "${TM_KEY}"
       --dst "${KEY_GENERATED}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../../../.."
     RESULT_VARIABLE GEN_RESULT
-    ERROR_VARIABLE GEN_ERR
 )
 if(NOT GEN_RESULT EQUAL 0)
-    message(FATAL_ERROR
-        "[key-gen] ${PYTHON_EXECUTABLE} ${GEN_SCRIPT} exited ${GEN_RESULT}. ${GEN_ERR}")
+    message(FATAL_ERROR "[key-gen] generation failed. Check generate_header.py output.")
 endif()
 
 message(STATUS "[key-gen] using header: ${KEY_GENERATED}")
