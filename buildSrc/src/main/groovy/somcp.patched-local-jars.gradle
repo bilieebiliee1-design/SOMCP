@@ -164,17 +164,22 @@ def pomTextFor = { String coordinates ->
     def deps = somcpPatchedPomDependencies[coordinates] ?: []
     def depsXml = deps.collect { String dep ->
         def (depGroup, depModule, depVersion) = parseCoordinates(dep)
-        // `jna` 必须跟着 aar 走：`:app` 自己声明的是 `jna:5.10.0@aar`（classifier aar），
-        // POM 里不带 type 的那条会另外解析出一份 jar —— 两份都上 classpath，
-        // `checkDebugDuplicateClasses` 当场报几百条 `com.sun.jna.*`：
-        //   jna-5.10.0.aar -> jna-5.10.0-runtime and jna-5.10.0.jar
-        // 上游 POM 的 `<packaging>aar</packaging>` 只描述模块自身，传不到传递依赖上，
-        // 所以 patched 的 capstone / keystone POM 里显式写 `<type>aar</type>`。
-        def typeTag = (depModule == 'jna') ? '\n      <type>aar</type>' : ''
+        // **这里不写 `<type>`，jna 也不例外。**
+        //
+        // 早先为了让 patched POM 里的 jna 跟 `:app` 那条 `jna:5.10.0@aar` 对齐，这里
+        // 写过一个 `<type>aar</type>`。看着对，代价是它对**所有**解析这份 POM 的地方
+        // 生效：AGP 的 `:app:androidLintTool` 自己带一份 `jna:5.6.0`（只有 jar），
+        // 被强成 aar 之后它去要
+        //   https://.../net/java/dev/jna/jna/5.6.0/jna-5.10.0.aar
+        // —— 文件名 5.10.0、目录 5.6.0，本来就取不到（cnb-h86-1k62fspsh 的
+        // Android Lint）。POM 是模块级元数据，管不了调用方要哪种 artifact。
+        //
+        // jna 的 artifact 取舍由 `app/build.gradle.kts` 末尾那条 `artifactSelection`
+        // 负责（只对 5.10.0 选 aar），POM 只声明「有这么个依赖」。
         """    <dependency>
       <groupId>${depGroup}</groupId>
       <artifactId>${depModule}</artifactId>
-      <version>${depVersion}</version>${typeTag}
+      <version>${depVersion}</version>
     </dependency>
 """
     }.join('')
