@@ -1,0 +1,330 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// SOMCP - scripts/cnb/gradle-init.gradle
+// Copyright (C) 2026 SOMCP authors
+// Upstream: https://github.com/bilieebiliee1-design/SOMCP
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License version 3 as published by
+// the Free Software Foundation.
+//
+// Gradle 用户级初始化脚本，由 image/cnb-tools.Dockerfile 装到
+// $GRADLE_USER_HOME/init.d/cnb-init.gradle 并随目录搬进 data 卷，
+// 因此每个 stage 的 gradle 都会加载它。
+//
+// 职责只有一件：给仓库列表**追加**镜像，把 Maven Central 的限流绕开。
+// 背景：repo1.maven.org / repo.maven.apache.org 对同一出口 IP 有共享请求上限
+// （实测连打同一个 POM 40 次，16 次 429），而 Gradle 默认把 429 判成不可重试，
+// 冷启动一口气拉几十个 POM 时，任何一个吃到限流都会让整次解析失败，报出来
+// 的却是「Plugin [id: ..., version: ...] was not found」—— 版本明明存在。
+//
+// **插件解析和依赖解析用的不是同一个镜像**，这不是对称的美感问题：
+// 见下面 PLUGIN_MIRROR_URLS 的注释 —— 把 Maven Central 的镜像放进插件仓库列表，
+// 会用一个假 200 挡住 Google 上真实存在的 AGP marker；而 google 镜像里又没有
+// Kotlin 的插件 marker。
+//
+// 但「只追加」对 JitPack 这类**没有公共镜像**的仓库是致命的，见 noMirror 与
+// addCentralOnlyMirror 的注释 —— 假 200 与 429 都能让它在镜像那里就走不下去。
+//
+// 不加、不删、不改原仓库：
+//   * google() / gradlePluginPortal() / 原 mavenCentral() 全部保留，相对顺序不变
+//     （镜像插到最前，理由见 addMirrors）；
+//   * 版本、依赖图、产物字节完全一致（镜像里是同一份构件）；
+//   * 真不存在的版本照样失败（Gradle 只在 404 时才继续试下一个仓库）。
+//
+// 第二个职责是**把「只看缓存」的复核脚本投放到运行期真正的用户目录**（见文件末尾的
+// deployCacheOnlyScript）。镜像把该脚本 COPY 到 `/opt/gradle-user-home`，而运行期
+// 的用户目录是 data 卷 `/root/.gradle`。首次挂载是空目录，由
+// scripts/cnb/setup-build-env.sh 从镜像内那份 `cp -a` 过来 —— 少搬一个文件就要在
+// 那里加一条断言，两处判据各自演化迟早对不上。交给 init script 自己投放，
+// 「用户在哪个目录」这件事只剩一个出口。
+//
+// 只在 CI 里介入（本地没有 CNB_BUILD_ID 时什么都不做）。
+
+// 依赖解析用：Maven Central 的镜像（Kotlin / AndroidX 等普通依赖都在这里）。
+def MIRROR_URLS = [
+    'https://maven.aliyun.com/repository/public',
+]
+
+// 插件解析用：Gradle Plugin Portal 的镜像。
+//
+// 不能直接复用上面那个：`repository/public` 是 Maven Central 的镜像，AGP 9 从未
+// 发布到 Maven Central，`com.android.application` 的 marker 只在 Google 仓库里；
+// 而且它对不存在的构件并不总返回 404（有时是 200 + 提示页），一个假 200 就能让
+// Gradle 认定该仓库命中、不再试后面的 Google，报出来是
+//   Plugin [id: 'com.android.application', version: '9.2.1'] was not found
+// 而 `Searched in` 列表里 Google 明明在。
+//
+// 也不能用 `repository/google`（代理 dl.google.com/dl/android/maven2）：AGP 的
+// marker 在那儿有，Kotlin 的插件 marker 没有 —— 实测
+// `org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.4.0` 在 google 镜像上是
+// 404，在 `repository/gradle-plugin` 上是 200。
+//
+// 所以插件侧用 `repository/gradle-plugin`（代理 plugins.gradle.org/m2）：
+// Kotlin 那些 marker 都在那儿，命中时是同一份 POM/JAR，缺失时返回 404，
+// 不会遮住原列表里的 google()。
+def PLUGIN_MIRROR_URLS = [
+    'https://maven.aliyun.com/repository/gradle-plugin',
+]
+
+// 插件侧还需要一个 Maven Central 镜像，而它必须排在**最后**（且通常不会真的被用到，
+// 见 addCentralOnlyMirror）。
+// marker（`*.gradle.plugin`）只是入口，插件自身的传递依赖 —— asm、jaxb-runtime、
+// javapoet、kotlin-build-statistics 等 —— 都从 MavenRepo 取，同样会吃 429。
+// 实测预热就倒在
+//   Could not download asm-util-9.9.jar (org.ow2.asm:asm-util:9.9)
+//     > ... Received status code 429 from server: Too Many Requests
+// 放最后是因为 marker 那一步不能被它抢走：marker 在 /public 下是 404（已核实），
+// 会老实让位给前面的 google()/gradle-plugin 镜像；而它一旦排前面，
+// 历史上的假 200 就会把 Google 上的 AGP marker 遮住。
+def PLUGIN_CENTRAL_MIRROR_URLS = [
+    'https://maven.aliyun.com/repository/public',
+]
+
+// 哪些原仓库不能用 Maven Central 的镜像兜。
+//
+// `maven.aliyun.com/repository/public` 对不存在的构件不是 404，而是 **200 + 一张
+// 「该资源不存在」的 HTML 页**（见上面的假 200 一节）。对「原仓库能命中」的构件无妨：
+// 原仓库排在前面，镜像轮不到。但对**原仓库里根本没有、只在别处有**的构件，这就是灾难 ——
+// Gradle 读到 200 原地失败，**不会再去试后面的原仓库**；限流时同一个位置给的是
+// 429，同样当场判死 —— 而真正的源（JitPack）就在下一行、好好的。
+//
+// 实测（本仓库 app/build.gradle.kts 的 com.github.rikkahub:markdown:d79a97cc8e）：
+//   Google                    未命中
+//   repo.maven.apache.org     404（这个坐标本来就不在 Maven Central）
+//   .../repository/public     404 / 429 / 200 空壳（限流时给 429，换几次又给空壳）
+//   jitpack.io                200，jar 的 sha1 与 .module 声明一致
+// 于是 `:app:lintDebug` 挂在 debugCompileClasspath 解析上，红点离根因很远。
+//
+// 判据是「这个仓库里的东西不会出现在 Maven Central 镜像里」，现在按 URL 认：
+//   * JitPack（`jitpack.io`）：从 GitHub 现场构建，Central 不可能有；
+//   * 任何本地 / 文件仓库（`file:`，含 -PcnbCacheOnlyCheck 换出来的那个空 marketplace）：
+//     镜像语义对它毫无意义，而且必须保证它排第一时的独占性。
+// 新加仓库时如果它也不在 Central，记得往这里补一条 —— 少补的代价是「加了镜像之后
+// 反而解析不到」，而且报错指向镜像而不是这里。
+def noMirror = { repo ->
+    def url = repo.url?.toString() ?: ''
+    url.contains('jitpack.io') || url.startsWith('file:')
+}
+
+// 把镜像加进仓库列表，并且**插到最前面**，不是追加在末尾。
+//
+// 顺序是有讲究的，别「统一一下」：`repositories.maven { }` 默认追加在末尾，于是
+// 依赖侧的 `cnb-mirror-0(/public)` 排在 `mavenCentral()` 后面 —— 冷启动几十个请求
+// 先撞 Maven Central 的 429，解析在第一个仓库就失败，后面那个能用的镜像
+// **一次都没被访问**（实测：本地复刻镜像的预热工程，日志里 maven.aliyun.com
+// 出现 0 次、repo.maven.apache.org 一路 429）。插件侧那两个同样插到最前，但相对
+// 顺序保持「gradle-plugin 镜像在前、/public 在后」：marker 必须由 gradle-plugin
+// 镜像或 google() 命中，/public 对 AGP marker 的假 200 不能抢在前面。
+// 上面 noMirror 那段是同一个病的另一面：原仓库里没有的构件，镜像不能替它做决定。
+//
+// 「只追加不删改原仓库」的初衷是不改变解析**结果**，不是不改变**顺序** ——
+// 镜像命中即同一份构件，顺序变了结果不变；真不存在的版本照样落到下一个仓库。
+//
+// 另一个坑：**一个 `all {}` 回调只保证跑一次**，在回调里加仓库不会让它再被调用，
+// 所以不能指望 `addMirrors` 加完第一个就停、下一轮由回调替它补第二个 —— 实测
+// pluginManagement 里只剩 `cnb-plugin-mirror-0` 与 `cnb-plugin-central-mirror-0`，
+// `/gradle-plugin` 那条镜像根本没出现。所以 `addMirrors` 自己循环到加进去为止：
+// `all {}` 负责起头，`addMirrors` 负责加完。
+//
+// `all {}` 会被重复回调，findByName 挡住重复添加；每次新加的那条都要
+// `remove` + `addFirst` 才算插到最前。
+def addMirrors = { repositories, urls, prefix ->
+    urls.eachWithIndex { url, i ->
+        def name = prefix + i
+        if (!repositories.findByName(name)) {
+            while (!repositories.findByName(name)) {
+                def mirror = repositories.maven { repo ->
+                    repo.name = name
+                    repo.url = url
+                }
+                repositories.remove(mirror)
+                repositories.addFirst(mirror)
+            }
+        }
+    }
+}
+
+// 依赖侧真正的坑：**JitPack 的坐标会被 Maven Central 镜像直接接走。**
+//
+// 依赖仓库列表最终形如 [jitpack, cnb-mirror-0, google, mavenCentral]
+// （镜像插在最前，JitPack 由 jitpackFirst 再提到首位，见文件末尾）。
+// 本仓库的 com.github.rikkahub:markdown 只有 JitPack 有（Maven Central 上
+// 404，Google 上 404），真正的问题是排在列表最前的镜像先接到这个坐标：
+// 没被限流就是 200 + 一张「资源不存在」的 HTML 页，被限流就是 429 ——
+// 两种都让 Gradle 原地判死 —— 这也是文件末尾要有 jitpackFirst 的原因：把 JitPack
+// 提到整个列表首位，让「命中即停」，这些请求根本不发出去。
+//
+// 试过的另一条路是给镜像加 content 过滤（只放行 Central 上确实存在的 group），
+// 靠 group 级 maven-metadata.xml 判断。实测在 aliyun 上不可靠：
+// 冷门 group 一律 404（androidx / io.reactivex / okhttp3 / gson 都 404），
+// 于是 `com*` 这种宽前缀会把 com.github.rikkahub 一起放进来，窄前缀又会把
+// Central 的冷门依赖挡在外面 —— 两头不讨好，放弃。
+//
+// 所以改成按**坐标**认：JitPack 的坐标是 `com.github.<owner>:<repo>` 与
+// `com.github.<owner>.<repo>:<artifact>`，这个形状 Maven Central 上永远不会出现
+// （Central 的 com.github 下没有 <owner> 这一层）。把前缀交给镜像的 content
+// 过滤器排掉，JitPack 就在镜像那里被放过、继续走到真正的 jitpack.io。
+//
+// 注意这只解决「镜像接走」；JitPack 本身 429 时仍然会失败，那是 JitPack 的
+// 限额，重试参数（gradle.properties）与重跑兜着。
+def CENTRAL_ONLY_EXCLUDES = ['com.github.rikkahub.*']
+
+def addCentralOnlyMirror = { repositories ->
+    def name = 'cnb-mirror-central-only'
+    if (repositories.findByName(name)) {
+        return
+    }
+    repositories.maven { repo ->
+        repo.name = name
+        repo.url = 'https://maven.aliyun.com/repository/public'
+        repo.content { content ->
+            CENTRAL_ONLY_EXCLUDES.each { content.excludeGroupByRegex(it) }
+        }
+    }
+}
+
+if (System.getenv('CNB_BUILD_ID') != null) {
+    // 必须在 `all {}` 里追加，不能只在 beforeSettings 里加一次：settings 脚本
+    // 的 `repositories { ... }` 块是整体替换而不是追加，beforeSettings 阶段加进去的
+    // 仓库会被它覆盖掉，解析时只剩 google/mavenCentral/gradlePluginPortal，
+    // 镜像从头到尾没被用过（实测：debug 日志里 aliyun 出现 0 次）。
+    beforeSettings { settings ->
+        def pluginRepos = settings.pluginManagement.repositories
+        def depRepos = settings.dependencyResolutionManagement.repositories
+        // 一个回调只跑一次（见 addMirrors 的注释），所以这里只负责起头；
+        // 跳过 noMirror 的仓库（JitPack 这类），否则镜像会把它们遮死。
+        pluginRepos.all {
+            if (!noMirror(it)) {
+                addMirrors(pluginRepos, PLUGIN_MIRROR_URLS, 'cnb-plugin-mirror-')
+                addMirrors(pluginRepos, PLUGIN_CENTRAL_MIRROR_URLS, 'cnb-plugin-central-mirror-')
+            }
+        }
+        // 被排除的坐标（JitPack）只会落到 addCentralOnlyMirror 那个过滤过的镜像上，
+        // 不会跑回 cnb-mirror-0，所以两者谁先谁后无所谓；排后面是为了对
+        // 非 JitPack 的解析路径零影响。
+        depRepos.all {
+            if (!noMirror(it)) {
+                addMirrors(depRepos, MIRROR_URLS, 'cnb-mirror-')
+                addCentralOnlyMirror(depRepos)
+            }
+        }
+    }
+
+    // JitPack 仓库前置到 Maven Central 之前。
+    //
+    // 真正的失败长这样（stage Android Lint，cnb-mhn-1k61ntauj）：
+    //
+    //   Could not resolve com.github.rikkahub:markdown:d79a97cc8e
+    //     > Could not GET 'https://repo.maven.apache.org/maven2/com/github/rikkahub/
+    //        markdown/d79a97cc8e/markdown-d79a97cc8e.pom'.
+    //       Received status code 429 from server: Too Many Requests
+    //
+    // 这个构件只在 JitPack 上（Maven Central 上是 404，我实测过），settings 里
+    // `mavenCentral()` 排在 `maven("https://jitpack.io")` 前面，所以每次都要先去
+    // Central 撞一次。**404 的话 Gradle 会继续试下一个仓库，429 不会**：
+    // NetworkingIssueVerifier 把 429 判成 transient，重试次数用尽后整个解析就失败，
+    // 后面那个真正有构件的仓库根本轮不到。所以把 JitPack 提到 Central 前面，
+    // 让「命中即停」，Central 那边一次请求都不发。
+    //
+    // 只挪顺序、不增删仓库；本地没有 CNB_BUILD_ID 时这句话不会执行。
+    // 按 URL 找，不按名字：`maven("https://jitpack.io")` 的默认名是 `maven`，
+    // 但仓库改名 / 同名多个时按名字猜就会挪错。
+    def jitpackFirst = { repositories ->
+        def jitpack = repositories.find { repo ->
+            repo instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository &&
+                repo.url.toString().startsWith('https://jitpack.io')
+        }
+        if (jitpack != null && repositories.indexOf(jitpack) != 0) {
+            repositories.remove(jitpack)
+            repositories.addFirst(jitpack)
+        }
+    }
+    // 同一件事的另一面：**patched jar 的本地仓库（file:）必须排在所有远端之前。**
+    //
+    // `settings.gradle.kts` 里它本来就声明在第一位，但上面的 `jitpackFirst` 会在
+    // `settingsEvaluated` 里把 JitPack 提到首位，于是本地仓库被挤到第二位：
+    //   declared            : somcpPatchedLocal -> Google -> MavenRepo -> jitpack
+    //   after jitpackFirst  : jitpack -> somcpPatchedLocal -> Google -> MavenRepo
+    // 光看顺序不致命（声明层排第一时也不会有人去别的仓库找 `.1`），但「本地仓库排第一」
+    // 这条不变量如果只靠两个回调的先后维持，就是下次一改就悄悄失效的那种安排 —— 这里
+    // 再提一次，判据落在**最终顺序**上，不落在谁先谁后执行。
+    //
+    // 它提供的版本是 `<上游>.1`（0.9.9.1 / 3.1.8.1 / 0.9.7.1），这些坐标在任何远端
+    // 仓库里都不存在。排在远端后面时会先发一批注定失败的请求
+    // （`cnb-qim-1k629pgdh` 的预热 pass 1 就是这么撞在 900s 上限上的）：
+    //
+    //   Failed to get resource: GET. [HTTP 429:
+    //     https://repo.maven.apache.org/maven2/com/github/zhkl0228/capstone/3.1.8.1/...]
+    //   Failed to get resource: GET. [HTTP 429: .../unidbg-android/0.9.9.1/...]
+    //   Failed to get resource: GET. [HTTP 429: .../keystone/0.9.7.1/...]
+    //
+    // 429 是 transient，Gradle 会重试到用尽 —— 每次都白烧几十秒，最后还可能整个解析
+    // 失败（`cnb-qim-1k629pgdh` 的预热 pass 1 就是这么超时在 900s 上限上的）。
+    // 而命中本仓库只需要读一个本地文件。
+    //
+    // 判据落在 URL 上而不是名字：MavenArtifactRepository.url 是 `file:` 开头、
+    // 且路径里带 `patched-jars-repo`（buildSrc 插件与 warmup-project.sh 都往这个
+    // 目录产出）。`noMirror` 本来就放过 `file:`，所以镜像不会替它做决定；这里只挪顺序。
+    // 排在 jitpack 之前：本地仓库是**独占**的（`.1` 只有它有），命中即停最划算。
+    def patchedLocalFirst = { repositories ->
+        def local = repositories.find { repo ->
+            repo instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository &&
+                repo.url.toString().startsWith('file:') &&
+                repo.url.toString().contains('patched-jars-repo')
+        }
+        if (local != null && repositories.indexOf(local) != 0) {
+            repositories.remove(local)
+            repositories.addFirst(local)
+        }
+    }
+    settingsEvaluated { settings ->
+        def repositories = settings.dependencyResolutionManagement.repositories
+        jitpackFirst(repositories)
+        // 再提一次本地仓库：jitpackFirst 刚把 jitpack 放到首位，本地这份要压过它。
+        patchedLocalFirst(repositories)
+    }
+}
+
+// 把复核脚本放进「当前这次构建真正的」用户目录。
+//
+// 为什么不在 init script 里比一比目录、把两者绑定起来？因为 system property 在
+// init script 求值之后才被应用，`System.getProperty` 此刻读到的还是启动时的旧值；
+// 而 `user.home` 根本不随 GRADLE_USER_HOME 变。所以只能按约定找：
+// `GRADLE_USER_HOME` 与 `user.home/.gradle` 两处都放一份（image 构建时那两处恰好
+// 是同一个路径，去重后只写一次）。
+//
+// 幂等（按长度判断要不要重写），预热、复核、每个 stage 各跑一次也没关系。
+// 失败只打 warning：真正的判据是复核那一步，缺了它会当场报出来，不在这里重复判死。
+def deployCacheOnlyScript = {
+    // 镜像把它放在 /opt/cnb：放 /opt/gradle-user-home 里的话，它会被
+    // setup-build-env.sh 的 `cp -a /opt/gradle-user-home/. $GRADLE_USER_HOME/`
+    // 一起搬进用户目录（Gradle 自己的目录布局），这里投放的判据也搅在一起。
+    def source = new File('/opt/cnb/gradle-cache-only.gradle')
+    if (!source.isFile()) {
+        return
+    }
+    def candidates = [
+        System.getenv('GRADLE_USER_HOME') ? new File(System.getenv('GRADLE_USER_HOME'), 'cnb-cache-only.gradle') : null,
+        new File(System.getProperty('user.home'), '.gradle/cnb-cache-only.gradle'),
+    ]
+    def seen = [] as Set
+    candidates.findAll { it != null }.each { target ->
+        if (!seen.add(target.canonicalPath)) {
+            return
+        }
+        try {
+            if (target.isFile() && target.length() == source.length()) {
+                return
+            }
+            target.parentFile.mkdirs()
+            target.bytes = source.bytes
+        } catch (Exception e) {
+            logger.warn("[cnb-init] could not deploy cnb-cache-only.gradle to ${target}: ${e.message}")
+        }
+    }
+}
+
+if (System.getenv('CNB_BUILD_ID') != null) {
+    deployCacheOnlyScript()
+}
