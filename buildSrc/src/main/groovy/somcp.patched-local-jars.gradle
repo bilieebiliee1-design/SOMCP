@@ -1,0 +1,385 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-only
+ *
+ * SOMCP - buildSrc/src/main/groovy/somcp.patched-local-jars.gradle
+ * Copyright (C) 2026 SOMCP authors
+ * Upstream: https://github.com/bilieebiliee1-design/SOMCP
+ *
+ * This program is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU Affero General Public License version 3 as published by
+ * the Free Software Foundation.
+ *
+ * 把 app/libs 下的 patched jar 当成「上游同名模块的高版本」发布进一个本地 Maven
+ * 仓库，让冲突解析自己挑走我们这份。
+ *
+ * 为什么需要这一步：`implementation(files("libs/unidbg-api-...-patched.jar"))` 这类
+ * 依赖在 Gradle 眼里是「无坐标的文件」，而 upstream 那份会经 unidbg-api 的 POM
+ * 传递依赖自动进来。早年两边并存也能编译，是因为上游 POM 拿不到、Gradle 把它当成
+ * 无元数据模块（不参与冲突检测）；CNB 的镜像预热把 POM 缓存下来之后，真实依赖图
+ * 第一次完整出现，于是：
+ *
+ *   Duplicate class com.github.unidbg.AbstractEmulator found in modules
+ *     unidbg-api-0.9.9-android-patched.jar and com.github.zhkl0228.unidbg:unidbg-api:0.9.9
+ *   2 files found with path 'android/sdk23/system/usr/share/zoneinfo/tzdata'
+ *     - unidbg-android-0.9.9-android-patched.jar
+ *     - com.github.zhkl0228.unidbg:unidbg-android:0.9.9
+ *
+ * 做法分两半，缺一不可：
+ *
+ *  A. **声明层替换**：`implementation(files("libs/xxx-patched.jar"))` 这类依赖在**被
+ *     声明的那一刻**换成普通坐标依赖（`ConfigurationDependencies.whenObjectAdded`）。
+ *     file 依赖根本不进图，于是上游那份没有东西跟它并存。
+ *
+ *  B. **让坐标能解析到 patched 内容**：`<project>/build/patched-jars-repo` 生成一个
+ *     最小 Maven 布局（`<group>/<module>/<version>/<module>-<version>.jar|.pom`），
+ *     jar 从 `app/libs/` 复制、version 取表里的 `x.y.z.1`；`settings.gradle.kts`
+ *     把这个仓库排在依赖仓库的**第一位**（`.1` 只有这里有，命中即停）。
+ *     **刻意不开在 `app/build/` 下**：buildDir 构建中途被清空是常态，而这份仓库只在
+ *     配置阶段写一次，清掉之后就是 `Could not find ...:0.9.9.1`（见下面 somcpPatchedRepo
+ *     那段）。
+ *     上游那份若仍从别的路径（POM 传递依赖）进图，两个版本按「高版本胜出」
+ *     冲突解析，patched 的 `.1` 胜出。
+ *     POM 里的传递依赖由 `somcpPatchedPomDependencies` 逐条照抄上游 —— 在 Gradle
+ *     眼里 `x.y.z.1` 是一个全新模块，不抄就等于把上游的依赖列表整片丢掉（capstone
+ *     / keystone 在坐标世界里没有第二个声明方，丢了两边的 jna 就没了）。
+ *
+ * 为什么是「声明时」而不是「解析后」：见下面三条死路。解析期和配置缓存的纠缠
+ * 一次也躲不过，而 `whenObjectAdded` 发生在解析之前，读的是**声明里那个文件**，
+ * 既不用去翻解析结果，也不会在配置缓存序列化时被重新求值。
+ *
+ * 版本号必须是 `x.y.z.1` 而不是 `x.y.z.patched`：Gradle 的版本比较是分段的，
+ * `patched` 这种非数字段按字符串排在数字段**之前**，于是 `0.9.9.patched < 0.9.9`，
+ * 上游那份反而胜出（实测 `unidbg-api:0.9.9.patched -> 0.9.9`）。
+ *
+ * 为什么不用「声明依赖时把 artifact 换成本地文件」（`dep.artifact { url = ... }`）：
+ * Gradle 9 已经不再认它 —— 声明里的 artifact url 在解析时不生效，只会去仓库找那个
+ * 不存在的 `patched` 版本，报 `Could not find com.x:api:2.0.patched`（本地实测）。
+ *
+ * 不变量，改之前先读：
+ *   1. `somcpPatchedJars` 是唯一口径表：文件名 ↔ 上游坐标，改 jar 必须两边一起改。
+ *      表外的一律不处理 —— `unicorn:1.0.15` 是 `unicorn.*` 唯一的来源（见
+ *      app/build.gradle.kts 里那段注释），谁替掉它 `session_open` 就
+ *      `ClassNotFoundException`。
+ *   2. 版本号必须写成 `<上游版本>.1`（纯数字追加段），否则要么被冲突解析挤掉，
+ *      要么替掉错的分支 —— 见上面 `.patched` 那条实测。
+ *   3. 生成仓库必须在 `settings.gradle.kts` 的仓库列表里；缺了它解析不到
+ *      `x.y.z.1`，报的会是「找不到依赖」而不是这里的问题。
+ *   4. `somcpPatchedPomDependencies` 与上游 POM 的 `<dependencies>` 一一对应（不含
+ *      test scope）。上游升级时两张表一起改，漏抄的那条运行期才会以
+ *      `ClassNotFoundException` 的形式出现。
+ */
+
+def parseCoordinates = { String coordinates ->
+    def parts = coordinates.split(':')
+    if (parts.length != 3) {
+        throw new GradleException("bad coordinate '${coordinates}' in somcpPatchedJars")
+    }
+    return parts as List<String>
+}
+
+def somcpPatchedJars = [
+    'unidbg-api-0.9.9-android-patched.jar': 'com.github.zhkl0228:unidbg-api:0.9.9.1',
+    'unidbg-android-0.9.9-android-patched.jar': 'com.github.zhkl0228:unidbg-android:0.9.9.1',
+    'capstone-3.1.8-android-patched.jar': 'com.github.zhkl0228:capstone:3.1.8.1',
+    'keystone-0.9.7-android-patched.jar': 'com.github.zhkl0228:keystone:0.9.7.1',
+]
+
+// 本地仓库里那份 POM 要带上的传递依赖。**空的会坏事**：
+// capstone / keystone 在坐标世界里没有任何别的声明方（`unidbg-unicorn2` 里那两条
+// exclude 就是证据），patched 版本的 POM 一旦是空壳，它们带来的
+// `jna` / `native-lib-loader` / `commons-codec` 就整片消失 —— 编译或许还过，
+// 运行期 `System.loadLibrary` 与 JNA 那几条路径直接找不到类。
+//
+// 内容是上游 POM 的 `<dependencies>` 里那些**非 test scope** 的条目，逐条照抄
+// （版本也一样）。`unidbg-api` / `unidbg-android` 互相引用那两条按 `x.y.z.1` 写，
+// 指向 patched 版本自己 —— 写 `x.y.z` 会从图上带出一份和 patched 同名的上游 jar。
+// test scope 一律不抄：那是上游自己跑测试用的。
+//
+// 裁剪只有两处：
+//   * `com.github.zhkl0228:unicorn`（上游 `unidbg-api` 的传递依赖）—— `app/build.gradle.kts`
+//     里 `unidbg-unicorn2` 那几条 exclude 把上游坐标排掉之后，靠一条显式
+//     `implementation("com.github.zhkl0228:unicorn:1.0.15")` 把它拉回来（那里有完整理由）；
+//   * `capstone` / `keystone` —— 见下，`:app` 自己声明了 `x.y.z.1` 那两条。
+def somcpPatchedPomDependencies = [
+    // capstone / keystone **不抄**：`:app` 声明了 `x.y.z.1` 那两条，POM 再抄一遍只会
+    // 多一条把上游同名模块带进图的路径 —— 而下面那组 exclude 挡的是
+    // `com.github.zhkl0228:<module>`，挡不住 POM 传递。JitPack 对同一个仓库给两种
+    // group 布局，`com.github.zhkl0228.unidbg:<module>` 的 POM 会把 `x.y.z` 吊回来
+    // （配置期 `dependencies --configuration ...` 实测出现过 333 条重复类）。
+    // 其余照抄：它们在坐标世界里没有第二个声明方，空壳 POM 会让 jna /
+    // native-lib-loader 整片消失。
+    'com.github.zhkl0228:unidbg-api:0.9.9.1': [
+        'commons-codec:commons-codec:1.21.0',
+        'org.apache.commons:commons-collections4:4.5.0',
+        'commons-io:commons-io:2.21.0',
+        'com.alibaba:fastjson:1.2.83',
+        'com.github.zhkl0228:demumble:1.0.4',
+    ],
+    'com.github.zhkl0228:unidbg-android:0.9.9.1': [
+        'com.github.zhkl0228:unidbg-api:0.9.9.1',
+        'net.dongliu:apk-parser:2.6.10',
+    ],
+    'com.github.zhkl0228:capstone:3.1.8.1': [
+        'net.java.dev.jna:jna:5.10.0',
+        'org.scijava:native-lib-loader:2.3.5',
+    ],
+    'com.github.zhkl0228:keystone:0.9.7.1': [
+        'net.java.dev.jna:jna:5.10.0',
+    ],
+]
+
+// 生成仓库的位置：`<项目>/libs/build/patched-jars-repo`。
+// 这个目录同时也是 `settings.gradle.kts` 里 `somcpPatchedLocal` 仓库的 url，
+// 所以它必须在**任何依赖被声明之前**就存在：Gradle 在 `places files()` 那一刻
+// 就把路径记成任务的输入，声明 `files()` 时目录还没建出来，报的是
+//   Cannot fingerprint input property '...': file .../patched-jars-repo does not exist
+// —— 与本插件随后要写进去的东西毫无关系，报错却隔着三层。
+// 目录不需要占位文件：本脚本求值 = 项目已配置，`mkdirs()` 是配置期的纯文件系统
+// 操作，不影响配置缓存（它不读环境、不读解析结果）。
+//
+// **为什么不放在 buildDir 下**：`build/` 整个是 AGP 的构建产物目录，构建中途被清空
+// 是常态；而 `x.y.z.1` 的 jar 与 POM 只在配置阶段写一次，清掉之后这个仓库就是空的，
+// 解析直接 `Could not find ...:0.9.9.1`。`libs/` 是检入仓库的源码区，没有东西会去
+// 清它 —— 仓库放在这里，`clean` 与配置缓存都不会波及。
+//
+// **不要换回 `project.layout.buildDirectory`**（`cnb-stn-1k629u1nl` 的 Android
+// Lint 红点就是这么来的）：`:app` 的 layout buildDirectory 是 `app/build`，而
+// `settings.gradle.kts` 位在**根**工程，那里的 `rootDir.resolve(...)` 得到的是
+// 根目录下的 `build`。两个 url 不同 = 两份互不相干的仓库 —— 插件把 `.1` 铺在
+// `app/build`，解析却去根目录那个仓库找 —— 两个 jar 全都解析不到，Kotlin 编译报
+//   Unresolved reference 'capstone' / 'keystone'
+// —— 版本号、POM 都对了，报的是「类不存在」。
+//
+// `project.projectDir` 由项目路径决定（`:app` -> `<root>/app`），而 `rootDir` 是
+// 「仓库根」在这里唯一的定义，两边算出来的必须是同一个绝对路径。
+def somcpPatchedRepo = new File(project.projectDir, 'libs/build/patched-jars-repo')
+somcpPatchedRepo.mkdirs()
+
+// 本地仓库里那份 POM。**必须带 dependencies**：见 somcpPatchedPomDependencies 的注释，
+// 空壳 POM 会让 capstone / keystone 的传递依赖整片消失，而它们在坐标世界里没有
+// 第二个声明方。Gradle 的世界里 `x.y.z.1` 与 `x.y.z` 是两个互不相干的模块，上游
+// POM 的依赖不会自动搬过来 —— 这份 POM 就是那份元数据的本地副本。
+def pomTextFor = { String coordinates ->
+    def (group, module, version) = parseCoordinates(coordinates)
+    def deps = somcpPatchedPomDependencies[coordinates] ?: []
+    def depsXml = deps.collect { String dep ->
+        def (depGroup, depModule, depVersion) = parseCoordinates(dep)
+        // **这里不写 `<type>`，jna 也不例外。**
+        //
+        // 早先为了让 patched POM 里的 jna 跟 `:app` 那条 `jna:5.10.0@aar` 对齐，这里
+        // 写过一个 `<type>aar</type>`。看着对，代价是它对**所有**解析这份 POM 的地方
+        // 生效：AGP 的 `:app:androidLintTool` 自己带一份 `jna:5.6.0`（只有 jar），
+        // 被强成 aar 之后它去要
+        //   https://.../net/java/dev/jna/jna/5.6.0/jna-5.10.0.aar
+        // —— 文件名 5.10.0、目录 5.6.0，本来就取不到（cnb-h86-1k62fspsh 的
+        // Android Lint）。POM 是模块级元数据，管不了调用方要哪种 artifact。
+        //
+        // jna 的 artifact 取舍由 `app/build.gradle.kts` 末尾那条 `artifactSelection`
+        // 负责（只对 5.10.0 选 aar），POM 只声明「有这么个依赖」。
+        """    <dependency>
+      <groupId>${depGroup}</groupId>
+      <artifactId>${depModule}</artifactId>
+      <version>${depVersion}</version>
+    </dependency>
+"""
+    }.join('')
+    """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>${group}</groupId>
+  <artifactId>${module}</artifactId>
+  <version>${version}</version>
+  <packaging>jar</packaging>
+  <dependencies>
+${depsXml}  </dependencies>
+</project>
+"""
+}
+
+/**
+ * patched jar 的 file 依赖 -> 普通坐标依赖。
+ *
+ * `app/build.gradle.kts` 里的四条依赖写成
+ *
+ *     implementation(patchedJar("unidbg-api-0.9.9-android-patched.jar", "com.github.zhkl0228:unidbg-api:0.9.9.1"))
+ *
+ * 也就是「一个 file 依赖 + 一个没人读的坐标」。真正让 `x.y.z.1` 进图的是这里：
+ * 在同名文件依赖**声明的那一刻**把它换成坐标依赖。为什么必须在声明时换，见文件
+ * 开头「为什么不…」那段 —— 简言之，任何「解析之后再摘文件」的做法都会把配置缓存
+ * 和变体视图搅乱，而声明层是唯一一次干净的机会。
+ */
+def patchedCoordinatesFor = { Object dependency ->
+    if (!(dependency instanceof org.gradle.api.artifacts.FileCollectionDependency)) {
+        return null
+    }
+    Set<String> wanted
+    try {
+        wanted = dependency.files.files.collect { it.name } as Set
+    } catch (Exception e) {
+        // `files()` 里写了不存在的路径时这里会抛。不是本插件该管的事：原样报出去，
+        // 免得把「文件缺失」误当成「不是 patched jar」而静默放行。
+        throw new GradleException("cannot read the file dependency ${dependency}: ${e.message}", e)
+    }
+    if (wanted.isEmpty()) {
+        return null
+    }
+    def hits = somcpPatchedJars.findAll { fileName, coordinates -> wanted.contains(fileName) }
+    if (hits.isEmpty()) {
+        return null
+    }
+    if (hits.size() != 1 || wanted.size() != 1) {
+        throw new GradleException(
+            "patched jar dependency ${wanted} must point at exactly one file from somcpPatchedJars " +
+                "(matched ${hits.keySet()}); see buildSrc/src/main/groovy/somcp.patched-local-jars.gradle"
+        )
+    }
+    def (group, module, version) = parseCoordinates(hits.values().first())
+    def source = new File(project.projectDir, "libs/${hits.keySet().first()}")
+    if (!source.isFile()) {
+        throw new GradleException(
+            "missing patched jar ${source}. app/libs must be checked out next to the build " +
+                'script; the CNB warmup project only ever resolves, it never replaces.'
+        )
+    }
+    def targetDir = new File(somcpPatchedRepo, "${group.replace('.', '/')}/${module}/${version}")
+    targetDir.mkdirs()
+    def targetJar = new File(targetDir, "${module}-${version}.jar")
+    // 内容没变就不重写：这个目录是解析输入的一部分，时间戳乱动会让下游反复重跑。
+    if (!targetJar.isFile() || targetJar.length() != source.length()) {
+        targetJar.bytes = source.bytes
+    }
+    def targetPom = new File(targetDir, "${module}-${version}.pom")
+    def pom = pomTextFor((String) hits.values().first())
+    if (!targetPom.isFile() || targetPom.text != pom) {
+        targetPom.text = pom
+    }
+    logger.lifecycle("[patched-jars] ${hits.keySet().first()} -> ${hits.values().first()}")
+    return hits.values().first()
+}
+
+// 上游还有**第二个 group**：JitPack 对同一个仓库给两种坐标布局，
+// `com.github.<user>` 与 `com.github.<user>.<repo>`，unidbg 两个都在用。版本冲突解析
+// 只发生在 `group:module` 完全相同的候选之间，所以 patched 的 `x.y.z.1` 够不着
+// `com.github.zhkl0228.unidbg:unidbg-api` —— 那是另一份模块。
+//
+// 这里曾经按 group/module 把它整块 exclude 掉，那条路是错的：`exclude(group:, module:)`
+// 不认版本，`.1` 与上游同 group 同 module，一起被删干净（看着不报重复类，APK 里却没有
+// unidbg 的类）。现在只靠「两个候选同坐标、高版本胜出」，不额外 exclude —— 详见下面
+// `configureEach` 后面那段注释。
+
+// 上游那份若是从 `com.github.zhkl0228.unidbg:<module>` 的 POM 传递进来的，`.1` 够不着
+// 它 —— 所以 `somcpPatchedPomDependencies` 里也不再列 capstone / keystone（`:app` 自己
+// 声明了这两条 `.1`），免得自己给自己造一条把上游吊回图的路径。
+
+// 只动 `files()` 这一种声明：普通坐标依赖、platform、project 依赖原样通过。
+// `configureEach` 保证后声明的 configuration（AGP 建的 debug*/release*/test* 等）
+// 也挂得上钩子。
+//
+// 换的方式是 `remove` + `add`（**不是** `useTarget`）：`useTarget()` 属于
+// `DependencySubstitution`，只有 `ModuleDependency` / `ProjectDependency` 才有，
+// file 依赖是 `FileCollectionDependency`，调用直接抛
+//   No signature of method: ...DefaultFileCollectionDependency.useTarget()
+// —— 预热第一遍就是这个红点（cnb-l5r-1k62ama57）。
+//
+// `remove` 的坑在「边迭代边改集合」：`whenObjectAdded` 的回调运行时，`DependencySet`
+// 并不在迭代中（Gradle 先加完再回调），所以这里删自己这一条是安全的；新加的坐标依赖
+// 会再触发一次回调，此时 `patchedCoordinatesFor()` 返回 null（判据落在类型上，不靠状态位），
+// 不会自己咬自己。顺序也保住了：`add` 追加在末尾，同一条依赖块里后面的声明照旧排在它后面。
+//
+// **顺序要紧：先 `add` 坐标依赖、再 `remove` file 依赖。** 反过来的话，中间那一刻配置里
+// 一条依赖都不剩，AGP 随后读声明时可能看到空集合；先 add 则集合始终非空。
+//
+// 别换成 `addLater` —— 它正是下面那条「惰性」限制要挡的写法。
+//
+// `whenObjectAdded` 的契约要求回调是**非惰性**的（DependencySet.addLater 会直接抛
+// "Cannot mutate the dependency set in a lazy manner"）。声明层替换必须在这一刻完成 ——
+// file 依赖一旦进了图，就没有「解析后再摘」的干净时机（见文件开头三条死路）。
+project.configurations.configureEach { configuration ->
+    configuration.dependencies.whenObjectAdded { dependency ->
+        def coordinates = patchedCoordinatesFor(dependency)
+        if (coordinates == null) {
+            return
+        }
+        configuration.dependencies.add(
+            project.dependencies.create((String) coordinates)
+        )
+        configuration.dependencies.remove(dependency)
+        logger.lifecycle("[patched-jars] ${configuration.name}: ${dependency.name} -> ${coordinates}")
+    }
+    // **这里绝不能按 group/module 加 exclude。**
+    //
+    // 声明层替换之后，patched 版本是 `x.y.z.1`、上游是 `x.y.z`，两者 group / module
+    // 逐字相同、只有版本不同。`exclude(group:, module:)` 不认版本，会把 patched 那份
+    // 一起排掉 —— 于是 unidbg-api / unidbg-android 的**所有** jar 都从 classpath
+    // 上消失，Debug 构建不报重复类了（看着像修好了），但 APK 里没有 unidbg 的类，
+    // session_open 时 ClassNotFoundException。本地实测：加 exclude 时
+    //   all files = [... 没有 unidbg-api / unidbg-android ...]
+    // 去掉 exclude 时
+    //   all files = [..., unidbg-android-0.9.9.1.jar, unidbg-api-0.9.9.1.jar, ...]
+    // 且 duplicated = []。
+    //
+    // 上游 `x.y.z` 不需要另外排：`.1` 与它同坐标，Gradle 的冲突解析按版本取高，
+    // `.1` 必然胜出，上游那份连 artifact 都不会落地。实测依赖树里只剩 `0.9.9.1`。
+    //
+    // **但 `com.github.zhkl0228.unidbg` 那一份压不住**：JitPack 对同一个仓库给两种
+    // group 布局，`unidbg-unicorn2` 的 POM 从 `com.github.zhkl0228.unidbg` 吊回
+    // unidbg-api / unidbg-android / dynarmic / hypervisor / ios / kvm，而那是**另一个
+    // group**，与我们的 `com.github.zhkl0228:x:0.9.9.1` 不是同一个模块候选 —— 版本冲突
+    // 只在 group:module 完全相同之间发生，`.1` 够不着它。实测（插件的 exclude 撤掉、
+    // 声明层替换生效之后）两个 group 版本的 jar 同时落在 classpath 上：
+    //   unidbg-api-0.9.9.1.jar + unidbg-api-0.9.9.jar
+    // 逐类比对，patched jar 与这两个上游 jar 各有 300 个类完全重合 ——
+    // `checkDebugDuplicateClasses` 照样红，只是文件名不同、报错长相换了。
+    //
+    // 所以把 `.unidbg` 那一组的同名模块用解析期替换对齐到 `.1`：`eachDependency` 是
+    // **规则**不是 `exclude`，它改的是「选哪个模块」，不删任何候选，因此不会像
+    // exclude 那样把 `.1` 一起带走。
+    configuration.resolutionStrategy.eachDependency {
+        def requested = it.requested
+        if (requested.group != 'com.github.zhkl0228.unidbg') {
+            return
+        }
+        def target = somcpPatchedJars.values().find { String value ->
+            parseCoordinates(value)[1] == requested.name
+        }
+        if (target != null) {
+            it.useTarget((String) target)
+            return
+        }
+        // 表外、但同属那一组 group 的模块（`unidbg-unicorn2` 自己 / `dynarmic` /
+        // `hypervisor` / `ios` / `kvm` ...）：没有 patched 版可对齐，就把 group 换回
+        // `com.github.zhkl0228`。JitPack 的两种布局是同一个仓库，换过去之后与 `:app`
+        // 里那条显式声明汇合成同一个模块 —— 否则两份同名 jar 各算一个模块
+        // （cnb-omu-1k62bcclt 的 `checkDebugDuplicateClasses`：
+        //   duplicate class ... Unicorn2Backend found in modules
+        //     unidbg-unicorn2-0.9.9.jar -> ... (com.github.zhkl0228.unidbg:unidbg-unicorn2:0.9.9)
+        //     unidbg-unicorn2-0.9.9.jar -> ... (com.github.zhkl0228:unidbg-unicorn2:0.9.9)
+        // 同一份 jar、两个 group）。
+        it.useTarget("com.github.zhkl0228:${requested.name}:${requested.version}")
+    }
+}
+
+// `app/build.gradle.kts` 里用 `patchedJar(fileName, coordinates)` 取依赖；返回普通
+// `Dependency`（file 依赖，由上面的钩子换成坐标）。只做「文件在表里 + 坐标三段式」
+// 的校验，别的一概不管。
+ext.patchedLocalJarDependency = { String fileName, String patchedCoordinates ->
+    if (!somcpPatchedJars.containsKey(fileName)) {
+        throw new IllegalArgumentException(
+            "unknown patched jar '${fileName}'; add it to somcpPatchedJars in " +
+                'buildSrc/src/main/groovy/somcp.patched-local-jars.gradle'
+        )
+    }
+    def declared = parseCoordinates(patchedCoordinates)
+    def expected = parseCoordinates(somcpPatchedJars[fileName])
+    if (declared[0] != expected[0] || declared[1] != expected[1] || declared[2] != expected[2]) {
+        throw new IllegalArgumentException(
+            "patched jar '${fileName}' declared as '${patchedCoordinates}' but the table says " +
+                "'${somcpPatchedJars[fileName]}'; the table is the single source of truth"
+        )
+    }
+    def jar = new File(project.projectDir, "libs/${fileName}")
+    if (!jar.isFile()) {
+        throw new GradleException("missing patched jar ${jar} (app/libs must be checked out with the build script)")
+    }
+    return project.dependencies.create(project.files(jar))
+}
