@@ -406,3 +406,30 @@ dependencies {
     // Argon2 key derivation for encrypted backup/restore
     implementation("com.lambdapioneer.argon2kt:argon2kt:1.6.0")
 }
+
+// `net.java.dev.jna:jna:5.10.0` 在同一个依赖图里有两个 artifact，且**同版本**：
+// 上面那条 `@aar` 加上 capstone / keystone 的 POM 各自带的 jar。Gradle 的冲突解析
+// 只在**模块**层面合并，同版本的模块只会剩一个，但 artifact 是两条（`.aar` 与
+// `.jar`），于是 checkDebugDuplicateClasses 报满屏
+//   Duplicate class com.sun.jna.CallbackReference found in modules
+//     jna-5.10.0.aar -> jna-5.10.0-runtime and jna-5.10.0.jar -> jna-5.10.0
+// 这类「同一个模块的两个 artifact」冲突，`exclude` 与版本对齐都救不了 —— 它们按
+// group:module 匹配，会把 `.aar` 一起排掉（实测剩下的 classpath 里连 jna 都没有）。
+//
+// 必须留 `.aar` 而不是 `.jar`：`libjnidispatch.so`（arm64-v8a / armeabi-v7a / x86 /
+// x86_64）只在 aar 里，jna 在 Android 上靠它加载 native；只留 jar 会在运行期
+// UnsatisfiedLinkError。aar 内含 classes.jar + jni/*，两者都齐。
+//
+// 做法是把该模块所有变体的文件列表重写成只剩 aar 那一个 artifact。
+dependencies {
+    components {
+        withModule("net.java.dev.jna:jna") {
+            allVariants {
+                withFiles {
+                    removeAllFiles()
+                    addFile("jna-5.10.0.aar")
+                }
+            }
+        }
+    }
+}
