@@ -1553,10 +1553,7 @@ class UnidbgEmulator(private val context: Context) {
             ).put(
                 "persistent",
                 true
-            ).put(
-                "source",
-                "unidbg-upstream-mcp"
-            ).put("schemas", JSONArray(UnidbgMcpJsonBridge.toFastJsonText(schemas)))
+            ).put("source", "unidbg-upstream-mcp").put("schemas", JSONArray(schemas.toString()))
         }.getOrElse { error ->
             JSONObject().put(
                 "ok",
@@ -1574,21 +1571,21 @@ class UnidbgEmulator(private val context: Context) {
     fun sessionNativeToolCall(live: LiveSession, toolName: String, args: JSONObject): JSONObject = synchronized(live.lock) {
         runCatching {
             val tools = nativeMcpTools(live)
-            // unidbg's dispatchTool(String, JSONObject) names a fastjson type in its
-            // signature, but fastjson's JSONObject is a java.util.Map and unidbg only
-            // sends it getString/getIntValue/getJSONArray and friends. Hand it a Map
-            // proxy that answers those, so no fastjson class is loaded at all.
+            val fastJsonClass = Class.forName("com.alibaba.fastjson.JSONObject")
+            val fastArgs = fastJsonClass.getConstructor(
+                Map::class.java
+            ).newInstance(jsonObjectToMap(args))
             val dispatch = tools.javaClass.getDeclaredMethod(
                 "dispatchTool",
                 String::class.java,
-                Class.forName("com.alibaba.fastjson.JSONObject")
+                fastJsonClass
             ).apply {
                 isAccessible =
                     true
             }
-            val result = dispatch.invoke(tools, toolName, UnidbgMcpJsonBridge.argView(args))
+            val result = dispatch.invoke(tools, toolName, fastArgs)
             JSONObject(
-                UnidbgMcpJsonBridge.toFastJsonText(result)
+                result.toString()
             ).put(
                 "persistent",
                 true
@@ -1623,6 +1620,19 @@ class UnidbgEmulator(private val context: Context) {
         live.objects["nativeMcpServer"] = server
         live.objects["nativeMcpTools"] = tools
         return tools
+    }
+
+    private fun jsonObjectToMap(value: JSONObject): Map<String, Any?> {
+        val result = LinkedHashMap<String, Any?>()
+        value.keys().forEach { key -> result[key] = jsonValueToJava(value.opt(key)) }
+        return result
+    }
+
+    private fun jsonValueToJava(value: Any?): Any? = when (value) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> jsonObjectToMap(value)
+        is JSONArray -> (0 until value.length()).map { jsonValueToJava(value.opt(it)) }
+        else -> value
     }
 
     private fun reflectArgument(live: LiveSession, value: Any?, type: Class<*>): Any? {
