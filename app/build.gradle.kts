@@ -334,7 +334,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-sse:5.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
-    implementation("org.jsoup:jsoup:1.22.2")
+    // 1.23.1 is the first release that fixes CVE-2026-71497 (Cleaner exposing markup
+    // with a custom Safelist) and the XML namespace-scope rewrite that closes
+    // CVE-2026-75140 (quadratic time/memory on deeply nested xmlns documents); it also
+    // caps the XML builder's nesting depth, which 1.22.2 left at Integer.MAX_VALUE.
+    implementation("org.jsoup:jsoup:1.23.2")
     implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
     implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
     implementation(files("libs/capstone-3.1.8-android-patched.jar"))
@@ -343,7 +347,14 @@ dependencies {
     implementation("commons-codec:commons-codec:1.21.0")
     implementation("org.apache.commons:commons-collections4:4.5.0")
     implementation("commons-io:commons-io:2.21.0")
-    implementation("com.alibaba:fastjson:1.2.83")
+    // 1.2.84 is the upstream fix release for CVE-2026-16723 (CWE-502, the
+    // autoType deserialization gadget chain reported against 1.2.83). unidbg's
+    // patched jars name fastjson types in their signatures and call
+    // fastjson.util.IOUtils.close on the shutdown path, so the artifact has to
+    // stay; bumping it is the whole fix. 1.2.84 keeps the API unidbg relies on:
+    // JSONObject(Map), and toJSONString() -- inherited from JSON in both
+    // releases, so McpTools#pollEvents has nothing to break on.
+    implementation("com.alibaba:fastjson:1.2.84")
     implementation("com.github.zhkl0228:demumble:1.0.4")
     implementation("net.dongliu:apk-parser:2.6.10")
     implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9") {
