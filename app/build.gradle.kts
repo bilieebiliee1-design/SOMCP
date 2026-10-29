@@ -343,7 +343,15 @@ dependencies {
     implementation("commons-codec:commons-codec:1.21.0")
     implementation("org.apache.commons:commons-collections4:4.5.0")
     implementation("commons-io:commons-io:2.21.0")
-    implementation("com.alibaba:fastjson:1.2.83")
+    // No com.alibaba:fastjson here on purpose. unidbg's patched jars reference
+    // fastjson types (McpTools#dispatchTool takes a fastjson JSONObject, and
+    // several classes call fastjson.util.IOUtils.close), but the classes are only
+    // touched on demand; UnidbgMcpJsonBridge supplies a Map for the argument and
+    // a proxy for the result, so nothing loads fastjson at runtime. Keeping the
+    // artifact out removes the autoType/deserialization surface entirely
+    // (com.alibaba:fastjson:1.2.83 -> CVE-2026-16723). Note 1.2.84 is not a
+    // drop-in replacement either: it drops JSONObject#toJSONString(), which
+    // McpTools calls on the returned object.
     implementation("com.github.zhkl0228:demumble:1.0.4")
     implementation("net.dongliu:apk-parser:2.6.10")
     implementation("com.github.zhkl0228:unidbg-unicorn2:0.9.9") {
