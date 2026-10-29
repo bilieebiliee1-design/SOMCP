@@ -339,7 +339,18 @@ project.configurations.configureEach { configuration ->
         }
         if (target != null) {
             it.useTarget((String) target)
+            return
         }
+        // 表外、但同属那一组 group 的模块（`unidbg-unicorn2` 自己 / `dynarmic` /
+        // `hypervisor` / `ios` / `kvm` ...）：没有 patched 版可对齐，就把 group 换回
+        // `com.github.zhkl0228`。JitPack 的两种布局是同一个仓库，换过去之后与 `:app`
+        // 里那条显式声明汇合成同一个模块 —— 否则两份同名 jar 各算一个模块
+        // （cnb-omu-1k62bcclt 的 `checkDebugDuplicateClasses`：
+        //   duplicate class ... Unicorn2Backend found in modules
+        //     unidbg-unicorn2-0.9.9.jar -> ... (com.github.zhkl0228.unidbg:unidbg-unicorn2:0.9.9)
+        //     unidbg-unicorn2-0.9.9.jar -> ... (com.github.zhkl0228:unidbg-unicorn2:0.9.9)
+        // 同一份 jar、两个 group）。
+        it.useTarget("com.github.zhkl0228:${requested.name}:${requested.version}")
     }
 }
 
