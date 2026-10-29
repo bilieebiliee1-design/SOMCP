@@ -52,8 +52,6 @@ rizin-sdk/
 *.log
 *.tmp
 .tmp/
-# CNB 流水线的临时工作目录（等价于 GitHub Actions 的 RUNNER_TEMP）
-.ci-tmp/
 *.bak
 *.swp
 *.hprof
