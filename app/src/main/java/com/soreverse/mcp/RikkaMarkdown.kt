@@ -51,15 +51,38 @@ import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.html.HtmlGenerator
 import org.intellij.markdown.parser.MarkdownParser
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
+import org.jsoup.parser.Parser
 
 private val markdownFlavour by lazy {
     GFMFlavourDescriptor(makeHttpsAutoLinks = true, useSafeLinks = true)
 }
 
 private val markdownParser by lazy { MarkdownParser(markdownFlavour) }
+
+// Hard ceiling on the HTML we will hand to the DOM builder. Markdown that renders past
+// this is truncated: a chat bubble is not worth an OOM, and Jsoup.parse(String) has no
+// input-size limit of its own.
+private const val MAX_MARKDOWN_HTML_CHARS = 2_000_000
+
+// Nesting cap for the DOM. jsoup 1.22.2's HTML tree builder defaulted to 512 open
+// elements and its XML builder to unbounded; 1.23.2 caps both at 512. Naming it here
+// keeps the limit explicit and gives the Compose node walker a bound it can rely on.
+private const val MAX_MARKDOWN_DOM_DEPTH = 256
+
+private val markdownDomParser by lazy { Parser.htmlParser().setMaxDepth(MAX_MARKDOWN_DOM_DEPTH) }
+
+private fun parseMarkdownHtml(html: String): Document {
+    val bounded = if (html.length > MAX_MARKDOWN_HTML_CHARS) {
+        html.substring(0, MAX_MARKDOWN_HTML_CHARS)
+    } else {
+        html
+    }
+    return Jsoup.parse(bounded, "", markdownDomParser)
+}
 
 private data class MarkdownParseResult(val content: String, val ast: ASTNode, val html: String)
 
@@ -91,7 +114,7 @@ internal fun RikkaMarkdown(content: String, modifier: Modifier = Modifier, selec
     }
     val body: @Composable () -> Unit = {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            val document = remember(parsed.html) { Jsoup.parse(parsed.html) }
+            val document = remember(parsed.html) { parseMarkdownHtml(parsed.html) }
             document.body().childNodes().forEach { MarkdownNode(it) }
         }
     }
