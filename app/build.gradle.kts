@@ -334,7 +334,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-sse:5.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.github.rikkahub:markdown:d79a97cc8e")
-    implementation("org.jsoup:jsoup:1.22.2")
+    // 1.23.1 is the first release that fixes CVE-2026-71497 (Cleaner exposing markup
+    // with a custom Safelist) and the XML namespace-scope rewrite that closes
+    // CVE-2026-75140 (quadratic time/memory on deeply nested xmlns documents); it also
+    // caps the XML builder's nesting depth, which 1.22.2 left at Integer.MAX_VALUE.
+    implementation("org.jsoup:jsoup:1.23.2")
     implementation(files("libs/unidbg-api-0.9.9-android-patched.jar"))
     implementation(files("libs/unidbg-android-0.9.9-android-patched.jar"))
     implementation(files("libs/capstone-3.1.8-android-patched.jar"))
