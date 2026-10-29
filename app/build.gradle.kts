@@ -431,9 +431,21 @@ dependencies {
 //   Searched in .../net/java/dev/jna/jna/5.6.0/jna-5.10.0.aar
 // 那条 URL 永远不会存在，Android Lint 直接红（cnb-h86-1k62fspsh）。
 // 判据要落在「这个模块的 5.10.0」上，而不是「这个模块的所有变体」。
+//
+// **版本也要判**：`artifactSelection` 若只按 group+name 匹配，`:app:androidLintTool`
+// 那条 `jna:5.6.0` 同样会被要求选 aar —— 而 5.6.0 只有 jar。本地实测该写法在普通
+// 配置上会退回来（日志不报错），但那正是「看起来好了」的一类：真到 AGP 的 lint 工具
+// 配置里，`Could not find jna-5.6.0.aar` 会再次出现。加上 `requested.version == "5.10.0"`
+// 才是判据落点 —— 只有 app 运行时那条需要 aar。
+//
+// 本地实测两个方向：
+//   jna 5.10.0（app 运行时）-> jna-5.10.0.aar，duplicated = []
+//   jna 5.6.0（lint 工具）  -> jna-5.6.0.jar，原样放行
 configurations.configureEach {
     resolutionStrategy.eachDependency {
-        if (it.requested.group == "net.java.dev.jna" && it.requested.name == "jna") {
+        if (it.requested.group == "net.java.dev.jna" && it.requested.name == "jna" &&
+            it.requested.version == "5.10.0"
+        ) {
             it.artifactSelection {
                 it.selectArtifact("aar", "aar", null)
             }
