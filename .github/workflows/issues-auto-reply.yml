@@ -135,6 +135,18 @@ jobs:
             // 描述性用法会让规则失效，属于同一类误伤。
             const hasCjkMark = /日志|logcat|堆栈|复现步骤|抓取/i.test(txt);
 
+            // 建议 / 需求类 issue 不需要日志。#185（清理仓库根目录的临时测试
+            // 报告文件）正文只有 Summary + Suggestion，既无日志也无复现步骤，
+            // 被上面的无日志闸误判成「缺日志的 bug 报告」而自动关闭并锁了
+            // 讨论——提交者提的是建议，不是故障反馈。判定口径：正文/标题里
+            // 出现建议、需求、提议类措辞即视为建议类，直接放行，不走关闭闸。
+            const SUGGESTION_MARK = /(^|\n|\s)[#*\-]*\s*(建议|提议|需求|期望|希望|可以考虑|建议将|建议在|建议为|feature\s+request|enhancement|suggestion|proposal|please\s+(add|support|consider)|consider\s+(adding|removing|including)|would\s+be\s+(nice|great|good)|it\s+would\s+be\s+better)/i;
+            if (SUGGESTION_MARK.test(txt)) {
+              console.log('Issue #' + issue_number + ' looks like a suggestion/feature request, not a bug report; keep it open.');
+              core.setOutput('rejected', 'false');
+              return;
+            }
+
             if (hasAttachment || hasCodeFence || hasTrackerHeader || hasAsciiMark || hasCjkMark) {
               console.log('Issue #' + issue_number + ' carries log/attachment evidence; keep it open.');
               core.setOutput('rejected', 'false');
