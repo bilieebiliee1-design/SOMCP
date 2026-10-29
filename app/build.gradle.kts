@@ -420,15 +420,22 @@ dependencies {
 // x86_64）只在 aar 里，jna 在 Android 上靠它加载 native；只留 jar 会在运行期
 // UnsatisfiedLinkError。aar 内含 classes.jar + jni/*，两者都齐。
 //
-// 做法是把该模块所有变体的文件列表重写成只剩 aar 那一个 artifact。
-dependencies {
-    components {
-        withModule("net.java.dev.jna:jna") {
-            allVariants {
-                withFiles {
-                    removeAllFiles()
-                    addFile("jna-5.10.0.aar")
-                }
+// 做法是在**解析期**把这一组的产物换成 aar 那一个文件：`eachDependency` 是规则，
+// 只改「选哪个模块/哪个 artifact」，不删候选，也不动其它模块的解析结果。
+//
+// 为什么不是 `components.withModule(...).allVariants { withFiles { ... } }`：那个钩子
+// 对**所有**变体生效，包括 AGP 自己拉起来的 `:app:androidLintTool` —— 它会请求
+// `net.java.dev.jna:jna:5.6.0`（lint 自带的坐标），被同一份 withFiles 改写成
+// 「只要 jna-5.10.0.aar」，于是
+//   Could not find jna-5.10.0.aar (net.java.dev.jna:jna:5.6.0)
+//   Searched in .../net/java/dev/jna/jna/5.6.0/jna-5.10.0.aar
+// 那条 URL 永远不会存在，Android Lint 直接红（cnb-h86-1k62fspsh）。
+// 判据要落在「这个模块的 5.10.0」上，而不是「这个模块的所有变体」。
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (it.requested.group == "net.java.dev.jna" && it.requested.name == "jna") {
+            it.artifactSelection {
+                it.selectArtifact("aar", "aar", null)
             }
         }
     }
