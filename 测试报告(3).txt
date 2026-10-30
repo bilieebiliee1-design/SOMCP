@@ -1,0 +1,592 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# SO MCP 第四轮复测报告
+
+**复测样本：** `libflass.so`  
+**架构：** AArch64 / ELF64 / Little Endian  
+**大小：** 5432 字节  
+**原始 SHA-256：**
+
+```text
+7eed081e347cc98a99ce98106891a0e2bef8dd2a5cef0488a537499ab3212dbe
+```
+
+**运行时：**
+
+| 项 | 第三轮 | 第四轮 |
+|---|---|---|
+| 工具数 | 35 | 35 |
+| 应用版本 | 1.0.0 / versionCode 1 | 1.0.0 / versionCode 1 |
+| `librz_native.so` 大小 | 1,093,400 | **3,683,504** |
+| `librz_native.so` sha256_16 | `72497e005a2b28cb` | **`dd0e10904c59db0d`** |
+
+原生库体积约扩大到 3.4 倍，说明本轮不仅是 Java 适配层调整，Rizin 侧也发生了明显重建。
+
+---
+
+# 一、总体结论
+
+本轮在第三轮基础上又有实质进展，但**底层 Unidbg 语义问题与完整动态调试结果回收仍未解决**。
+
+### 本轮明确改善
+
+1. capability registry 对 Rizin / LIEF / xAnSo / Unidbg 的声明显著扩展；
+2. Unidbg debugger 已可实际：
+   - 添加断点；
+   - 查询断点列表；
+   - 删除断点；
+   - 调用 `single_step` / `status` / `trace_events` 接口；
+3. xAnSo 侧已暴露上游风格 `help` / `build-section`，并声明 upstream commit；
+4. 工作区打开结果对函数计数语义更加明确；
+5. 字符串结果继续保持 43 条、UTF-8、带 confidence，无第三轮前那种 UTF-16 误报；
+6. 第三轮已修复项在本轮**未见回归**：
+   - `instructionIndex`
+   - 短函数名
+   - 完整节头跳过
+   - ESIL 起点
+   - 搜索 fileOffset
+   - 反汇编边界
+
+### 本轮仍未解决 / 新出现的事实
+
+1. signal/setjmp 目标函数仍返回 `-1`；
+2. `traced=true` 后 `trace_events` 仍是空列表；
+3. memory maps 仍不含 SP 所在栈映射；
+4. 寄存器格式仍混用十进制与 `unidbg@0x...`；
+5. `diff_so` 仍是 `fast-byte-diff`，无函数相似度；
+6. `edit_fix_sections` 在跳过时仍返回 64 个候选差异区间；
+7. `errors` 目录未包含实测出现的 `EMULATOR_SESSION_NOT_FOUND`；
+8. capability registry 的“完整覆盖”声明，与本轮**可验证执行路径**之间仍有明显差距。
+
+---
+
+# 二、第三轮问题复测总表
+
+| 第三轮编号 | 问题 | 第四轮结果 |
+|---|---|---|
+| H3-01 | Unidbg signal/setjmp 返回 `-1` | **未修复底层结果**；仍带 `suspicious` 警告 |
+| M3-01 | Trace 无结果回收 | **接口已出现，但实测事件为空** |
+| M3-02 | Memory maps 不含完整模拟器映射 | **未修复** |
+| M3-03 | 寄存器格式不统一 | **未修复** |
+| M3-04 | `diff_so` 无函数相似度 | **未修复** |
+| M3-05 | 完整 debugger 生命周期缺失 | **部分修复**（status / remove / single_step 可用；trace 内容仍空） |
+| L3-01 | xAnSo 跳过仍返回 64 候选差异 | **仍存在** |
+| L3-02 | 真实无节头修复路径未验证 | **本轮仍未验证** |
+| L3-03 | 真实 UTF-16 召回未验证 | **本轮仍未验证** |
+
+第三轮已修复且本轮保持稳定：
+
+- `edit_asm instructionIndex`
+- `edit_asm` 短函数名
+- 完整节头时 xAnSo 不重写
+- xAnSo SHA-256 前后一致
+- UTF-16 误报消失
+- 快速 diff 性能正常
+
+---
+
+# 三、已确认保持或新增可用的能力
+
+## 3.1 静态分析基线稳定
+
+- program headers：9
+- dynamic entries：25
+- ELF magic 搜索：`fileOffset=0x0`
+- ESIL 起点：`startVa=0x978`，后续 PC `0x97c/0x980/0x984`
+- 反汇编边界：`0x978-0x9dc`，size=100
+- rizin-ghidra `pdg` 可用
+- 只读 Rizin 命令 `iIj` 可用
+
+## 3.2 汇编编辑路径稳定
+
+短名 + `instructionIndex=3` dry-run：
+
+```text
+virtualAddress = 0x984
+oldHex         = 1F 20 03 D5
+```
+
+实际应用：
+
+```text
+0x984: 1F 20 03 D5 -> E0 03 00 AA
+newTargetVersion = 2f227bf9...
+```
+
+`diff_so`：
+
+```text
+diffBackend = fast-byte-diff
+diffRangeCount = 1
+fileOffset = 0x984
+```
+
+## 3.3 字符串质量保持
+
+```text
+total = 43
+encoding = UTF-8
+confidence = 0.9
+```
+
+无 UTF-16 伪字符串。
+
+## 3.4 函数计数语义更清晰
+
+工作区打开现在返回：
+
+```text
+functions = 4
+functionsMeaning = symbolFunctions
+symbolFunctions = 4
+exportedFunctions = 4
+analyzedFunctions = 15
+pltStubs = 0
+```
+
+比早期“functions=4 但列表有 15 项”更明确。
+
+## 3.5 Unidbg 调试接口扩展可调用
+
+实测成功：
+
+| 动作 | 结果 |
+|---|---|
+| `breakpoint_add` | `breakpointId=bp-12000978-1` |
+| `status` | 列出断点 |
+| `breakpoint_remove` | `removed=true` |
+| `status` 再查 | `breakpoints=[]` |
+| `single_step` | `ok=true, singleStepCount=1` |
+| `trace_code` | hook 安装成功 |
+| `trace_events` | 接口存在并可调用 |
+
+## 3.6 xAnSo 网关扩展
+
+`xanso_api` 现在返回：
+
+```text
+backend = freakishfox/xAnSo upstream Core/fix
+upstreamCommit = 2f2b6bcff52aba995ad4280d41a588f7cd40a781
+commands = h / build-section / quit
+```
+
+`action=help` 可用。  
+`action=build-section` 在当前已有节头文件上返回：
+
+```text
+changed = false
+message = Section table is already present and parseable; set force=true to rebuild it
+```
+
+且**没有**像 `edit_fix_sections` 那样附带 64 条候选 diff。
+
+---
+
+# 四、本轮重点问题详述
+
+## 4.1 Unidbg signal/setjmp 仍返回 `-1`
+
+流程：
+
+1. open session
+2. map `0x13000000` 4096 rw-
+3. call `Java_..._MemoryUtil_isValid(0x13000000)`
+4. `trace=true`
+
+结果：
+
+```text
+stage = completed
+ok = true
+returnValue = -1
+resultConfidence = suspicious
+```
+
+静态反编译仍显示布尔语义：
+
+```c
+return iVar1 == 0;
+```
+
+**结论：** 可信度提示仍在，底层模拟结果仍未修正。
+
+---
+
+## 4.2 Trace 事件接口已有，但实测为空
+
+先：
+
+```text
+trace_code begin=0x12000978 end=0x120009dc
+```
+
+再调用函数，返回：
+
+```text
+traced = true
+```
+
+随后：
+
+```text
+trace_events:
+cursor = 0
+total = 0
+events = []
+```
+
+同时 diagnostics 仍提示：
+
+```text
+Use trace_code plus external log capture when instruction trace lines are required
+```
+
+**结论：**
+
+- 接口层比第三轮完整；
+- **调用方仍拿不到指令级 trace 内容**；
+- 对“trace 结果可回收”这一验收目标，本轮仍未通过。
+
+---
+
+## 4.3 Memory maps 仍不完整
+
+调用后 maps：
+
+```text
+0x12000000-0x12001000 r-x
+0x12001000-0x12002000 rw-
+0x12002000-0x12003000 rw-
+0x13000000-0x13001000 rw-
+```
+
+寄存器：
+
+```text
+sp = unidbg@0xe4fff710
+pc = unidbg@0xab0
+```
+
+SP 不在任何 map 中。  
+PC 也显示为 `unidbg@0xab0`，与模块基址 `0x12000000` 的相对/绝对表达不一致。
+
+---
+
+## 4.4 寄存器格式仍混用
+
+示例：
+
+```text
+x0  = "11"            # 十进制
+x1  = "301992412"     # 十进制绝对地址
+sp  = "unidbg@0xe4fff710"
+pc  = "unidbg@0xab0"
+```
+
+同一快照内存在：
+
+- 十进制数值；
+- `unidbg@` 前缀十六进制；
+- 疑似相对地址的 PC。
+
+机器解析成本仍高。
+
+---
+
+## 4.5 `diff_so` 仍无函数相似度
+
+当前输出只有：
+
+```text
+diffBackend
+diffRangeCount
+diffRanges
+sha256A
+sha256B
+```
+
+没有：
+
+- `similarity`
+- function-level structural comparison
+- ops 结构差异
+
+工具描述若仍承诺“function similarity ratio”，则与实测输出不一致。
+
+---
+
+## 4.6 xAnSo 两条路径行为不一致
+
+### 路径 A：`edit_fix_sections`
+
+对完整节头文件：
+
+```text
+changed = false
+wouldChange = true
+diffRangeCount = 64
+```
+
+并返回完整 64 条候选差异。
+
+### 路径 B：`xanso_api action=build-section`
+
+对同一类完整节头文件：
+
+```text
+changed = false
+message = Section table is already present and parseable; set force=true to rebuild it
+```
+
+**不返回 64 条候选 diff。**
+
+**事实：** 两条“跳过修复”路径的信息密度和响应规模不一致。
+
+---
+
+## 4.7 `single_step` 的可观察效果不足
+
+调用：
+
+```text
+single_step count=1
+```
+
+返回：
+
+```text
+ok = true
+singleStepCount = 1
+```
+
+但紧接着 `status`：
+
+```text
+isDebugging = false
+hasRunnable = false
+```
+
+没有返回：
+
+- 新的 PC；
+- 是否真正执行了一步；
+- 是否只是配置 single-step 模式。
+
+**结论：** 接口存在，但本轮无法确认它完成了有效单步执行。
+
+---
+
+## 4.8 错误码目录仍不完整
+
+实测出现：
+
+```text
+EMULATOR_SESSION_NOT_FOUND
+```
+
+`meta_info(action=errors)` 当前列表中没有该码。  
+仍有：
+
+- `EMULATOR_UNAVAILABLE`
+- `EMULATION_ERROR`
+
+但不是本次实际返回码。
+
+---
+
+# 五、能力覆盖声明 vs 本轮可验证事实
+
+本轮 capability registry 的声明明显扩张。以下是**声明**与**本轮验证**的对照。
+
+## 5.1 Rizin
+
+**声明新增/增强：**
+
+- full rz_core command gateway
+- authenticated unsafe mutating / file / shell / debugger commands
+- persistent patch edit sessions
+
+**本轮验证：**
+
+- 只读命令可用；
+- 分析 / 反汇编 / ESIL / 搜索可用；
+- **未验证** unsafe 写命令、shell、debugger attach、project 持久化；
+- 未验证认证门槛是否真正生效。
+
+## 5.2 LIEF
+
+**声明：**
+
+- version 0.16.1
+- 编译格式含 ELF / PE / Mach-O / DEX / ART / OAT / VDEX
+- 支持 parse_any、PE 签名解析等
+
+**本轮验证：**
+
+- Android ELF SO 路径可用；
+- **未打开** PE / Mach-O / DEX / ART / OAT / VDEX 样本；
+- 因此不能把“已编译支持”等同于“本轮业务路径已验收”。
+
+## 5.3 xAnSo
+
+**声明：**
+
+- 完整 public CLI/core
+- `help` / `build-section` / quit
+- ELF32 upstream + ELF64 LIEF-assisted
+
+**本轮验证：**
+
+- `status` / `help` / `build-section` 可调用；
+- 完整节头跳过路径可用；
+- **未验证**：
+  - 真正无节头 ELF32 ARM 修复；
+  - 真正无节头 ELF64 修复；
+  - `force=true` 重建后的 build / reload / Unidbg；
+  - quit/session close 语义。
+
+## 5.4 Unidbg
+
+**声明新增：**
+
+- reflect_roots / reflect_methods / reflect_invoke
+- object_handle_chaining
+- “packaged live objects 可发现并可调用”
+
+**本轮验证：**
+
+- session open/call/memory/debug 基础路径可用；
+- breakpoint add/list/remove 可用；
+- **未验证** reflect / object handle 完整链；
+- signal/setjmp 结果仍异常；
+- trace_events 空；
+- memory maps 不完整。
+
+**因此：**  
+本轮覆盖声明比第三轮更激进，但**可验证运行事实**仍主要停留在 Android SO 分析 + 有限 Unidbg 路径。
+
+---
+
+# 六、当前问题分级
+
+## 高
+
+### H4-01：Unidbg signal/setjmp 目标仍返回 `-1`
+底层结果未修复，仅有 suspicious 标注。
+
+### H4-02：trace_events 在 traced 调用后仍为空
+调试接口扩展了，但关键的指令级结果回收仍失败。
+
+## 中
+
+### M4-01：memory maps 不包含栈/系统映射
+### M4-02：寄存器地址格式不统一
+### M4-03：`diff_so` 仍无函数相似度 / 结构相似度
+### M4-04：`single_step` 无可见执行效果
+### M4-05：xAnSo 两条跳过路径响应不一致  
+`edit_fix_sections` 返回 64 候选 diff，`build-section` 不返回。
+### M4-06：capability 声明与本轮实测范围差距扩大
+### M4-07：errors 目录缺 `EMULATOR_SESSION_NOT_FOUND`
+
+## 低
+
+### L4-01：真实无节头 ELF 修复路径仍未覆盖
+### L4-02：真实 UTF-16LE 字符串召回仍未验证
+### L4-03：LIEF 多格式声明未用非 ELF 样本验收
+### L4-04：Rizin unsafe/authenticated 命令面未验收
+
+---
+
+# 七、修复状态总结
+
+## 已稳定修复并保持
+
+1. ESIL 起点错误  
+2. program headers / dynamic entries 丢失  
+3. 字节搜索 fileOffset 错误  
+4. 反汇编函数边界跨函数  
+5. `instructionIndex` 定位错误  
+6. 短函数名在分析与编辑中统一  
+7. 完整节头时默认不重写  
+8. xAnSo 前后哈希一致性  
+9. UTF-16 误报  
+10. 小文件 diff 超时  
+11. 一次性 Unidbg `persistent=true` 误标  
+12. 断点无稳定 ID  
+
+## 本轮新增进展
+
+1. Unidbg `status` 可列出断点  
+2. Unidbg `breakpoint_remove` 可用  
+3. Unidbg `trace_events` / `single_step` 接口可调用  
+4. xAnSo 上游式 `help` / `build-section` 可用  
+5. 工作区函数计数语义更清晰  
+6. 字符串结果增加 confidence  
+
+## 仍未通过
+
+1. signal/setjmp 返回值正确性  
+2. 可消费的指令 trace 内容  
+3. 完整地址空间 maps  
+4. 寄存器统一格式  
+5. structural / function similarity diff  
+6. 真正无节头修复闭环  
+7. 四后端“全部功能完整覆盖”的可验证性  
+
+---
+
+# 八、最终判定
+
+第四轮后，面向本样本的**静态分析 + 普通补丁 + 基础 Unidbg 会话**已经相当稳定，debugger 控制面也从“只能 add”推进到“可 status / remove / 尝试 step / trace_events”。
+
+但关键验收点仍未闭环：
+
+> **动态执行结果可信度、trace 内容回收、地址空间可见性，仍是当前最大短板。**
+
+关于“是否完整覆盖 Rizin、LIEF、xAnSo、Unidbg 全部功能”：
+
+> **否。**  
+> 本轮 capability registry 的声明更完整，但本轮可验证执行事实仍只覆盖 Android SO 工作流的子集；PE/Mach-O/DEX 等格式、Rizin unsafe 全命令面、真正无节头修复、完整 Unidbg 调试与 Java 对象图，均未在本轮形成闭环证据。
+
+### 一句话结论
+
+> **第四轮是“能力声明和调试接口显著扩展、静态/补丁路径继续稳定，但 Unidbg 语义与 trace 回收仍未过关”的版本。**

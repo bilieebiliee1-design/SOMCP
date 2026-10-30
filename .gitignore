@@ -76,6 +76,3 @@ aoci.database.txt
 
 # Local repository cognition file (machine-generated; not version-controlled)
 AGENTS.md
-
-# Local test report artifacts (issue #185)
-测试报告*.txt
