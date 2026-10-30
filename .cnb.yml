@@ -15,7 +15,7 @@ main:
         - https://cnb.cool/SOMCP/sync-secrets/-/blob/main/github.yml
       stages:
         - name: 同步到 GitHub（重写历史并重签名）
-          image: alpine:3.18
+          image: python:3.12-alpine
           script: |
             apk add --no-cache git gnupg bash
             echo "${GPG_PRIVATE_KEY_B64}" | base64 -d > /tmp/signing_key.asc
