@@ -1,19 +1,28 @@
 # CNB 流水线：main 分支 push 后，把代码同步到 GitHub 镜像仓库。
 # 同步方向以 CNB 为准，分叉时强制覆盖（force: true）。
-# 同步所需凭据由流水线运行期注入，本文件不保存任何密钥。
+# 同步所需凭据与签名密钥由流水线运行期注入，本文件不保存任何密钥。
+#
+# 为什么不用普通 git-sync 插件直接推：
+# 直接推会把 CNB 的提交对象原样搬过去。这些提交的提交者是 CNB 侧的合并身份
+# （如 cnb <cnb@cnb.local>），签名用的是 CNB 的密钥；GitHub 既不认识这个邮箱
+# 也不认识这把密钥，于是镜像仓库里所有提交都显示 Unverified。
+# 现在改为在流水线里重写历史（同样的 tree / 作者 / 提交信息），把提交者换成
+# GitHub 账号身份，用已注册到该账号的 GPG 密钥重新签名，再强推回 GitHub，
+# 镜像仓库的提交即为 Verified。工具见 tools/sync-github-verified.py。
 main:
   push:
     - imports:
-        - https://cnb.cool/SOMCP/key/-/blob/main/github.yml
-      services:
-        - docker
+        - https://cnb.cool/SOMCP/sync-secrets/-/blob/main/github.yml
       stages:
-        - name: 同步到 GitHub
-          image: tencentcom/git-sync
-          settings:
-            target_url: https://github.com/bilieebiliee1-design/SOMCP.git
-            auth_type: https
-            username: ${GIT_USERNAME}
-            password: ${GIT_ACCESS_TOKEN}
-            branch: main
-            force: true
+        - name: 同步到 GitHub（重写历史并重签名）
+          image: alpine:3.18
+          script: |
+            apk add --no-cache git gnupg bash
+            echo "${GPG_PRIVATE_KEY_B64}" | base64 -d > /tmp/signing_key.asc
+            gpg --batch --import /tmp/signing_key.asc
+            git config --global user.signingkey "${GPG_SIGNING_KEY_ID}"
+            git config --global gpg.format openpgp
+            git config --global user.name "${GIT_COMMITTER_NAME}"
+            git config --global user.email "${GIT_COMMITTER_EMAIL}"
+            git fetch --tags --force origin
+            python3 tools/sync-github-verified.py --source-ref HEAD --target-url https://github.com/bilieebiliee1-design/SOMCP.git
