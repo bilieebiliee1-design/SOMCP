@@ -204,54 +204,6 @@ class GitHubUpdateManager(private val context: Context) {
         }
     }
 
-    /** Semver-order comparison of two release tags: >0 if [left] is the
-     *  higher version, 0 if equal. Ordering: numeric core first, then the
-     *  pre-release suffix per semver (1.0.0-beta < 1.0.0, beta1 < beta2), so
-     *  a stale beta never outranks its own final release. Tags with no
-     *  numeric core rank below every versioned tag. */
-    private fun compareVersions(left: String, right: String): Int {
-        val a = versionParts(left)
-        val b = versionParts(right)
-        if (a.isEmpty() != b.isEmpty()) return if (a.isEmpty()) -1 else 1
-        compareCore(a, b)?.let { return it }
-        return comparePrerelease(prereleaseOf(left), prereleaseOf(right))
-    }
-
-    /** Pre-release suffix (after the first '-', build metadata '+' dropped);
-     *  null for a clean release tag. */
-    private fun prereleaseOf(version: String): String? {
-        val core = version.trim().removePrefix("v").substringBefore('+')
-        val index = core.indexOf('-')
-        return if (index < 0) null else core.substring(index + 1)
-    }
-
-    /** Semver pre-release precedence: absent suffix outranks any; otherwise
-     *  dot-separated identifiers compare numerically / lexically, and the
-     *  shorter field-wise prefix is smaller (alpha < alpha.1). */
-    private fun comparePrerelease(left: String?, right: String?): Int = when {
-        left == null && right == null -> 0
-        left == null -> 1
-        right == null -> -1
-        else -> {
-            val l = left.split('.')
-            val r = right.split('.')
-            for (index in 0 until maxOf(l.size, r.size)) {
-                val li = l.getOrNull(index) ?: return -1
-                val ri = r.getOrNull(index) ?: return 1
-                val ln = li.toIntOrNull()
-                val rn = ri.toIntOrNull()
-                val comparison = when {
-                    ln != null && rn != null -> ln.compareTo(rn)
-                    ln != null -> -1
-                    rn != null -> 1
-                    else -> li.compareTo(ri)
-                }
-                if (comparison != 0) return comparison
-            }
-            0
-        }
-    }
-
     private fun buildRelease(root: JSONObject, required: Boolean): UpdateCheckResult {
         val tag = root.optString("tag_name")
         val publishedAt = root.optString("published_at")
@@ -673,6 +625,54 @@ class GitHubUpdateManager(private val context: Context) {
          *  stale beta is never pushed onto a stable user, and a stable user is
          *  never moved off their own version. */
         internal fun isNewerVersion(tag: String, installedVersion: String): Boolean = compareVersions(tag, installedVersion) > 0
+
+        /** Semver-order comparison of two release tags: >0 if [left] is the
+         *  higher version, 0 if equal. Ordering: numeric core first, then the
+         *  pre-release suffix per semver (1.0.0-beta < 1.0.0, beta1 < beta2), so
+         *  a stale beta never outranks its own final release. Tags with no
+         *  numeric core rank below every versioned tag. */
+        internal fun compareVersions(left: String, right: String): Int {
+            val a = versionParts(left)
+            val b = versionParts(right)
+            if (a.isEmpty() != b.isEmpty()) return if (a.isEmpty()) -1 else 1
+            compareCore(a, b)?.let { return it }
+            return comparePrerelease(prereleaseOf(left), prereleaseOf(right))
+        }
+
+        /** Pre-release suffix (after the first '-', build metadata '+' dropped);
+         *  null for a clean release tag. */
+        private fun prereleaseOf(version: String): String? {
+            val core = version.trim().removePrefix("v").substringBefore('+')
+            val index = core.indexOf('-')
+            return if (index < 0) null else core.substring(index + 1)
+        }
+
+        /** Semver pre-release precedence: absent suffix outranks any; otherwise
+         *  dot-separated identifiers compare numerically / lexically, and the
+         *  shorter field-wise prefix is smaller (alpha < alpha.1). */
+        internal fun comparePrerelease(left: String?, right: String?): Int = when {
+            left == null && right == null -> 0
+            left == null -> 1
+            right == null -> -1
+            else -> {
+                val l = left.split('.')
+                val r = right.split('.')
+                for (index in 0 until maxOf(l.size, r.size)) {
+                    val li = l.getOrNull(index) ?: return -1
+                    val ri = r.getOrNull(index) ?: return 1
+                    val ln = li.toIntOrNull()
+                    val rn = ri.toIntOrNull()
+                    val comparison = when {
+                        ln != null && rn != null -> ln.compareTo(rn)
+                        ln != null -> -1
+                        rn != null -> 1
+                        else -> li.compareTo(ri)
+                    }
+                    if (comparison != 0) return comparison
+                }
+                0
+            }
+        }
 
         /** Numeric core of a version tag: the dotted numbers before any
          *  -suffix/+build. */
