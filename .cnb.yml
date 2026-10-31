@@ -12,7 +12,7 @@
 main:
   push:
     - imports:
-        - https://cnb.cool/SOMCP/sync-secrets/-/blob/main/github.yml
+        - https://cnb.cool/SOMCP/key/-/blob/main/github.yml
       stages:
         - name: 同步到 GitHub（重写历史并重签名）
           image: python:3.12-alpine
