@@ -37,6 +37,9 @@ cd "$ROOT"
 
 RIZIN_SRC="third_party/rizin-src"
 RZ_GHIDRA_SRC="third_party/rz-ghidra"
+# Must match the `branch =` pin in .gitmodules: CI checks the submodule out at
+# this exact tag. Moving it means moving both together.
+RZ_GHIDRA_REF="${RZ_GHIDRA_REF:-v0.9.0}"
 if [ ! -d "$RIZIN_SRC/librz/include" ]; then
     echo "[rz-ghidra] ERROR: Rizin source not found at '$RIZIN_SRC'. Ensure it is cloned before this step." >&2
     exit 1
@@ -101,9 +104,27 @@ EOF
     # Checkout uses submodules:recursive, so the dir normally exists with .git as a
     # *file* (gitlink); only clone when it's genuinely absent, else clone aborts 128.
     if [ ! -e "$RZ_GHIDRA_SRC/.git" ]; then
-        git clone --depth 1 https://github.com/rizinorg/rz-ghidra.git "$RZ_GHIDRA_SRC"
+        git clone --branch "${RZ_GHIDRA_REF}" --depth 1 \
+            https://github.com/rizinorg/rz-ghidra.git "$RZ_GHIDRA_SRC"
     fi
-    git -C "$RZ_GHIDRA_SRC" submodule update --init --recursive --depth 1 || true
+    # ghidra/ghidra is not optional: ghidra/CMakeLists.txt reads its decompiler C++
+    # from ghidra/Ghidra/Features/Decompiler/src/decompile/cpp, so a recursive
+    # failure here would surface later as a missing libcore_ghidra.so. Fetch it
+    # explicitly (pinned ref, not --depth 1) and fail loudly with the reason the
+    # old `|| true` used to hide.
+    if ! git -C "$RZ_GHIDRA_SRC" submodule update --init --recursive --depth 1; then
+        echo "[rz-ghidra] recursive submodule init failed; syncing URLs and retrying unbounded" >&2
+        git -C "$RZ_GHIDRA_SRC" submodule sync --recursive || true
+        if ! git -C "$RZ_GHIDRA_SRC" submodule update --init --recursive; then
+            echo "[rz-ghidra] ERROR: recursive submodule init failed twice (pinned nested commits unreachable)." >&2
+            exit 1
+        fi
+    fi
+    if [ ! -f "$RZ_GHIDRA_SRC/ghidra/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/marshal.cc" ]; then
+        echo "[rz-ghidra] ERROR: nested submodule ghidra/ghidra is not populated at" >&2
+        echo "  $RZ_GHIDRA_SRC/ghidra/ghidra — the decompiler sources are required." >&2
+        exit 1
+    fi
 
     # --- 3) Build + install rz-ghidra plugin ---
     rz_ghidra_build="third_party/rz-ghidra-build-$abi"
