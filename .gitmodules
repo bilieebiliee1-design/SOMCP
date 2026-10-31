@@ -13,6 +13,11 @@
 [submodule "third_party/rz-ghidra"]
 	path = third_party/rz-ghidra
 	url = https://github.com/rizinorg/rz-ghidra.git
+	# Snap to upstream release tags. Our gitlink otherwise sits on an arbitrary
+	# dev commit whose nested ghidra/ghidra pin may be gone from rizinorg/ghidra
+	# (force-push/rewrite), which makes `git submodule update --init --recursive`
+	# die with "not our ref" before any build starts.
+	branch = v0.9.0
 [submodule "third_party/unicorn-engine-unicorn2"]
 	path = third_party/unicorn-engine-unicorn2
 	url = https://github.com/unicorn-engine/unicorn.git
