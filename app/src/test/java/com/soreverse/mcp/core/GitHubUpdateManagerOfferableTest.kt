@@ -33,12 +33,8 @@ import org.junit.Test
  *  it passed while the shipped gate offered v1.0.23 to users already running
  *  v1.0.23. */
 class GitHubUpdateManagerOfferableTest {
-    private fun offerable(
-        tag: String,
-        publishedAt: String,
-        createdAt: String = publishedAt,
-        current: String = "1.0.23"
-    ) = GitHubUpdateManager.isUpdateOfferable(tag, publishedAt, createdAt, current)
+    private fun offerable(tag: String, publishedAt: String, createdAt: String = publishedAt, current: String = "1.0.23") =
+        GitHubUpdateManager.isUpdateOfferable(tag, publishedAt, createdAt, current)
 
     /** Real v1.0.23 record: created 10:10:51Z (== the tag commit's committer
      *  date), published 11:35:46Z. Users on 1.0.23 must not be prompted. */
@@ -114,28 +110,31 @@ class GitHubUpdateManagerOfferableTest {
         assertFalse(offerable("v1.0.23-beta1", "2026-10-30T12:00:00Z", "2026-10-30T10:00:00Z"))
     }
 
-    /** Same core, higher pre-release ordering: a beta2 of the running version
-     *  is a newer build and may be offered; a FINAL of the running version is
-     *  not the beta user's own build either, so it stays offerable so a tester
-     *  can leave the channel. A stable user never gets beta2, and never gets
-     *  the final they already run (covered above). */
+    /** SHIPPED SHAPE: this repo's versionName is a bare "1.0.23" (hardcoded in
+     *  app/build.gradle.kts; nothing injects a pre-release suffix), so a beta
+     *  install is ALSO versionName "1.0.23". No beta progression is therefore
+     *  reachable in the real product: beta1 -> beta2 and beta -> final of the
+     *  same core are both suppressed, and only a HIGHER core moves a user.
+     *  This is the behaviour the prompt actually has; it is asserted here
+     *  instead of the unreachable "1.0.24-beta1" installed form. */
     @Test
-    fun sameCoreBetaOrderingIsRespected() {
-        assertTrue(
-            GitHubUpdateManager.isUpdateOfferable(
-                "v1.0.24-beta2", "2026-10-30T12:00:00Z", "2026-10-30T10:00:00Z", "1.0.24-beta1"
-            )
-        )
-        assertFalse(
-            GitHubUpdateManager.isUpdateOfferable(
-                "v1.0.24-beta1", "2026-10-30T12:00:00Z", "2026-10-30T10:00:00Z", "1.0.24-beta2"
-            )
-        )
-        assertTrue(
-            GitHubUpdateManager.isUpdateOfferable(
-                "v1.0.24", "2026-10-30T12:00:00Z", "2026-10-30T10:00:00Z", "1.0.24-beta2"
-            )
-        )
+    fun sameCoreBetaProgressionIsNotReachableInTheShippedProduct() {
+        assertFalse(GitHubUpdateManager.isNewerVersion("v1.0.23-beta2", "1.0.23"))
+        assertFalse(GitHubUpdateManager.isNewerVersion("v1.0.23", "1.0.23"))
+        assertFalse(GitHubUpdateManager.isNewerVersion("v1.0.24-beta1", "1.0.24"))
+        assertTrue(GitHubUpdateManager.isNewerVersion("v1.0.24-beta1", "1.0.23"))
+    }
+
+    /** The comparator itself still honours pre-release ordering (beta1 <
+     *  beta2 < final). Nothing in the shipped product reaches it — versionName
+     *  has no suffix — but the gate would order correctly if one were ever
+     *  injected, so the property is pinned at the comparator level. */
+    @Test
+    fun comparatorHonoursPrereleaseOrderingEvenThoughVersionNameHasNoSuffix() {
+        assertTrue(GitHubUpdateManager.isNewerVersion("v1.0.24-beta2", "1.0.24-beta1"))
+        assertFalse(GitHubUpdateManager.isNewerVersion("v1.0.24-beta1", "1.0.24-beta2"))
+        assertTrue(GitHubUpdateManager.isNewerVersion("v1.0.24", "1.0.24-beta2"))
+        assertFalse(GitHubUpdateManager.isNewerVersion("v1.0.24-beta2", "1.0.24"))
     }
 
     @Test
