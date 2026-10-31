@@ -113,9 +113,12 @@ EOF
     # explicitly (pinned ref, not --depth 1) and fail loudly with the reason the
     # old `|| true` used to hide.
     if ! git -C "$RZ_GHIDRA_SRC" submodule update --init --recursive --depth 1; then
-        echo "[rz-ghidra] recursive submodule init failed; retrying pinned ref ${RZ_GHIDRA_REF}" >&2
-        git -C "$RZ_GHIDRA_SRC" submodule sync --recursive
-        git -C "$RZ_GHIDRA_SRC" submodule update --init --recursive
+        echo "[rz-ghidra] recursive submodule init failed; syncing URLs and retrying unbounded" >&2
+        git -C "$RZ_GHIDRA_SRC" submodule sync --recursive || true
+        if ! git -C "$RZ_GHIDRA_SRC" submodule update --init --recursive; then
+            echo "[rz-ghidra] ERROR: recursive submodule init failed twice (pinned nested commits unreachable)." >&2
+            exit 1
+        fi
     fi
     if [ ! -f "$RZ_GHIDRA_SRC/ghidra/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/marshal.cc" ]; then
         echo "[rz-ghidra] ERROR: nested submodule ghidra/ghidra is not populated at" >&2
