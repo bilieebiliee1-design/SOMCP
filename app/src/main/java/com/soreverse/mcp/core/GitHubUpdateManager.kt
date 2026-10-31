@@ -53,14 +53,14 @@ data class GitHubRelease(
     val apkUrl: String,
     val apkSize: Long,
     val checksumUrl: String?,
-    /** Release publishtime (ISO-8601, UTC). "" when the API omitted it. Paired
-     *  with [createdAt] to tell a same-version republish apart from the release
-     *  a user already has. */
+    /** Release publishtime (ISO-8601, UTC). "" when the API omitted it.
+     *  No update decision reads it — it reaches GitHubUpdateManager
+     *  .isUpdateOfferable only so a future content-based signal can be threaded
+     *  in. It cannot tell a same-version republish apart either: every release
+     *  in this repo has publishedAt later than createdAt. */
     val publishedAt: String = "",
     /** Release-record creation time (ISO-8601, UTC). Falls back to
-     *  [publishedAt] when the API omitted it. A release whose [publishedAt] is
-     *  later than this was created first and (re)published later — a republish
-     *  of the same version. */
+     *  [publishedAt] when the API omitted it. Unread, like [publishedAt]. */
     val createdAt: String = ""
 )
 
@@ -136,11 +136,15 @@ class GitHubUpdateManager(private val context: Context) {
      *  checks (Settings > Updates) keep honouring the selected channel. A
      *  channel that fails is ignored as long as the other yields a verdict.
      *
-     *  Equal tags from both channels (the same version built as a pre-release
-     *  and as a final) resolve to the lower raw tag, because "v1.0.24-beta1"
-     *  sorts below "v1.0.24": the build that carries the cheapest suffix is
-     *  the least likely to be a pre-release, and a stable user must never be
-     *  handed the beta of the version they are on (or of one below it). */
+     *  A final and a beta of the same core never reach the tie-break below:
+     *  compareVersions orders "v1.0.24-beta1" BELOW "v1.0.24", so the beta
+     *  loses on `order < 0`. The tie-break is entered only when
+     *  compareVersions reports the two tags fully equal, i.e. the same tag
+     *  recorded in both channels. There the stable channel's record is the one
+     *  this prompt should describe, so equal tags keep the first record seen
+     *  (stable is checked first) instead of picking by publishtime — a beta
+     *  re-publish can carry a later published_at without describing a
+     *  different build. */
     suspend fun checkAnyChannel(): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         try {
             val releases = listOf(
@@ -154,7 +158,11 @@ class GitHubUpdateManager(private val context: Context) {
                 when {
                     order > 0 -> release
                     order < 0 -> acc
-                    else -> if (release.tag < acc.tag) release else acc
+                    // Equal ordering: keep acc rather than trading on
+                    // publishtime. String order is a no-op here (the tags are
+                    // equal by construction), so this just drops the old
+                    // publishedAt comparison.
+                    else -> acc
                 }
             }
             Result.success(newest?.let { UpdateCheckResult.Available(it) } ?: UpdateCheckResult.Current)
@@ -194,33 +202,6 @@ class GitHubUpdateManager(private val context: Context) {
             val array = JSONArray(response.body.string())
             pick(array)?.let { buildRelease(it, required = required) } ?: UpdateCheckResult.Current
         }
-    }
-
-    /** Highest non-draft release of the requested prerelease state; ties
-     *  (the same tag kept across a republish) break by record id, i.e. the
-     *  newest release record wins. Publishtime cannot order them: both records
-     *  of a recreated tag are published at their own build's end, so a
-     *  republish can sort below the record it replaced and the gate would then
-     *  judge the stale one. The id is monotonic per repository. */
-    internal fun newestRelease(array: JSONArray, prerelease: Boolean): JSONObject? {
-        var candidate: JSONObject? = null
-        for (index in 0 until array.length()) {
-            val release = array.getJSONObject(index)
-            if (release.optBoolean("draft") ||
-                release.optBoolean("prerelease") != prerelease
-            ) {
-                continue
-            }
-            val current = candidate
-            val better = current == null || when (
-                val order = compareVersions(release.optString("tag_name"), current.optString("tag_name"))
-            ) {
-                0 -> release.optLong("id") > current.optLong("id")
-                else -> order > 0
-            }
-            if (better) candidate = release
-        }
-        return candidate
     }
 
     /** Semver-order comparison of two release tags: >0 if [left] is the
@@ -618,15 +599,47 @@ class GitHubUpdateManager(private val context: Context) {
         const val REPOSITORY_URL = "https://github.com/bilieebiliee1-design/SOMCP"
         private const val RELEASES_URL = "https://api.github.com/repos/bilieebiliee1-design/SOMCP/releases"
 
+        /** Highest non-draft release of the requested prerelease state; ties
+         *  (the same tag kept across a republish) break by record id, i.e. the
+         *  newest release record wins. Publishtime cannot order them: both
+         *  records of a recreated tag are published at their own build's end,
+         *  so a republish can sort below the record it replaced and the gate
+         *  would then judge the stale one. The id is monotonic per repository. */
+        internal fun newestRelease(array: JSONArray, prerelease: Boolean): JSONObject? {
+            var candidate: JSONObject? = null
+            for (index in 0 until array.length()) {
+                val release = array.getJSONObject(index)
+                if (release.optBoolean("draft") ||
+                    release.optBoolean("prerelease") != prerelease
+                ) {
+                    continue
+                }
+                val current = candidate
+                if (current == null) {
+                    candidate = release
+                    continue
+                }
+                val order = compareVersions(release.optString("tag_name"), current.optString("tag_name"))
+                // Same tag (a recreated record): the higher id is the record
+                // whose assets the release page currently serves.
+                val better = if (order != 0) order > 0 else release.optLong("id") > current.optLong("id")
+                if (better) candidate = release
+            }
+            return candidate
+        }
+
         /** Whether the release [tag] should be offered as an update to the APK
          *  built with [currentVersionName].
          *
-         *  Compares the NUMERIC CORE only against this APK's versionName (which
-         *  never carries a beta suffix): a higher core is always offered — that
-         *  covers both new stables and newer betas. Lower core: never. Equal
-         *  core: never — a release carrying the version this APK already runs
-         *  is the same build, and offering it sends the user off to reinstall
-         *  the identical APK ("已是最新版仍提示有最新版本").
+         *  Offers a release only when [isNewerVersion] says it is strictly
+         *  higher than this APK's versionName. In practice versionName is a
+         *  bare "1.0.23" (no pre-release suffix is ever injected), so a
+         *  same-core release never clears the bar: beta1 -> beta2 and
+         *  beta -> final of one core are both suppressed, and only a HIGHER
+         *  core is offered. That is the point — a release carrying the version
+         *  this APK already runs is the same build, and offering it sends the
+         *  user off to reinstall the identical APK
+         *  ("已是最新版仍提示有最新版本").
          *
          *  Equal core used to be offered when the release looked republished,
          *  detected as `published_at > created_at`. That signal is dead in this
@@ -644,15 +657,12 @@ class GitHubUpdateManager(private val context: Context) {
          *  compare against (deliberately — see the release workflow), and
          *  versionName is not unique per artifact, so a republish of the same
          *  version stays invisible to this gate. Users pick it up by checking
-         *  the release page or reinstalling manually. The parameters are kept
-         *  so the decision stays a single, fully-specified function and a
-         *  content-based signal can be threaded in without touching callers. */
-        internal fun isUpdateOfferable(
-            tag: String,
-            publishedAt: String,
-            createdAt: String,
-            currentVersionName: String
-        ): Boolean = isNewerVersion(tag, currentVersionName)
+         *  [publishedAt] and [createdAt] are therefore NOT read: they are
+         *  carried only so a future content-based signal (an artifact digest,
+         *  say) can be threaded in without touching call sites. Do not treat
+         *  them as live inputs. */
+        internal fun isUpdateOfferable(tag: String, publishedAt: String, createdAt: String, currentVersionName: String): Boolean =
+            isNewerVersion(tag, currentVersionName)
 
         /** True when [tag] is a strictly higher version than [installedVersion]:
          *  higher numeric core, or the same core with a higher pre-release
@@ -662,8 +672,7 @@ class GitHubUpdateManager(private val context: Context) {
          *  (no pre-release suffix) outranks every beta of the same core: a
          *  stale beta is never pushed onto a stable user, and a stable user is
          *  never moved off their own version. */
-        internal fun isNewerVersion(tag: String, installedVersion: String): Boolean =
-            compareVersions(tag, installedVersion) > 0
+        internal fun isNewerVersion(tag: String, installedVersion: String): Boolean = compareVersions(tag, installedVersion) > 0
 
         /** Numeric core of a version tag: the dotted numbers before any
          *  -suffix/+build. */

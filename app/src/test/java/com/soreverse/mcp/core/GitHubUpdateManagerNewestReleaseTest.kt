@@ -27,14 +27,7 @@ import org.junit.Test
  *  records of the same tag resolve to the newest record rather than to
  *  whichever was published last. */
 class GitHubUpdateManagerNewestReleaseTest {
-    private fun release(
-        tag: String,
-        id: Long,
-        publishedAt: String,
-        createdAt: String,
-        prerelease: Boolean = false,
-        draft: Boolean = false
-    ) = JSONObject()
+    private fun release(tag: String, id: Long, publishedAt: String, createdAt: String, prerelease: Boolean = false, draft: Boolean = false) = JSONObject()
         .put("tag_name", tag)
         .put("id", id)
         .put("published_at", publishedAt)
