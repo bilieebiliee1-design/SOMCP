@@ -9,9 +9,22 @@
 # 现在改为在流水线里重写历史（同样的 tree / 作者 / 提交信息），把提交者换成
 # GitHub 账号身份，用已注册到该账号的 GPG 密钥重新签名，再强推回 GitHub，
 # 镜像仓库的提交即为 Verified。工具见 tools/sync-github-verified.py。
+#
+# 为什么这里要显式关掉子模块：
+# CNB 的 git.submodules 默认是 true，工作区准备阶段就会 `git submodule update
+# --init --recursive` 递归拉 third_party/*。而本流水线只做「重写历史 + 重签名 +
+# 强推」，一个文件都不编译，子模块纯属拖累；更要命的是 rizinorg/ghidra 是会被
+# 清洗重写的仓，某个 pin 一旦在上游消失，克隆阶段就直接
+#   fatal: remote error: upload-pack: not our ref <sha>
+#   Errors during submodule fetch: third_party/rz-ghidra
+# 整条流水线在这里红掉，连下面这段 script 都进不去（见构建 cnb-0rs-1k6b0n0ih）。
+# 需要子模块的 native 构建请在那条流水线里自己调 tools/init-submodules.sh
+# （它把死 pin 变成一个打印「bump the gitlink or update the tag」的具名检查）。
 main:
   push:
-    - imports:
+    - git:
+        submodules: false
+      imports:
         - https://cnb.cool/SOMCP/key/-/blob/main/github.yml
       stages:
         - name: 同步到 GitHub（重写历史并重签名）
