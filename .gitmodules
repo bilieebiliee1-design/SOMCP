@@ -1,3 +1,42 @@
+# ---------------------------------------------------------------------------
+# NOTE for the two entries below (`rz-ghidra` and its nested `ghidra/ghidra`).
+#
+# rizinorg/ghidra is a cleaned/rewritten repo: a commit that a pin points at can
+# stop existing upstream, and when that happens the only answer you get is
+# `upload-pack: not our ref` -- which is what `git submodule update` surfaces
+# when it asks for the dead pin. (Fetching a *reachable* commit by bare SHA does
+# work on that remote; the failure is the commit being gone, not the way it is
+# requested. Verified: `git fetch --depth 1 origin 3e5d774` succeeds, while a
+# SHA that no longer exists answers `not our ref`.)
+#
+# Two consequences worth knowing before editing this file:
+#
+#   - `.gitmodules` url/branch only apply to the *top-level* module. The nested
+#     pins live in rz-ghidra's own .gitmodules, which we do not own.
+#   - `submodules: recursive` (every workflow used to ask for it) reads that
+#     nested .gitmodules too, and a dead pin there aborts the whole checkout.
+#
+# Which workflows init submodules now: only the ones that produce native
+# artifacts themselves -- build.yml, release.yml and test-v5..v11 (9 files), all
+# via tools/init-submodules.sh. The Gradle-only ones (test.yml, test-v2..v4) do
+# not init submodules: their jobs do reach third_party/ (preBuild ->
+# buildUnidbgNative -> build-unidbg-native.sh, which fails on the first ABI when
+# those dirs are absent), but app/build.gradle.kts:290 catches that and only logs
+# the :291-296 warning, so initializing the native tree there would buy no signal
+# -- only cloning time and pins to be red about.
+#
+# So the top-level modules are safe with plain git, while the two nested rizin
+# pins are prepared by tools/init-submodules.sh: it fetches them by branch *name*
+# and then verifies the gitlink SHA locally. That does not loosen the pin -- the
+# SHA is still the only authority -- it moves the failure to a named check that
+# prints "bump the gitlink or update the tag" instead of a bare `not our ref`.
+#
+# The `branch =` below only decides which history is fetched. The tree that
+# actually gets built is always the gitlink SHA recorded in HEAD -- both
+# tools/init-submodules.sh and build-rz-ghidra-android.sh detach to it. Do not
+# introduce a second pin: two pins drift, and then the pin you read is not the
+# pin you compile.
+# ---------------------------------------------------------------------------
 [submodule "third_party/capstone-4.0.2-src"]
 	path = third_party/capstone-4.0.2-src
 	url = https://github.com/aquynh/capstone.git
@@ -15,8 +54,8 @@
 	url = https://github.com/rizinorg/rz-ghidra.git
 	# Snap to upstream release tags. Our gitlink otherwise sits on an arbitrary
 	# dev commit whose nested ghidra/ghidra pin may be gone from rizinorg/ghidra
-	# (force-push/rewrite), which makes `git submodule update --init --recursive`
-	# die with "not our ref" before any build starts.
+	# (force-push/rewrite) -- a dead pin, which is exactly what `not our ref`
+	# means when `git submodule update` asks for it.
 	branch = v0.9.0
 [submodule "third_party/unicorn-engine-unicorn2"]
 	path = third_party/unicorn-engine-unicorn2

@@ -14,7 +14,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # No submodules here on purpose. These Gradle-only jobs do reach
+          # third_party/: preBuild dependsOn buildUnidbgNative (app/build.gradle.kts:320),
+          # app/src/main/jniLibs ships no libcapstone/keystone/unicorn, so that task
+          # really invokes build-unidbg-native.sh, which needs third_party/* and fails
+          # on the first ABI when they are absent (capstone is built first;
+          # build-unidbg-native.sh:237-247 -> :194-196). The Gradle task's
+          # catch (e: Exception) at app/build.gradle.kts:290 downgrades that to the
+          # logger.warn at :291-296, so the job still turns green -- which is exactly
+          # why initializing the native tree here would buy nothing: it would add
+          # minutes of cloning and put these jobs at the mercy of pins whose absence is
+          # not fatal. Accepted side effect, pre-existing and not introduced by this
+          # change: the artifacts from this job carry no Unidbg native libs.
+          # The native jobs (build.yml, release.yml, test-v5..v11) init submodules via
+          # tools/init-submodules.sh and are the ones that gate on those libs.
           fetch-depth: 0
       - uses: actions/setup-java@v6
         with:

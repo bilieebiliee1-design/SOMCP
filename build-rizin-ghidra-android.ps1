@@ -12,10 +12,33 @@ $Source = Join-Path $Root "third_party\rz-ghidra"
 $Build = Join-Path $Root "third_party\rz-ghidra-build-$Abi"
 $Install = Join-Path $Root "third_party\rz-ghidra-install-$Abi"
 
-if (!(Test-Path $Source)) {
-    git clone --depth 1 https://github.com/rizinorg/rz-ghidra.git $Source
-    git -C $Source submodule update --init --recursive --depth 1
+# rz-ghidra (and everything else under third_party/) is provisioned by
+# tools/init-submodules.sh and by nothing else. It is the only entry that knows
+# how to take the nested rizinorg/ghidra pins: it fetches them by branch name,
+# verifies the gitlink SHA locally (falling back to a bare-SHA fetch), and names
+# the fix when the pin is gone. `git submodule update --recursive` reports such a
+# pin as `upload-pack: not our ref` with no clue what to do.
+#
+# There used to be a `git clone --depth 1` here first. It was wrong in an ugly
+# way: the script it hands off to resets third_party/rz-ghidra to the
+# superproject gitlink, so that clone only decided *which commit that reset
+# started from*, and the two fetch_pin calls below read rz-ghidra's own HEAD.
+# The net effect was a silent move of third_party/rz-ghidra off its pin before
+# building it. Deleting the clone removes that whole class of confusion (and the
+# "shallow clone handed to the script" combination with it) - the script builds
+# the directory from the gitlink, which is the only authority we have.
+#
+# Cost of reusing that single entry: it initialises all 10 top-level submodules,
+# not just rz-ghidra, so a standalone run here waits minutes longer than the old
+# rz-ghidra-only `git submodule update` did.
+# Not validated: PowerShell is not available where this was written, so the
+# route from here into the bash script has not been executed - see CHANGELOG.
+$Bash = Get-Command bash -ErrorAction SilentlyContinue
+if (!$Bash) {
+    throw "bash is required to initialise submodules (tools/init-submodules.sh). Install Git Bash / WSL and re-run."
 }
+& $Bash.Source (Join-Path $Root "tools/init-submodules.sh")
+if ($LASTEXITCODE -ne 0) { throw "tools/init-submodules.sh failed with exit code $LASTEXITCODE" }
 
 if (!$RizinPrefix) {
     $RizinPrefix = Join-Path $Root "rizin-install\$Abi"
