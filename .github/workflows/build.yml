@@ -30,8 +30,16 @@ jobs:
           # in-repo third_party/* submodules (rizin, LIEF, capstone, keystone,
           # unicorn 2.x, unidbg's JNI bridge); without them the native backends
           # cannot be produced and the emulated engine degrades or fails.
-          submodules: recursive
-
+          # Submodules are initialised by tools/init-submodules.sh, not by
+          # actions/checkout: a nested rizinorg/ghidra pin can be a commit upstream has
+          # cleaned away, and `recursive` then dies at checkout with only
+          # `upload-pack: not our ref`. See the note at the top of .gitmodules.
+          submodules: false
+      - name: Init submodules
+        # 非递归 checkout 之后补上 third_party/*；嵌套的 rizinorg/ghidra pin 可能是
+        # 已被上游清洗的死提交，按分支名取 + 本地校验能把这类失败落在有名字的检核点上
+        # （取不到时才回落按 SHA 抓）。细节见脚本头部注释。
+        run: bash tools/init-submodules.sh
       - name: Set up JDK 17
         # v6 runs on the Node 24 runtime and clears the `punycode` (DEP0040)
         # deprecation warning that v4 emitted on the Node 24 runner.

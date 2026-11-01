@@ -298,9 +298,29 @@ git clone https://github.com/rizinorg/rizin.git third_party/rizin-src
 （可选）构建 Unidbg 模拟后端所需的 Android 原生库（capstone/keystone/unicorn，默认不内置，详见“核心能力”中 Unidbg 说明）：
 
 ```powershell
-git submodule update --init --recursive
+# 子模块统一用脚本初始化（见下方说明），不要直接 git submodule update：
+# 嵌套 pin 若是上游已不存在的死提交，它只会回一句 upload-pack: not our ref。
+bash tools/init-submodules.sh
 .\build-unidbg-native.ps1
 ```
+
+> **`rizinorg/ghidra` 是会被清洗/重写历史的仓。** rz-ghidra 里 gitlink 记录的嵌套 pin
+> （`ghidra/ghidra`）因此可能变成上游不存在的死提交，此时
+> `git submodule update --init --recursive` 的表现就是 `upload-pack: not our ref`。
+> 按分支名取 + 本地校验 gitlink SHA 的写法并不放宽 pin：它把这类失败提前到有名字的检核点，
+> 并直接给出「抬 gitlink 或改 tag」的处置指引。注意区别——对**可达**提交，按裸 SHA 的
+> fetch 本身是通的（实测 `git fetch --depth 1 origin 3e5d774` 成功，非尖端的可达提交同样成功），
+> 失败只发生在提交已经不存在的时候。CI 的解法见 `.github/workflows/*` 里的 “Init submodules”
+> 步骤与 `tools/init-submodules.sh`——但只有真正产原生库的那几条（`build.yml`、`release.yml`、
+> `test-v5..v11`）会跑它；纯 Gradle 的 `test.yml` / `test-v2..v4` 不初始化子模块。要留意的是
+> 这四条并非「读不到 `third_party/`」：`preBuild` 依赖 `buildUnidbgNative`，它确实会调
+> `build-unidbg-native.sh`，而该脚本缺这些目录时会在**第一个 ABI 就 `exit 1`**，只是这份失败被
+> `app/build.gradle.kts:290` 的 `catch` 降级成 `:291-296` 的 warning，因此在那里初始化子模块
+> 换不到任何信号，只换来克隆耗时与无关红点。
+>
+> 置备只走这一个入口，不要再另外 `git clone` 一份 `third_party/rz-ghidra`：脚本会把它
+> reset 到父仓 gitlink，而嵌套 pin 读的是 rz-ghidra 自己的 HEAD，预克隆只会让目录在
+> 无声无息中停在别的提交上。
 
 构建 release：
 

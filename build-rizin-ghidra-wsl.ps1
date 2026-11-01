@@ -23,10 +23,18 @@ if ! command -v meson >/dev/null 2>&1; then
   export PATH="`$HOME/.local/bin:`$PATH"
 fi
 command -v meson >/dev/null 2>&1 || { echo "meson is still unavailable after pip install"; exit 2; }
-if [ ! -d third_party/rz-ghidra ]; then
-  git clone --depth 1 https://github.com/rizinorg/rz-ghidra.git third_party/rz-ghidra
-fi
-git -C third_party/rz-ghidra submodule update --init --recursive --depth 1
+# third_party/rz-ghidra is provisioned by tools/init-submodules.sh only. Nested
+# pins never go through `git submodule update`: a pin whose commit was cleaned
+# off rizinorg/ghidra can only answer `not our ref` there.
+# No shallow clone is placed in third_party/rz-ghidra beforehand on purpose: the
+# script resets that path to the superproject gitlink, so a pre-clone would only
+# decide which commit the reset started from while the two nested pins are read
+# from rz-ghidra's own HEAD - i.e. it could move the directory off its pin
+# without saying so.
+# Cost of reusing that single entry: it initialises all 10 top-level submodules,
+# not just rz-ghidra, so a standalone run here waits minutes longer than the old
+# rz-ghidra-only init did.
+bash tools/init-submodules.sh
 cat > rizin-cross-aarch64-wsl.ini <<EOF
 [binaries]
 c = '`$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang'
