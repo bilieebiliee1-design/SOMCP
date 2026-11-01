@@ -37,5 +37,23 @@ main:
             git config --global gpg.format openpgp
             git config --global user.name "${GIT_COMMITTER_NAME}"
             git config --global user.email "${GIT_COMMITTER_EMAIL}"
-            git fetch --tags --force origin
+            # --no-recurse-submodules 不是可选优化，是这条流水线能跑起来的前提。
+            # 递归由工作树触发：日志里 `Fetching submodule third_party/rz-ghidra`
+            # 说明 runner 上那份子模块工作树是存在且已初始化的（10 项 active=true
+            # 只是从 .git/config 继承下来的配置，光有 active 不会让 fetch 递归）。
+            # 于是镜像仓库该同步的东西一件没同步，却先在子模块上死掉：
+            # `fatal: remote error: upload-pack: not our ref b37dbb93...`，与本次
+            # 要推的历史毫无关系。同步任务只搬提交对象，不需要任何子模块，
+            # tools/sync-github-verified.py 全文也只有 commit-tree / mktag / push，
+            # 没有 fetch、checkout 或 submodule，关掉递归不会伤到后面任何一步。
+            #
+            # 关于那个 SHA，只写有读数的部分：`Fetching submodule
+            # third_party/rz-ghidra` 配 `From https://github.com/rizinorg/rz-ghidra`
+            # 说明请求发往 rz-ghidra 自己的远端；若索取的是嵌套 pin，按 rz-ghidra
+            # 的 .gitmodules 应为 .../rizinorg/ghidra，日志里没有这一条。
+            # b37dbb93 在 rizinorg/ghidra 与 rizinorg/rz-ghidra 两仓都不存在
+            # （GitHub API 两边都回 422 `No commit found for SHA`），rz-ghidra
+            # 全部 421 个提交的 ghidra/ghidra gitlink 里也没有它。
+            # 是顶层 gitlink 还是嵌套 pin 过期，没有读数能区分，所以归因到此为止。
+            git -c fetch.recurseSubmodules=no fetch --tags --force --no-recurse-submodules origin
             python3 tools/sync-github-verified.py --source-ref HEAD --target-url https://github.com/bilieebiliee1-design/SOMCP.git
