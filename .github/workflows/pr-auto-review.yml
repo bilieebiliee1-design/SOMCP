@@ -927,7 +927,7 @@ jobs:
                   const pushTriggered = [
                     'build.yml',
                     'test.yml', 'test-v2.yml', 'test-v3.yml', 'test-v4.yml',
-                    'test-v5.yml', 'test-v6.yml', 'test-v7.yml',
+                    'test-v5.yml', 'test-v6.yml', 'test-v7.yml', 'test-v8.yml',
                   ];
                   for (const wf of pushTriggered) {
                     try {
