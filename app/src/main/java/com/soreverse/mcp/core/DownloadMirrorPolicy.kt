@@ -12,7 +12,6 @@ object DownloadMirrorPolicy {
         "https://hub.gitmirror.com/",
         "https://moeyy.cn/gh-proxy/",
         "https://gh.zwy.one/",
-        "https://ghproxy.imciel.com/",
         "https://gh.ddlc.top/",
         "https://ghproxy.cfd/",
         "https://ghproxy.liumingye.cn/",
