@@ -609,6 +609,9 @@ internal fun EngineRuntime.rzCommand(workspaceId: String, editSessionId: String 
             command
         )
     }
+    annotatedPrintSegment(command)?.let { segment ->
+        return@guarded decompilerPrintBlocked(command, segment)
+    }
     // Align low-level axt/axtj with high-level analyze_xrefs / rizin_api xrefs enrichment.
     parseAxtCommand(command)?.let { (va, asJson) ->
         val enriched = rzXrefs(workspaceId, editSessionId, hex(va), "to")
@@ -670,6 +673,16 @@ internal fun EngineRuntime.rzCommand(workspaceId: String, editSessionId: String 
         elf.architecture
     ).put("unsafe", unsafe).put("mode", if (unsafe) "rizin_raw_full" else "rizin_raw_readonly")
     if (payload.has("error")) {
+        // Native side refuses the annotated print with its own `error` code. The two
+        // gates (Kotlin pre-check above, native backstop) describe the same refusal, so
+        // they must not describe it differently: one mapping, one message.
+        if (payload.optString("error") == UNSAFE_DECOMPILER_PRINT) {
+            return@guarded decompilerPrintBlocked(
+                command,
+                annotatedPrintSegment(command) ?: command,
+                payload.optString("message").takeIf { it.isNotBlank() }
+            )
+        }
         return@guarded err(
             "RIZIN_COMMAND_FAILED",
             payload.optString("error", "Rizin command failed"),
@@ -737,6 +750,74 @@ private fun EngineRuntime.parseAxtCommand(command: String): Pair<Long, Boolean>?
     return null
 }
 
+/**
+ * Machine code and user-facing sentence for the one refusal this file has two gates
+ * for (issue #37): [rzCommand]'s pre-check and the native backstop inside
+ * `rzCommand`, plus the decompile path when the console context was gone.
+ *
+ * They all mean "your text was not rendered because Rizin's annotated-code printer
+ * needs a console context we do not own", so they must all answer with this code and
+ * this message. Keeping one function is what stops the gateway from flattening it into
+ * RIZIN_COMMAND_FAILED while the decompile path reported something readable.
+ */
+private const val UNSAFE_DECOMPILER_PRINT = "UNSAFE_DECOMPILER_PRINT"
+
+private fun decompilerPrintBlocked(
+    command: String,
+    segment: String,
+    nativeMessage: String? = null
+): JSONObject = err(
+    UNSAFE_DECOMPILER_PRINT,
+    nativeMessage ?: (
+        "`$segment` renders through Rizin's annotated-code printer, which reads a console " +
+            "context this gateway does not own (issue #37), so it was not run. " +
+            "For decompiled code use rizin_api(action=decompile); for the same source here send " +
+            "pdgj (JSON) or pdg* (comment commands)."
+        ),
+    "command",
+    command,
+    "blockedSegment" to segment
+)
+
+/**
+ * The segment of [command] that would reach Rizin's annotated-code printer, or null.
+ *
+ * `pdg`/`pdgo` end in rz_core_annotated_code_print(), which dereferences the
+ * process-global console context without a NULL check (issue #37). `pdgj` and `pdg*`
+ * use printers that never touch that context, and `pdgs*` prints no code at all, so
+ * those stay available through the command gateway. Rizin splits on ';' and newlines
+ * and runs every segment, so a whole-string prefix check is not enough.
+ */
+internal fun annotatedPrintSegment(command: String): String? {
+    var start = 0
+    while (start <= command.length) {
+        val end = command.indexOfFirstFrom(start) { it == ';' || it == '\n' || it == '\r' }
+        val segment = command.substring(start, end).trimStart(' ', '\t', '\r')
+        val word = segment.takeWhile { it !in WORD_BREAK }
+        if (word.startsAnnotatedPrint()) return segment
+        if (end >= command.length) break
+        start = end + 1
+    }
+    return null
+}
+
+/**
+ * Rizin commands that render annotated code: the ghidra group minus its JSON
+ * (`pdgj`), statement (`pdg*`) and sleigh-listing (`pdgs*`) members.
+ */
+private fun String.startsAnnotatedPrint(): Boolean =
+    startsWith("pdg") && this != "pdgj" && this != "pdg*" && !startsWith("pdgs")
+
+/** Ends the command word; `~` filter, `?` help and `$` eval never reach the printer. */
+private val WORD_BREAK = setOf(' ', '\t', '~', '?', '$')
+
+private fun String.indexOfFirstFrom(from: Int, predicate: (Char) -> Boolean): Int {
+    for (i in from until length) {
+        if (predicate(this[i])) return i
+    }
+    return length
+}
+
 internal fun EngineRuntime.rzDecompile(workspaceId: String, editSessionId: String = "", locator: String = "", strict: Boolean = true): JSONObject = guarded {
     val bytes = dataFor(workspaceId, editSessionId)
     val elf = elfFor(workspaceId, editSessionId)
@@ -762,6 +843,29 @@ internal fun EngineRuntime.rzDecompile(workspaceId: String, editSessionId: Strin
         .put("requestedBackend", "rizin-ghidra")
         .put("usesBuiltinPseudo", false)
     val decompErr = payload.optString("error")
+    // Native side refuses to hand the annotated-code printer a NULL console context
+    // (issue #37) and says so in its own field, independent of `error`/`diagnostic`.
+    // When that left no usable text the caller needs to know it was the console, not
+    // the function — same refusal, same code, as the command gateway above.
+    val printBlocked = payload.optJSONObject("printBlocked")
+    if (printBlocked != null &&
+        printBlocked.optBoolean("needsConsoleContext", false) &&
+        payload.optString("pseudocode").isBlank()
+    ) {
+        val address = hex(va)
+        val reason = printBlocked.optString("reason").ifBlank { "console context was unavailable" }
+        return@guarded decompilerPrintBlocked(
+            "pdg @ $address",
+            reason,
+            "The decompiler console context was unavailable, so function $address was not " +
+                "rendered ($reason). The engine is fine and other calls work; retry, or use " +
+                "action=disasm."
+        ).also { result ->
+            result.getJSONObject("error").getJSONObject("diagnostics")
+                .put("addr", address)
+                .put("payload", payload)
+        }
+    }
     if ((decompErr == "DECOMPILER_UNAVAILABLE" || decompErr == "DECOMPILER_FAILED") && strict) {
         return@guarded err(
             decompErr,

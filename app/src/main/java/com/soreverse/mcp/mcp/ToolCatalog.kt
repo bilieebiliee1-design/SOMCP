@@ -1019,7 +1019,10 @@ object ToolCatalog {
                     "toVa" str "End VA hex for search_bytes"
                     "asm" str "Assembly text for asm"
                     "command" str
-                        "Any Rizin core command for action=command. Mutating/file/shell/debugger commands require unsafe=true."
+                        "Any Rizin core command for action=command. Mutating/file/shell/debugger commands require unsafe=true. " +
+                            "The plain decompiler prints (pdg/pdgo/pdgd/pdgx) are refused because Rizin's annotated-code printer " +
+                            "dereferences the console context without a check (issue #37): use action=decompile, or pdgj / pdg* " +
+                            "here, which render the same code through printers that never read that context."
                     "unsafe" bool
                         "Allow mutating, file, shell, debugger, and external commands. Requires authenticated MCP access."
                     "addr" str "Hex VA for asm/disasm/esil"
