@@ -123,6 +123,25 @@ set(KEY_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/key_generated.h")
 # at <repo>/app/generate_header.py — resolve it relative to this file.
 set(GEN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../../../../app/generate_header.py")
 
+# Pick a Python interpreter for the key generator instead of betting on a bare
+# `python`: Debian/Ubuntu (including GitHub's ubuntu-latest runner images since
+# 20.04) ship python3 only, so execute_process(COMMAND python ...) failed with
+# "No such file or directory" and surfaced here as the opaque
+#   CMake Error at CMakeLists.txt:162: [key-gen] generation failed.
+# which says nothing about the interpreter being the cause (run 41460722411).
+# An explicit -DPYTHON_EXECUTABLE, then python3, then python, keeps existing
+# setups working while making a truly missing interpreter explain itself.
+if(NOT DEFINED PYTHON_EXECUTABLE OR PYTHON_EXECUTABLE STREQUAL "")
+    find_program(PYTHON_EXECUTABLE NAMES python3 python DOC "Python 3 for generate_header.py")
+endif()
+if(NOT PYTHON_EXECUTABLE)
+    message(FATAL_ERROR
+        "[key-gen] no Python interpreter found (tried -DPYTHON_EXECUTABLE, python3, python).\n"
+        "  generate_header.py needs Python 3 to emit key_generated.h."
+    )
+endif()
+message(STATUS "[key-gen] using interpreter: ${PYTHON_EXECUTABLE}")
+
 if(DEFINED ENV{TM} AND NOT "$ENV{TM}" STREQUAL "")
     set(TM_KEY "$ENV{TM}")
     message(STATUS "[key-gen] generating key_generated.h from TM secret")
@@ -152,7 +171,7 @@ else()
 endif()
 
 execute_process(
-  COMMAND python "${GEN_SCRIPT}"
+  COMMAND "${PYTHON_EXECUTABLE}" "${GEN_SCRIPT}"
       --key "${TM_KEY}"
       --dst "${KEY_GENERATED}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../../../.."
