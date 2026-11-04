@@ -186,6 +186,9 @@ dynamic_analyze_ai(function="JNI_OnLoad")  # 或直接传入上一步 evidence
 `meta_info(action=capabilities)` 的 `backends.dynamic` 是动态分析的能力真实面来源，明确列出 unidbg/frida 的支持状态与限制。
 
 `rizin_api(action=command)` 提供受控 Rizin raw command 通道，用于覆盖大量 Rizin 命令式底层能力；为安全起见，写入、文件、shell 等危险命令会被阻止。
+另外，`pdg` / `pdgo` / `pdgd` / `pdgx` 这四条反编译打印命令也会被拒绝，返回 `error.code=UNSAFE_DECOMPILER_PRINT`：它们走 Rizin 的注解代码打印器，会解引用一个本网关不持有的 console context（issue #37 的空指针崩溃）。
+被拒时改用 `rizin_api(action=decompile)` 取反编译代码，或在本命令通道里发 `pdgj`（同一份源码的 JSON）与 `pdg*`（注释命令）。
+行为变更：`action=decompile` 只在 `pdg` 与 `pdgj` 之间回落，不再回落到 `pdg*` / `pdd`；`pdgj` 的 JSON 里没有 `"code"` 字段时按“无输出”处理，并把其中的 `errors` 作为诊断原因带回。
 
 批量流水线支持事务模式：
 

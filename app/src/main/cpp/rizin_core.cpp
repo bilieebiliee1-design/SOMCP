@@ -55,11 +55,92 @@
 #include <rz_diff.h>
 #include <rz_hash.h>
 #include <rz_reg.h>
+#include <rz_cons.h>
 
 namespace {
     std::mutex ghidraConfigMutex;
     std::string ghidraPluginDir;
     std::string ghidraSleighHome;
+
+    // Issue #37: rz_core_annotated_code_print(), the last step of `pdg`/`pdo`, reads
+    // the console context unconditionally:
+    //   cannotated_code.c:128  RzCons *cons = rz_cons_singleton();
+    //   cannotated_code.c:97   #define PRINT_COLOR(x) if (cons->context->color_mode) ...
+    // rz_cons_singleton() returns the process-global console (cons.c:314 `return &I`),
+    // and rz_core_fini() ends with rz_cons_free(), which does `I.context = NULL`
+    // (cons.c:701-721). So the first core teardown leaves the console context NULL,
+    // and every later decompiler print dereferences NULL+offset 0x730 — exactly the
+    // x8=0 / fault 0x730 pair in the crash log of #37.
+    //
+    // The fix is a context, not a signal handler: every native entry point installs a
+    // console context this bridge owns (ConsoleContextScope), so no print can inherit
+    // a NULL left behind by someone else's teardown, and the decompile path refuses
+    // to read text when the context is gone instead of faulting. What still escapes
+    // that is a real crash and is reported as one: no sigsetjmp unwinding through
+    // ghidra's C++ frames, so no half-freed heap underneath a fallback.
+
+    // Console calls share one mutex: Rizin's console is a process-global singleton,
+    // so the push/pop of the owned context below is process-wide state.
+    // NativeEngine.serial already serialises engine calls on the Kotlin side; this
+    // mutex keeps the invariant true even if a future entry point forgets that.
+    std::recursive_mutex g_consoleContextMutex;
+
+    // Owned by this bridge for the lifetime of the process, and never freed: every
+    // native entry point points I.context at it, so rz_cons_context_free() here would
+    // be a use-after-free for whichever entry runs next. Built once at library load
+    // (static initialisation, before any JNI call and before Rizin can bind a
+    // singleton); the pointer is then const and every use is a read.
+    // DO NOT FREE.
+    RzConsContext* const g_consoleContext = rz_cons_context_new(nullptr);
+
+    // Install our context for the duration of one native entry point and put back
+    // whatever was there. Restoring instead of dropping to the default keeps a
+    // context another subsystem pushed (RzCore init pushes its own temporary one).
+    // Also pins errno across the whole entry point: rz_cons_singleton() re-creates the
+    // console through rz_cons_new() when its refcount dropped to zero (cons.c:640-684),
+    // and that path calls tcgetattr/ioctl, so errno changes as a normal side effect.
+    // A caller must not see a stale errno it did not cause.
+    class ConsoleContextScope {
+    public:
+        explicit ConsoleContextScope(const char* site) {
+            errnoAtEntry = errno;
+            // Recursive: a scope is also opened around the decompile print loop, inside
+            // the one covering the whole JNI entry, so the two nest in one thread.
+            consoleMutex.lock();
+            locked = true;
+            if (!g_consoleContext) {
+                // Nothing to install; the entry runs without the owned context rather
+                // than on a half-initialised one.
+                RZ_NATIVE_LOG("rz_cons: owned context unavailable site=%s", site);
+                return;
+            }
+            RzCons* cons = rz_cons_singleton();
+            if (!cons) return;
+            saved = cons->context;
+            rz_cons_context_load(g_consoleContext);
+            installed = true;
+        }
+        ~ConsoleContextScope() {
+            if (installed) {
+                if (RzCons* cons = rz_cons_singleton()) cons->context = saved;
+            }
+            if (locked) consoleMutex.unlock();
+            errno = errnoAtEntry;
+        }
+        ConsoleContextScope(const ConsoleContextScope&) = delete;
+        ConsoleContextScope& operator=(const ConsoleContextScope&) = delete;
+    private:
+        std::recursive_mutex& consoleMutex = g_consoleContextMutex;
+        RzConsContext* saved = nullptr;
+        int errnoAtEntry = 0;
+        bool installed = false;
+        bool locked = false;
+    };
+
+    RzConsContext* currentConsoleContext() {
+        RzCons* cons = rz_cons_singleton();
+        return cons ? cons->context : nullptr;
+    }
 
     void applyGhidraConfig(RzCore* core) {
         std::lock_guard<std::mutex> lock(ghidraConfigMutex);
@@ -505,6 +586,159 @@ namespace {
         return true;
     }
 
+    // ---------------------------------------------------------------------
+    // Decompiler print path (issue #37).
+    //
+    // One function in the whole chain reads the console context without a check:
+    // rz_core_annotated_code_print() (cannotated_code.c:97/128 — PRINT_COLOR does
+    // `cons->context->color_mode`). Its JSON sibling
+    // rz_core_annotated_code_print_json() is pj_* only and never touches it.
+    //
+    // So rather than watching for a SIGSEGV, the decompile action drives the print
+    // itself: ask ghidra for the code, check the context, take the text. Two
+    // printers, and only two, because only two of them return source:
+    //  - `pdg`   the annotated-colour render, needs a context. This is the product
+    //            that users of `action=decompile` expect.
+    //  - `pdgj`  the same annotated code as JSON; we take its `"code"` field. It
+    //            never reads the context, so it is the only fallback that can still
+    //            produce source when the colour print is refused.
+    // Deliberately NOT in the chain:
+    //  - `pdg*`  rz_core_annotated_code_print_comment_cmds() emits
+    //            `CCu base64:... @ 0xADDR` comment commands (cannotated_code.c:260-268)
+    //            — not one line of source. Failing over to it could only ever turn a
+    //            readable error into a JSON blob of base64.
+    //  - `pdd`   Rizin's own pseudo-decompiler. A different product with different
+    //            output; returning it under `"backend":"rizin-ghidra"` would relabel
+    //            one engine's text as another's. Callers who want it have
+    //            `action=command` with `pdd`.
+    // No signal handler: a fault that survives these checks is a real crash and is
+    // reported as one, instead of unwinding ghidra's C++ frames and leaving the
+    // RzCore half-freed underneath the fallback.
+    // ---------------------------------------------------------------------
+    // `pdgj` carries the source as `"code":"..."`; everything else in that object is
+    // annotation metadata the caller does not need. Unescapes what the printer
+    // escaped (\n, \t, \r, \", \\, \/ and \uXXXX) and returns false when the key is
+    // absent, so a caller never mistakes a JSON envelope for pseudocode.
+    bool jsonCodeField(const std::string& json, std::string* out) {
+        static const char* key = "\"code\":\"";
+        const size_t at = json.find(key);
+        if (at == std::string::npos) return false;
+        std::string text;
+        for (size_t i = at + strlen(key); i < json.size(); ++i) {
+            const char c = json[i];
+            if (c == '"') {
+                *out = text;
+                return true;
+            }
+            if (c != '\\' || i + 1 >= json.size()) {
+                text += c;
+                continue;
+            }
+            const char esc = json[++i];
+            switch (esc) {
+                case 'n': text += '\n'; break;
+                case 'r': text += '\r'; break;
+                case 't': text += '\t'; break;
+                case 'b': text += '\b'; break;
+                case 'f': text += '\f'; break;
+                case '/': text += '/'; break;
+                case '"': text += '"'; break;
+                case '\\': text += '\\'; break;
+                case 'u': {
+                    if (i + 4 >= json.size()) return false;
+                    unsigned code = 0;
+                    for (int k = 1; k <= 4; ++k) {
+                        const char h = json[i + k];
+                        code <<= 4;
+                        if (h >= '0' && h <= '9') code |= static_cast<unsigned>(h - '0');
+                        else if (h >= 'a' && h <= 'f') code |= static_cast<unsigned>(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') code |= static_cast<unsigned>(h - 'A' + 10);
+                        else return false;
+                    }
+                    i += 4;
+                    // Decompiled text is ASCII+CJK; surrogate pairs are rare and a lone
+                    // unit would be invalid UTF-8, so encode BMP only.
+                    if (code < 0x80) {
+                        text += static_cast<char>(code);
+                    } else if (code < 0x800) {
+                        text += static_cast<char>(0xC0 | (code >> 6));
+                        text += static_cast<char>(0x80 | (code & 0x3F));
+                    } else {
+                        text += static_cast<char>(0xE0 | (code >> 12));
+                        text += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                        text += static_cast<char>(0x80 | (code & 0x3F));
+                    }
+                    break;
+                }
+                default: text += esc; break;
+            }
+        }
+        return false;
+    }
+
+    // Last 160 chars of a `pdgj` envelope that carried no `"code"`: ghidra reports
+    // its own failures as `{"errors":[...]}` there (core_ghidra.cpp:366-378), and that
+    // text is the only real explanation of why the printer produced nothing.
+    std::string jsonErrorExcerpt(const std::string& json) {
+        const size_t at = json.find("\"errors\"");
+        if (at == std::string::npos) return std::string();
+        std::string excerpt = json.substr(at);
+        for (char& c : excerpt) {
+            if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+        }
+        if (excerpt.size() > 160) excerpt = excerpt.substr(0, 160) + "...";
+        return excerpt;
+    }
+
+    enum class PrintMode { Default, Json };
+    enum class PrintStatus { Ok, Empty, NoContext };
+
+    struct PrintOutcome {
+        PrintStatus status = PrintStatus::Empty;
+        std::string text;
+        // Why the printer produced nothing, when it said so itself (JSON `errors`).
+        std::string detail;
+    };
+
+    const char* printModeName(PrintMode mode) {
+        return mode == PrintMode::Json ? "pdgj" : "pdg";
+    }
+
+    PrintOutcome runDecompilePrint(RzCore* core, PrintMode mode) {
+        PrintOutcome out;
+        const char* cmd = printModeName(mode);
+        // The call prints by itself (that is what pdg does) and returns the same
+        // text through the isolated console buffer, so nothing is printed twice.
+        char* rendered = rz_core_cmd_str(core, cmd);
+        std::string raw;
+        if (rendered) {
+            raw = rendered;
+            free(rendered);
+        }
+        if (mode == PrintMode::Json) {
+            std::string code;
+            if (jsonCodeField(raw, &code)) {
+                out.text = code;
+            } else {
+                // A `pdgj` reply without `"code"` is not pseudocode: carrying the
+                // envelope on would look like success and land as empty source.
+                out.detail = jsonErrorExcerpt(raw);
+            }
+        } else {
+            out.text = raw;
+        }
+        if (!currentConsoleContext()) {
+            // The console was released from under us. Every printer writes through
+            // rz_cons_memcat -> CTX(buffer) -> context->buffer, so the text is not
+            // trustworthy and the same call is one step away from the #37 fault.
+            out.status = PrintStatus::NoContext;
+            RZ_NATIVE_LOG("decompile print cmd=%s refused: console context is NULL", cmd);
+            return out;
+        }
+        out.status = out.text.empty() ? PrintStatus::Empty : PrintStatus::Ok;
+        return out;
+    }
+
     bool isLikelyDecompilerError(const std::string& text) {
         if (text.empty()) return true;
         // Only treat short diagnostic replies as failures. Real pseudocode may contain
@@ -574,10 +808,23 @@ namespace {
     }
 }
 
+// Console-context coverage of every JNI entry in this file (issue #37):
+//   scoped, because the entry builds an RzCore and calls rz_core_cmd_* / analysis:
+//     rzXrefs, rzAnalyze, rzFunctions, rzCfg, rzSearchBytes, rzScanCrypto, rzEsilStep,
+//     rzCommand, rzDecompile
+//   scoped, because the entry touches the console singleton even without a core:
+//     rzConfigureGhidra (setenv + plugin probe run after the console may have been
+//     re-created), rzSelfTest (rz_asm_* logs through rz_cons on failure paths)
+//   not scoped, by design:
+//     rzDisassemble, rzAssemble (private RzAsm, no RzCore, no rz_cons_*)
+//     rzDiff (rz_diff_bytes only)
+// Adding an entry that builds an RzCore without a scope re-opens #37. Keep this list
+// and the code in step when an entry is added or removed.
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzConfigureGhidra(
         JNIEnv* env, jobject, jstring pluginDir, jstring sleighHome) {
+    ConsoleContextScope consoleScope("configure-ghidra");
     {
         std::lock_guard<std::mutex> lock(ghidraConfigMutex);
         ghidraPluginDir = jStr(env, pluginDir);
@@ -617,6 +864,7 @@ extern "C" {
 JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzSelfTest(
         JNIEnv* env, jobject) {
+    ConsoleContextScope consoleScope("self-test");
     RzAsm* a = rz_asm_new();
     if (!a) return env->NewStringUTF("ERROR:rz_asm_new failed");
     // 先试 AArch64（`ret` = C0 03 5F D6）；若该构建未注册 arm64 插件，
@@ -659,6 +907,10 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzSelfTest(
     return env->NewStringUTF(buf);
 }
 
+// No ConsoleContextScope here or in rzAssemble: both work on a private RzAsm and never
+// build an RzCore or touch rz_cons_*, so there is no console context to install and
+// nothing that could dereference a released one. Listed in the entry-point audit
+// (see the comment above rzConfigureGhidra) as "not needed".
 JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDisassemble(
         JNIEnv* env, jobject, jbyteArray jbytes, jstring jarch, jlong jaddr, jboolean jthumb, jint jlimit) {
@@ -780,6 +1032,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzXrefs(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "xref");
     if (path.empty()) return env->NewStringUTF("{\"xrefs\":[]}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"xrefs\":[]}"); }
     bool ok = rz_core_file_open_load(core, path.c_str(), 0, RZ_PERM_RX, false);
@@ -845,6 +1098,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzAnalyze(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "analyze");
     if (path.empty()) return env->NewStringUTF("{\"error\":\"tempfile\"}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"error\":\"core\"}"); }
     applyGhidraConfig(core);
@@ -878,6 +1132,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzFunctions(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "funcs");
     if (path.empty()) return env->NewStringUTF("[]");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("[]"); }
     bool ok = rz_core_file_open_load(core, path.c_str(), 0, RZ_PERM_RX, false);
@@ -927,6 +1182,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzCfg(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "cfg");
     if (path.empty()) return env->NewStringUTF("{\"error\":\"tempfile\"}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"error\":\"core\"}"); }
     applyGhidraConfig(core);
@@ -1012,6 +1268,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzSearchBytes(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "search");
     if (path.empty()) return env->NewStringUTF("{\"hits\":[]}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"hits\":[]}");
     }
@@ -1063,6 +1320,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzScanCrypto(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "crypto");
     if (path.empty()) return env->NewStringUTF("{\"hits\":[]}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"hits\":[]}"); }
     bool ok = rz_core_file_open_load(core, path.c_str(), 0, RZ_PERM_RX, false);
@@ -1136,6 +1394,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzEsilStep(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "esil");
     if (path.empty()) return env->NewStringUTF("{\"error\":\"tempfile\"}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"error\":\"core\"}"); }
     applyGhidraConfig(core);
@@ -1184,6 +1443,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzEsilStep(
 }
 
 // Byte-level diff between two buffers + similarity ratio
+// rzDiff is a pure rz_diff_bytes call: no RzCore, no console. Not scoped on purpose.
 JNIEXPORT jstring JNICALL
 Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDiff(
         JNIEnv* env, jobject, jbyteArray jbytesA, jbyteArray jbytesB) {
@@ -1235,6 +1495,58 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDiff(
 // rz_core_cmd_str() splits the input on ';' and newlines and executes every
 // segment, so a whole-command prefix blacklist is bypassable ("pd 4;!!id").
 // Run the same prefix check on each separator-delimited segment instead.
+//
+// Issue #37's crash lives in one function: rz_core_annotated_code_print(), which
+// dereferences the process-global console context (cannotated_code.c:97/128). Only
+// printers on that path are redirected; `pdgj` and `pdg*` use printers that never
+// touch the context, so they keep working here and `action=command` does not lose
+// the capability. Matching is per segment, after the same ';'/newline split the
+// gateway applies, so no separator form slips past. `pdd` is rizin's own printer
+// (not the annotated-code path) and stays.
+static bool rizinSegmentIsAnnotatedPrint(const std::string& rawSegment) {
+    const size_t begin = rawSegment.find_first_not_of(" \t\r");
+    if (begin == std::string::npos) return false;
+    // A leading `~`/`?`/`$` turns the command into a filter/help/eval query, which
+    // does not reach the code printer at all.
+    const std::string segment = rawSegment.substr(begin);
+    if (segment.empty()) return false;
+    const char lead = segment[0];
+    if (lead == '~' || lead == '?' || lead == '$') return false;
+    // Offsets come after a space (`pdg @ 0x1234`), so cut at the first blank.
+    const std::string word = segment.substr(0, segment.find_first_of(" \t"));
+    // pdg group: pdg, pdgd, pdgx, pdgj, pdgo, pdgs*, pdga are all ghidra commands;
+    // only the ones that render annotated code are refused.
+    static const char* allowed[] = { "pdgj", "pdg*" };
+    for (const char* a : allowed) {
+        if (word == a) return false;
+    }
+    if (word.rfind("pdg", 0) == 0) {
+        // pdgs / pdgss / pdgsd list sleigh languages and print no code at all.
+        if (word.rfind("pdgs", 0) == 0) return false;
+        return true;
+    }
+    return false;
+}
+
+// The offending segment, or an empty string when nothing is refused. Returning the
+// segment (rather than a bool) lets the refusal quote what the user actually sent:
+// a fixed list of command names would misreport `pdg @ 0x1040` or `pdgd`.
+static std::string rizinAnnotatedPrintSegment(const std::string& cmd) {
+    size_t start = 0;
+    while (true) {
+        size_t end = cmd.find_first_of(";\n\r", start);
+        if (end == std::string::npos) end = cmd.size();
+        const std::string raw = cmd.substr(start, end - start);
+        if (rizinSegmentIsAnnotatedPrint(raw)) {
+            const size_t begin = raw.find_first_not_of(" \t\r");
+            return begin == std::string::npos ? raw : raw.substr(begin);
+        }
+        if (end == cmd.size()) break;
+        start = end + 1;
+    }
+    return std::string();
+}
+
 static bool rizinSegmentBlocked(const std::string& rawSegment) {
     const size_t begin = rawSegment.find_first_not_of(" \t\r");
     if (begin == std::string::npos) return false;
@@ -1265,6 +1577,21 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzCommand(
     std::string cmd = jStr(env, jcmd);
     if (cmd.empty()) return env->NewStringUTF("{\"error\":\"empty_command\"}");
     if (!unsafe && rizinCommandBlocked(cmd)) return env->NewStringUTF("{\"error\":\"unsafe_required\",\"message\":\"set unsafe=true for mutating, file, shell, debugger, or external commands\"}");
+    // Same payload shape for every refusal the Kotlin side has to explain: `error` is
+    // the machine code, `message` is the human sentence, `blockedSegment` is the exact
+    // text that was refused. The gateway maps on `error` and passes `message` through
+    // untouched (EngineRuntimeBackendRizin.rzCommand), so the alternative route is
+    // visible to the user instead of being buried in a diagnostic.
+    if (const std::string refused = rizinAnnotatedPrintSegment(cmd); !refused.empty()) {
+        std::string reply = "{\"error\":\"UNSAFE_DECOMPILER_PRINT\",\"blockedSegment\":\"";
+        reply += escJson(refused);
+        reply += "\",\"message\":\"`" + escJson(refused) +
+            "` renders through rz_core_annotated_code_print(), which reads a console context "
+            "this gateway does not own (issue #37), so it was not run. Use "
+            "rizin_api(action=decompile) for decompiled code, or send pdgj (same source as JSON) "
+            "or pdg* (comment commands) here.\"}";
+        return env->NewStringUTF(reply.c_str());
+    }
     jsize len = env->GetArrayLength(jbytes);
     if (len <= 0) return env->NewStringUTF("{\"error\":\"empty\"}");
     std::vector<uint8_t> buf(len);
@@ -1272,6 +1599,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzCommand(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "cmd");
     if (path.empty()) return env->NewStringUTF("{\"error\":\"tempfile\"}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"error\":\"core\"}"); }
     applyGhidraConfig(core);
@@ -1318,6 +1646,7 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDecompile(
 
     std::string path = writeTempSo(buf.data(), buf.size(), "decompile");
     if (path.empty()) return env->NewStringUTF("{\"error\":\"tempfile\"}");
+    ConsoleContextScope consoleScope("native-entry");
     RzCore* core = rz_core_new();
     if (!core) { unlink(path.c_str()); return env->NewStringUTF("{\"error\":\"core\"}"); }
     applyGhidraConfig(core);
@@ -1552,11 +1881,31 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDecompile(
         anchors.size(),
         seededNeighbors);
 
-    const char* commands[] = { "pdg", "pdd" };
-    const char* selected = nullptr;
-    char* result = nullptr;
+    // Order matters: pdg is the annotated render users expect; pdgj can still return
+    // the same source because it never reads the console context. Nothing else is in
+    // the list — see the printer notes on runDecompilePrint() for why `pdg*` and
+    // `pdd` are not fallbacks for source.
+    struct PrintAttempt {
+        PrintMode mode;
+        const char* label;
+    };
+    const PrintAttempt attempts[] = {
+        { PrintMode::Default, "pdg" },
+        { PrintMode::Json, "pdgj" },
+    };
+
+    // Every printer below goes through the console, so the print loop opens its own
+    // scope instead of relying on the JNI entry having opened one: same invariant
+    // whether this loop is reached from the entry point or from a test.
+    ConsoleContextScope printScope("decompile-print");
+    std::string selected;
+    std::string picked;
     std::string lastDiag;
-    for (const char* cmd : commands) {
+    // Independent of `selected`/`lastDiag`: the caller decides what to report from
+    // this alone, and neither of the two may overwrite it.
+    std::string printBlocked;
+    bool printBlockedNeedsContext = false;
+    for (const PrintAttempt& attempt : attempts) {
         // Seek again immediately before decompile so pdg uses the repaired function.
         if (RzAnalysisFunction* fcn = rz_analysis_get_function_at(core->analysis, va)) {
             enforceFunctionBoundary(core, va, nextBoundary, nullptr, &fcnSize, &fcnEnd, &fcnName, &resized);
@@ -1564,30 +1913,55 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDecompile(
         } else {
             rz_core_seek(core, va, true);
         }
-        result = rz_core_cmd_str(core, cmd);
-        std::string text = stripAnsi(result ? result : "");
+        PrintOutcome outcome = runDecompilePrint(core, attempt.mode);
+        std::string text = stripAnsi(outcome.text);
         RZ_NATIVE_LOG("ghidra command=%s len=%zu resized=%d size=%llu next=0x%llx output=%.200s",
-            cmd, text.size(), resized ? 1 : 0,
+            attempt.label, text.size(), resized ? 1 : 0,
             static_cast<unsigned long long>(fcnSize),
             static_cast<unsigned long long>(nextBoundary),
             text.c_str());
-        if (result && result[0] != '\0' && !isLikelyDecompilerError(text)) {
-            selected = cmd;
+        if (outcome.status == PrintStatus::NoContext) {
+            // Never let a later successful attempt hide this: the user asked for
+            // decompiled code and got it on a fallback path, which is worth knowing.
+            if (printBlocked.empty()) {
+                printBlocked = std::string("console context was NULL, refusing to print ") + attempt.label;
+                printBlockedNeedsContext = true;
+            }
+            continue;
+        }
+        if (outcome.status == PrintStatus::Ok && !isLikelyDecompilerError(text)) {
+            selected = attempt.label;
+            picked = outcome.text;
             break;
         }
-        if (!text.empty()) lastDiag = text.substr(0, 240);
-        if (result) { free(result); result = nullptr; }
+        if (lastDiag.empty()) {
+            // First real diagnostic wins; a later variant must not overwrite why the
+            // preferred printer produced nothing. A `pdgj` envelope without `"code"`
+            // explains itself through `outcome.detail` instead of through text.
+            lastDiag = !outcome.detail.empty() ? outcome.detail : text.substr(0, 240);
+        }
     }
 
     std::string out;
-    if (selected && result) {
-        char addr[32];
-        snprintf(addr, sizeof(addr), "0x%llx", static_cast<unsigned long long>(funcVa));
+    char addr[32];
+    snprintf(addr, sizeof(addr), "0x%llx", static_cast<unsigned long long>(funcVa));
+    const bool printed = !selected.empty() && !picked.empty();
+    // Serialised in BOTH branches: a fallback that worked must still tell the caller
+    // that the preferred printer was refused, otherwise the crash looks fixed.
+    auto appendPrintBlocked = [&out, &printBlocked, printBlockedNeedsContext]() {
+        if (printBlocked.empty()) return;
+        out += ",\"printBlocked\":{\"reason\":\"";
+        out += escJson(printBlocked);
+        out += "\",\"needsConsoleContext\":";
+        out += printBlockedNeedsContext ? "true" : "false";
+        out += "}";
+    };
+    if (printed) {
+        // Only ghidra's own printers can get here, so the backend label is fixed: no
+        // second engine's text is ever relabelled as this one's.
         out = "{\"ok\":true,\"backend\":\"rizin-ghidra\",\"command\":\"";
-        out += selected;
-        out += "\",\"engine\":\"";
-        out += (selected && !strcmp(selected, "pdg")) ? "ghidra" : "pdd";
-        out += "\",\"addr\":\"";
+        out += escJson(selected);
+        out += "\",\"engine\":\"ghidra\",\"addr\":\"";
         out += addr;
         out += "\",\"functionName\":\"";
         out += escJson(fcnName);
@@ -1620,13 +1994,12 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDecompile(
         }
         out += "]";
         out += ",\"boundaryStrategy\":\"symbol+filtered-prologue+bl-anchors+nonrecursive-af+limit-reanalyze+resize-before-pdg\"";
+        appendPrintBlocked();
         out += ",\"pseudocode\":\"";
-        out += escJson(stripAnsi(result));
+        out += escJson(stripAnsi(picked));
         out += "\"}";
     } else {
         out = "{\"ok\":false,\"error\":\"DECOMPILER_FAILED\",\"backend\":\"rizin-ghidra\",\"message\":\"decompiler produced no usable output for this function after analysis-boundary repair\",\"addr\":\"";
-        char addr[32];
-        snprintf(addr, sizeof(addr), "0x%llx", static_cast<unsigned long long>(funcVa));
         out += addr;
         out += "\",\"functionSize\":";
         out += std::to_string(fcnSize);
@@ -1636,11 +2009,11 @@ Java_com_soreverse_mcp_nativecore_RizinNativeEngine_rzDecompile(
         out += std::to_string(anchors.size());
         out += ",\"seededNeighbors\":";
         out += std::to_string(seededNeighbors);
+        appendPrintBlocked();
         out += ",\"diagnostic\":\"";
         out += escJson(lastDiag);
         out += "\"}";
     }
-    if (result) free(result);
     cleanupCore(core, path);
     return env->NewStringUTF(out.c_str());
 }
